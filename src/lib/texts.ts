@@ -105,7 +105,7 @@ export async function getText(
 
     if (data?.text) {
       text = data.text;
-      textsCache.set(cacheKey, text);
+      textsCache.set(cacheKey, data.text);
     }
   }
 
