@@ -99,20 +99,28 @@ async function runJob(job: any) {
     const generatedBuffer = Buffer.from(imageBase64, "base64");
 
     // Remove background with Pixian
+    console.log("Calling Pixian to remove background...");
     const pixianForm = new FormData();
     pixianForm.append("image", generatedBuffer, {
       filename: "image.png",
       contentType: "image/png",
     });
 
-    const pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
-      auth: {
-        username: config.pixianUsername,
-        password: config.pixianPassword,
-      },
-      headers: pixianForm.getHeaders(),
-      responseType: "arraybuffer",
-    });
+    let pixianRes;
+    try {
+      pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
+        auth: {
+          username: config.pixianUsername,
+          password: config.pixianPassword,
+        },
+        headers: pixianForm.getHeaders(),
+        responseType: "arraybuffer",
+      });
+      console.log("Pixian background removal successful");
+    } catch (err: any) {
+      console.error("Pixian API error:", err.response?.status, err.response?.data?.toString?.() || err.message);
+      throw new Error(`Pixian API failed: ${err.response?.status} ${err.message}`);
+    }
 
     const noBgBuffer = Buffer.from(pixianRes.data);
 
@@ -165,18 +173,32 @@ async function runJob(job: any) {
     });
 
     if (!createdStickerSet) {
-      await axios.post(
-        `https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`,
-        form,
-        { headers: form.getHeaders() }
-      );
-      createdStickerSet = true;
+      console.log("Creating new sticker set:", stickerSetName);
+      try {
+        await axios.post(
+          `https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`,
+          form,
+          { headers: form.getHeaders() }
+        );
+        console.log("Sticker set created successfully");
+        createdStickerSet = true;
+      } catch (err: any) {
+        console.error("Telegram createNewStickerSet error:", err.response?.data || err.message);
+        throw err;
+      }
     } else {
-      await axios.post(
-        `https://api.telegram.org/bot${config.telegramBotToken}/addStickerToSet`,
-        form,
-        { headers: form.getHeaders() }
-      );
+      console.log("Adding sticker to set:", stickerSetName);
+      try {
+        await axios.post(
+          `https://api.telegram.org/bot${config.telegramBotToken}/addStickerToSet`,
+          form,
+          { headers: form.getHeaders() }
+        );
+        console.log("Sticker added successfully");
+      } catch (err: any) {
+        console.error("Telegram addStickerToSet error:", err.response?.data || err.message);
+        throw err;
+      }
     }
   }
 
