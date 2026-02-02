@@ -133,11 +133,22 @@ async function runJob(job: any) {
       .webp()
       .toBuffer();
 
-    // Upload to Supabase Storage (optional)
+    // Upload to Supabase Storage
     const filePathStorage = `stickers/${session.user_id}/${session.id}/${Date.now()}_${i}.webp`;
     await supabase.storage
       .from(config.supabaseStorageBucket)
       .upload(filePathStorage, stickerBuffer, { contentType: "image/webp", upsert: true });
+
+    // Save sticker to history
+    await supabase.from("stickers").insert({
+      user_id: session.user_id,
+      session_id: session.id,
+      source_photo_file_id: fileId,
+      user_input: session.user_input || null,
+      generated_prompt: session.prompt_final || null,
+      result_storage_path: filePathStorage,
+      sticker_set_name: stickerSetName,
+    });
 
     // Create or add sticker set
     const form = new FormData();

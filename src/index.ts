@@ -300,11 +300,13 @@ bot.on("text", async (ctx) => {
 
   const generatedPrompt = promptResult.prompt || ctx.message.text;
 
+  const userInput = ctx.message.text;
+
   // Check credits
   if (user.credits < photosCount) {
     await supabase
       .from("sessions")
-      .update({ state: "wait_buy_credit", prompt_final: generatedPrompt })
+      .update({ state: "wait_buy_credit", user_input: userInput, prompt_final: generatedPrompt })
       .eq("id", session.id);
 
     await ctx.reply(await getText(lang, "photo.not_enough_credits", {
@@ -321,10 +323,10 @@ bot.on("text", async (ctx) => {
     .update({ credits: user.credits - photosCount })
     .eq("id", user.id);
 
-  // Update session to processing with generated prompt
+  // Update session to processing with generated prompt and user input
   await supabase
     .from("sessions")
-    .update({ prompt_final: generatedPrompt, state: "processing" })
+    .update({ user_input: userInput, prompt_final: generatedPrompt, state: "processing" })
     .eq("id", session.id);
 
   // Create job
