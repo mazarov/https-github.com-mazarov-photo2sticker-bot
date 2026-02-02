@@ -1,7 +1,6 @@
 {
   "name": "photo2sticker-bot-service",
   "version": "1.0.0",
-  "type": "module",
   "private": true,
   "scripts": {
     "dev:api": "tsx src/index.ts",
