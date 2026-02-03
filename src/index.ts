@@ -1187,51 +1187,56 @@ bot.on("successful_payment", async (ctx) => {
     .eq("id", transaction.user_id)
     .maybeSingle();
 
-  console.log("user before credit:", user?.id, "current credits:", user?.credits, "adding:", transaction.amount);
+  // NOTE: Credits are added by Supabase trigger "on_transaction_done" -> "add_credits_on_transaction"
+  // which fires AFTER UPDATE on transactions table when state becomes "done".
+  // We do NOT add credits here to avoid double crediting.
+  // The trigger is also used by other bots via n8n workflow.
 
-  if (user) {
-    const lang = user.lang || "en";
-    const newCredits = (user.credits || 0) + transaction.amount;
-    console.log(">>> CREDITING: user", user.id, "oldCredits:", user.credits, "adding:", transaction.amount, "newCredits:", newCredits);
-    
-    await supabase
-      .from("users")
-      .update({ credits: newCredits })
-      .eq("id", user.id);
+  // Re-fetch user to get updated balance (after trigger executed)
+  const { data: updatedUser } = await supabase
+    .from("users")
+    .select("*")
+    .eq("id", transaction.user_id)
+    .maybeSingle();
 
-    console.log(">>> CREDITED: user", user.id, "now has", newCredits, "credits");
+  const finalUser = updatedUser || user;
+  console.log("user after trigger:", finalUser?.id, "credits:", finalUser?.credits, "added:", transaction.amount);
+
+  if (finalUser) {
+    const lang = finalUser.lang || "en";
+    const currentCredits = finalUser.credits || 0;
 
     await ctx.reply(await getText(lang, "payment.success", {
       amount: transaction.amount,
-      balance: newCredits,
+      balance: currentCredits,
     }));
 
     // Check if there's a pending session waiting for credits
-    const session = await getActiveSession(user.id);
+    const session = await getActiveSession(finalUser.id);
     if (session?.state === "wait_buy_credit" && session.prompt_final) {
       const creditsNeeded = session.credits_spent || 1;
 
-      if (newCredits >= creditsNeeded) {
+      if (currentCredits >= creditsNeeded) {
         const nextState =
           session.pending_generation_type === "emotion" ? "processing_emotion" : "processing";
 
-        // Auto-continue generation
+        // Auto-continue generation: deduct credits for the pending generation
         await supabase
           .from("users")
-          .update({ credits: newCredits - creditsNeeded })
-          .eq("id", user.id);
+          .update({ credits: currentCredits - creditsNeeded })
+          .eq("id", finalUser.id);
 
         await supabase
           .from("sessions")
           .update({ state: nextState, is_active: true })
           .eq("id", session.id);
 
-        await enqueueJob(session.id, user.id);
+        await enqueueJob(session.id, finalUser.id);
 
         await sendProgressStart(ctx, session.id, lang);
       } else {
         await ctx.reply(await getText(lang, "payment.need_more", {
-          needed: creditsNeeded - newCredits,
+          needed: creditsNeeded - currentCredits,
         }));
       }
     }
