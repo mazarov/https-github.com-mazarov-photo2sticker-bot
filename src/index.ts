@@ -250,7 +250,7 @@ async function enqueueJob(sessionId: string, userId: string) {
 }
 
 async function sendProgressStart(ctx: any, sessionId: string, lang: string) {
-  const msg = await ctx.reply(await getText(lang, "progress.generating_image"));
+  const msg = await ctx.reply(await getText(lang, "progress.step1"));
   if (msg?.message_id && ctx.chat?.id) {
     await supabase
       .from("sessions")

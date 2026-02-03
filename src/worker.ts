@@ -33,16 +33,14 @@ async function runJob(job: any) {
     throw new Error("User telegram_id not found");
   }
 
-  async function updateProgress(step: 1 | 2 | 3) {
+  async function updateProgress(step: 1 | 2 | 3 | 4 | 5 | 6 | 7) {
     if (!session.progress_message_id || !session.progress_chat_id) return;
-    const key =
-      step === 1
-        ? "progress.generating_image"
-        : step === 2
-          ? "progress.removing_bg"
-          : "progress.preparing";
     try {
-      await editMessageText(session.progress_chat_id, session.progress_message_id, await getText(lang, key));
+      await editMessageText(
+        session.progress_chat_id,
+        session.progress_message_id,
+        await getText(lang, `progress.step${step}`)
+      );
     } catch (err) {
       // ignore edit errors
     }
@@ -70,6 +68,7 @@ async function runJob(job: any) {
     throw new Error("No source file for generation");
   }
 
+  await updateProgress(2);
   const filePath = await getFilePath(sourceFileId);
   const fileBuffer = await downloadFile(filePath);
 
@@ -80,7 +79,7 @@ async function runJob(job: any) {
       ? "image/png"
       : "image/jpeg";
 
-  await updateProgress(1);
+  await updateProgress(3);
   console.log("Calling Gemini image generation...");
   console.log("Prompt:", session.prompt_final?.substring(0, 100) + "...");
 
@@ -128,9 +127,10 @@ async function runJob(job: any) {
 
   console.log("Image generated successfully");
 
+  await updateProgress(4);
   const generatedBuffer = Buffer.from(imageBase64, "base64");
 
-  await updateProgress(2);
+  await updateProgress(5);
   // Remove background with Pixian
   console.log("Calling Pixian to remove background...");
   const pixianForm = new FormData();
@@ -157,7 +157,7 @@ async function runJob(job: any) {
 
   const noBgBuffer = Buffer.from(pixianRes.data);
 
-  await updateProgress(3);
+  await updateProgress(6);
   // Trim transparent borders and fit into 512x512
   const stickerBuffer = await sharp(noBgBuffer)
     .trim()
@@ -168,6 +168,7 @@ async function runJob(job: any) {
     .webp()
     .toBuffer();
 
+  await updateProgress(7);
   // Upload to Supabase Storage
   const filePathStorage = `stickers/${session.user_id}/${session.id}/${Date.now()}.webp`;
   await supabase.storage
