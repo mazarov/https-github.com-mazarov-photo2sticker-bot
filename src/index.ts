@@ -330,7 +330,7 @@ async function startGeneration(
   session: any,
   lang: string,
   options: {
-    generationType: "style" | "emotion";
+    generationType: "style" | "emotion" | "motion";
     promptFinal: string;
     userInput?: string | null;
     emotionPrompt?: string | null;
