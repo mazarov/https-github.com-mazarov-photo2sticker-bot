@@ -25,6 +25,13 @@ const EMOTION_PRESETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 let motionPresetsCache: { data: any[]; timestamp: number } | null = null;
 const MOTION_PRESETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+function safeAnswerCbQuery(ctx: any, payload?: any) {
+  if (typeof ctx?.answerCbQuery !== "function") return;
+  ctx.answerCbQuery(payload).catch((err: any) => {
+    console.warn("answerCbQuery failed:", err?.description || err?.message || err);
+  });
+}
+
 interface StylePreset {
   id: string;
   name_ru: string;
@@ -704,7 +711,7 @@ bot.on("text", async (ctx) => {
 // Callback: style selection
 bot.action(/^style_(.+)$/, async (ctx) => {
   try {
-    await ctx.answerCbQuery();
+    safeAnswerCbQuery(ctx);
     const telegramId = ctx.from?.id;
     console.log("Style callback triggered, telegramId:", telegramId);
     if (!telegramId) return;
@@ -777,7 +784,7 @@ bot.action(/^style_(.+)$/, async (ctx) => {
 bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
   console.log("=== add_to_pack:ID callback ===");
   console.log("callback_data:", ctx.match?.[0]);
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   console.log("telegramId:", telegramId);
   if (!telegramId) return;
@@ -853,7 +860,7 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
 
 // Callback: add to pack (old format - fallback for old messages)
 bot.action("add_to_pack", async (ctx) => {
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -913,7 +920,7 @@ bot.action("add_to_pack", async (ctx) => {
 bot.action(/^change_style:(.+)$/, async (ctx) => {
   console.log("=== change_style:ID callback ===");
   console.log("callback_data:", ctx.match?.[0]);
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -977,7 +984,7 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
 
 // Callback: change style (old format - fallback)
 bot.action("change_style", async (ctx) => {
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -1008,7 +1015,7 @@ bot.action("change_style", async (ctx) => {
 bot.action(/^change_emotion:(.+)$/, async (ctx) => {
   console.log("=== change_emotion:ID callback ===");
   console.log("callback_data:", ctx.match?.[0]);
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -1068,7 +1075,7 @@ bot.action(/^change_emotion:(.+)$/, async (ctx) => {
 
 // Callback: change emotion (old format - fallback)
 bot.action("change_emotion", async (ctx) => {
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -1092,7 +1099,7 @@ bot.action("change_emotion", async (ctx) => {
 
 // Callback: emotion selection
 bot.action(/^emotion_(.+)$/, async (ctx) => {
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -1133,7 +1140,7 @@ bot.action(/^emotion_(.+)$/, async (ctx) => {
 bot.action(/^change_motion:(.+)$/, async (ctx) => {
   console.log("=== change_motion:ID callback ===");
   console.log("callback_data:", ctx.match?.[0]);
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -1193,7 +1200,7 @@ bot.action(/^change_motion:(.+)$/, async (ctx) => {
 
 // Callback: change motion (old format - fallback)
 bot.action("change_motion", async (ctx) => {
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -1217,7 +1224,7 @@ bot.action("change_motion", async (ctx) => {
 
 // Callback: motion selection
 bot.action(/^motion_(.+)$/, async (ctx) => {
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -1256,7 +1263,7 @@ bot.action(/^motion_(.+)$/, async (ctx) => {
 
 // Callback: buy_credits
 bot.action("buy_credits", async (ctx) => {
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -1273,8 +1280,9 @@ bot.action("cancel", async (ctx) => {
 
   const user = await getUser(telegramId);
   const lang = user?.lang || "en";
-  
-  await ctx.answerCbQuery(await getText(lang, "btn.canceled"));
+
+  const cancelText = await getText(lang, "btn.canceled");
+  safeAnswerCbQuery(ctx, cancelText);
   await ctx.deleteMessage().catch(() => {});
 
   if (!user?.id) return;
@@ -1293,7 +1301,7 @@ bot.action("cancel", async (ctx) => {
 
 // Callback: pack_N_PRICE (e.g., pack_5_30)
 bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
-  await ctx.answerCbQuery();
+  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
