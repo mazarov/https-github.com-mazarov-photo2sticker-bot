@@ -636,6 +636,34 @@ bot.on("text", async (ctx) => {
     return;
   }
 
+  if (session.state === "wait_custom_style") {
+    const styleText = ctx.message.text.trim();
+    const photos = Array.isArray(session.photos) ? session.photos : [];
+    const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
+    if (!currentPhotoId) {
+      await ctx.reply(await getText(lang, "photo.need_photo"));
+      return;
+    }
+
+    // Generate prompt using LLM with user's custom style
+    await ctx.reply(await getText(lang, "photo.processing"));
+    const promptResult = await generatePrompt(styleText);
+
+    if (!promptResult.ok || promptResult.retry) {
+      await ctx.reply(await getText(lang, "photo.invalid_style"));
+      return;
+    }
+
+    const generatedPrompt = promptResult.prompt || styleText;
+    await startGeneration(ctx, user, session, lang, {
+      generationType: "style",
+      promptFinal: generatedPrompt,
+      userInput: styleText,
+      selectedStyleId: "custom",
+    });
+    return;
+  }
+
   // Check if we're in wait_style state
   if (session.state !== "wait_style") {
     if (session.state === "wait_photo") {
@@ -699,6 +727,16 @@ bot.action(/^style_(.+)$/, async (ctx) => {
     const preset = presets.find((p) => p.id === styleId);
     if (!preset) {
       console.log("Preset not found for:", styleId);
+      return;
+    }
+
+    // Handle custom style - ask user to describe
+    if (preset.id === "custom") {
+      await supabase
+        .from("sessions")
+        .update({ state: "wait_custom_style", is_active: true })
+        .eq("id", session.id);
+      await ctx.reply(await getText(lang, "style.custom_prompt"));
       return;
     }
 
