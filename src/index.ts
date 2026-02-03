@@ -657,13 +657,17 @@ bot.action(/^style_(.+)$/, async (ctx) => {
 bot.action("add_to_pack", async (ctx) => {
   await ctx.answerCbQuery();
   const telegramId = ctx.from?.id;
+  console.log("add_to_pack clicked, telegramId:", telegramId);
   if (!telegramId) return;
 
   const user = await getUser(telegramId);
+  console.log("add_to_pack user:", user?.id, "lang:", user?.lang);
   if (!user?.id) return;
 
   const lang = user.lang || "en";
   const session = await getActiveSession(user.id);
+  console.log("add_to_pack session:", session?.id, "state:", session?.state, "is_active:", session?.is_active);
+  console.log("add_to_pack last_sticker_file_id:", session?.last_sticker_file_id);
   if (!session?.last_sticker_file_id) {
     await ctx.reply(await getText(lang, "error.no_stickers_added"));
     return;
