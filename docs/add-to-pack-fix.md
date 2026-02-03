@@ -191,10 +191,10 @@ bot.action("add_to_pack", async (ctx) => {
 
 ## Чеклист
 
-- [ ] Добавить поле `telegram_file_id` в `stickers`
-- [ ] SQL миграция `012_sticker_file_id.sql`
-- [ ] worker.ts: сохранять `telegram_file_id`, использовать `sticker.id` в кнопках
-- [ ] index.ts: новый обработчик `add_to_pack:ID`
-- [ ] index.ts: новые обработчики `change_style:ID`, `change_emotion:ID`
-- [ ] Fallback для старых сообщений
+- [x] Добавить поле `telegram_file_id` в `stickers`
+- [x] SQL миграция `012_sticker_file_id.sql`
+- [x] worker.ts: сохранять `telegram_file_id`, использовать `sticker.id` в кнопках
+- [x] index.ts: новый обработчик `add_to_pack:ID`
+- [x] index.ts: новые обработчики `change_style:ID`, `change_emotion:ID`
+- [x] Fallback для старых сообщений
 - [ ] Тестирование между устройствами
