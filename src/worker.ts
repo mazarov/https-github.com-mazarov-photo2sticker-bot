@@ -219,28 +219,12 @@ async function runJob(job: any) {
     ],
   };
 
-  console.time("step7_upload");
-  const uploadPromise = supabase.storage
-    .from(config.supabaseStorageBucket)
-    .upload(filePathStorage, stickerBuffer, { contentType: "image/webp", upsert: true })
-    .finally(() => console.timeEnd("step7_upload"));
-
+  // Send sticker first (critical path - user sees result)
   console.time("step7_sendSticker");
-  const sendPromise = sendSticker(telegramId, stickerBuffer, replyMarkup)
-    .then((fileId) => {
-      console.timeEnd("step7_sendSticker");
-      return fileId;
-    })
-    .catch((err) => {
-      console.timeEnd("step7_sendSticker");
-      throw err;
-    });
+  const stickerFileId = await sendSticker(telegramId, stickerBuffer, replyMarkup);
+  console.timeEnd("step7_sendSticker");
 
-  const [, stickerFileId] = await Promise.all([uploadPromise, sendPromise]);
-
-  await clearProgress();
-
-  // Update sticker record with telegram_file_id
+  // Update telegram_file_id IMMEDIATELY after sending (before user can click buttons)
   console.log("Updating sticker with telegram_file_id:", stickerId, "fileId:", stickerFileId?.substring(0, 30) + "...");
   if (stickerId && stickerFileId) {
     await supabase
@@ -251,6 +235,19 @@ async function runJob(job: any) {
   } else {
     console.log(">>> WARNING: skipped telegram_file_id update, stickerId:", stickerId, "stickerFileId:", !!stickerFileId);
   }
+
+  await clearProgress();
+
+  // Upload to storage in background (non-critical, can be slow)
+  console.time("step7_upload");
+  supabase.storage
+    .from(config.supabaseStorageBucket)
+    .upload(filePathStorage, stickerBuffer, { contentType: "image/webp", upsert: true })
+    .then(() => console.timeEnd("step7_upload"))
+    .catch((err) => {
+      console.timeEnd("step7_upload");
+      console.error("Storage upload failed:", err);
+    });
 
   await supabase
     .from("sessions")
