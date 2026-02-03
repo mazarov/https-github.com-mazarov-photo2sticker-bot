@@ -292,6 +292,7 @@ bot.start(async (ctx) => {
 // Photo handler
 bot.on("photo", async (ctx) => {
   const telegramId = ctx.from?.id;
+  console.log("Photo received, telegramId:", telegramId);
   if (!telegramId) return;
 
   const user = await getUser(telegramId);
@@ -299,6 +300,7 @@ bot.on("photo", async (ctx) => {
 
   const lang = user.lang || "en";
   const session = await getActiveSession(user.id);
+  console.log("Photo handler - session:", session?.id, "state:", session?.state);
   if (!session?.id) {
     await ctx.reply(await getText(lang, "start.need_start"));
     return;
@@ -310,10 +312,12 @@ bot.on("photo", async (ctx) => {
   const photos = Array.isArray(session.photos) ? session.photos : [];
   photos.push(photo.file_id);
 
-  await supabase
+  const { error } = await supabase
     .from("sessions")
     .update({ photos, state: "wait_style" })
     .eq("id", session.id);
+
+  console.log("Session updated to wait_style, error:", error);
 
   await sendStyleKeyboard(ctx, lang);
 });
