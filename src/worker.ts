@@ -3,7 +3,7 @@ import FormData from "form-data";
 import sharp from "sharp";
 import { config } from "./config";
 import { supabase } from "./lib/supabase";
-import { getFilePath, downloadFile, getMe, sendMessage } from "./lib/telegram";
+import { getFilePath, downloadFile, sendMessage, sendSticker } from "./lib/telegram";
 import { getText } from "./lib/texts";
 
 async function sleep(ms: number) {
@@ -23,7 +23,7 @@ async function runJob(job: any) {
 
   const { data: user } = await supabase
     .from("users")
-    .select("telegram_id, lang")
+    .select("telegram_id, lang, sticker_set_name")
     .eq("id", session.user_id)
     .maybeSingle();
 
@@ -34,198 +34,151 @@ async function runJob(job: any) {
   }
 
   const photos = Array.isArray(session.photos) ? session.photos : [];
-  if (photos.length === 0) {
-    throw new Error("No photos in session");
+  const generationType =
+    session.generation_type || (session.state === "processing_emotion" ? "emotion" : "style");
+
+  const sourceFileId =
+    generationType === "emotion"
+      ? session.last_sticker_file_id
+      : session.current_photo_file_id || photos[photos.length - 1];
+
+  if (!sourceFileId) {
+    throw new Error("No source file for generation");
   }
 
-  const botUsername = config.botUsername || (await getMe()).username || "bot";
-  const shortId = session.id.replace(/-/g, "").substring(0, 8);
-  const timestamp = Date.now().toString().slice(-6);
-  const stickerSetName = `p2s_${shortId}_${timestamp}_by_${botUsername}`.toLowerCase();
+  const filePath = await getFilePath(sourceFileId);
+  const fileBuffer = await downloadFile(filePath);
 
-  let createdStickerSet = false;
+  const base64 = fileBuffer.toString("base64");
+  const mimeType = filePath.endsWith(".webp")
+    ? "image/webp"
+    : filePath.endsWith(".png")
+      ? "image/png"
+      : "image/jpeg";
 
-  for (let i = 0; i < photos.length; i += 1) {
-    const fileId = photos[i];
-    const filePath = await getFilePath(fileId);
-    const fileBuffer = await downloadFile(filePath);
+  console.log("Calling Gemini image generation...");
+  console.log("Prompt:", session.prompt_final?.substring(0, 100) + "...");
 
-    const base64 = fileBuffer.toString("base64");
-
-    console.log("Calling Gemini image generation...");
-    console.log("Prompt:", session.prompt_final?.substring(0, 100) + "...");
-
-    let geminiRes;
-    try {
-      geminiRes = await axios.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
-        {
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: session.prompt_final || "" },
-                {
-                  inlineData: {
-                    mimeType: "image/jpeg",
-                    data: base64,
-                  },
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            responseModalities: ["IMAGE", "TEXT"],
-            imageConfig: { aspectRatio: "1:1" },
-          },
-        },
-        {
-          headers: { "x-goog-api-key": config.geminiApiKey },
-        }
-      );
-    } catch (err: any) {
-      console.error("Gemini API error:", err.response?.data || err.message);
-      throw new Error(`Gemini API failed: ${err.response?.data?.error?.message || err.message}`);
-    }
-
-    const imageBase64 =
-      geminiRes.data?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData
-        ?.data || null;
-
-    if (!imageBase64) {
-      console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
-      throw new Error("Gemini returned no image");
-    }
-
-    console.log("Image generated successfully");
-
-    const generatedBuffer = Buffer.from(imageBase64, "base64");
-
-    // Remove background with Pixian
-    console.log("Calling Pixian to remove background...");
-    const pixianForm = new FormData();
-    pixianForm.append("image", generatedBuffer, {
-      filename: "image.png",
-      contentType: "image/png",
-    });
-
-    let pixianRes;
-    try {
-      pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
-        auth: {
-          username: config.pixianUsername,
-          password: config.pixianPassword,
-        },
-        headers: pixianForm.getHeaders(),
-        responseType: "arraybuffer",
-      });
-      console.log("Pixian background removal successful");
-    } catch (err: any) {
-      console.error("Pixian API error:", err.response?.status, err.response?.data?.toString?.() || err.message);
-      throw new Error(`Pixian API failed: ${err.response?.status} ${err.message}`);
-    }
-
-    const noBgBuffer = Buffer.from(pixianRes.data);
-
-    // Resize to 512x512 and convert to webp
-    const stickerBuffer = await sharp(noBgBuffer)
-      .resize(512, 512, { fit: "fill" })
-      .webp()
-      .toBuffer();
-
-    // Upload to Supabase Storage
-    const filePathStorage = `stickers/${session.user_id}/${session.id}/${Date.now()}_${i}.webp`;
-    await supabase.storage
-      .from(config.supabaseStorageBucket)
-      .upload(filePathStorage, stickerBuffer, { contentType: "image/webp", upsert: true });
-
-    // Save sticker to history
-    await supabase.from("stickers").insert({
-      user_id: session.user_id,
-      session_id: session.id,
-      source_photo_file_id: fileId,
-      user_input: session.user_input || null,
-      generated_prompt: session.prompt_final || null,
-      result_storage_path: filePathStorage,
-      sticker_set_name: stickerSetName,
-    });
-
-    // Create or add sticker set
-    const form = new FormData();
-
-    if (!createdStickerSet) {
-      const packTitle = await getText(lang, "sticker.pack_title");
-      form.append("user_id", String(telegramId));
-      form.append("name", stickerSetName);
-      form.append("title", packTitle);
-      form.append(
-        "stickers",
-        JSON.stringify([
+  let geminiRes;
+  try {
+    geminiRes = await axios.post(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
+      {
+        contents: [
           {
-            sticker: `attach://file${i}`,
-            format: "static",
-            emoji_list: ["🔥"],
+            role: "user",
+            parts: [
+              { text: session.prompt_final || "" },
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64,
+                },
+              },
+            ],
           },
-        ])
-      );
-      form.append("needs_repainting", "false");
-    } else {
-      form.append("user_id", String(telegramId));
-      form.append("name", stickerSetName);
-      form.append(
-        "sticker",
-        JSON.stringify({
-          sticker: `attach://file${i}`,
-          format: "static",
-          emoji_list: ["🔥"],
-        })
-      );
-    }
-
-    form.append(`file${i}`, stickerBuffer, {
-      filename: "sticker.webp",
-      contentType: "image/webp",
-    });
-
-    if (!createdStickerSet) {
-      console.log("Creating new sticker set:", stickerSetName);
-      try {
-        await axios.post(
-          `https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`,
-          form,
-          { headers: form.getHeaders() }
-        );
-        console.log("Sticker set created successfully");
-        createdStickerSet = true;
-      } catch (err: any) {
-        console.error("Telegram createNewStickerSet error:", err.response?.data || err.message);
-        throw err;
+        ],
+        generationConfig: {
+          responseModalities: ["IMAGE", "TEXT"],
+          imageConfig: { aspectRatio: "1:1" },
+        },
+      },
+      {
+        headers: { "x-goog-api-key": config.geminiApiKey },
       }
-    } else {
-      console.log("Adding sticker to set:", stickerSetName);
-      try {
-        await axios.post(
-          `https://api.telegram.org/bot${config.telegramBotToken}/addStickerToSet`,
-          form,
-          { headers: form.getHeaders() }
-        );
-        console.log("Sticker added successfully");
-      } catch (err: any) {
-        console.error("Telegram addStickerToSet error:", err.response?.data || err.message);
-        throw err;
-      }
-    }
+    );
+  } catch (err: any) {
+    console.error("Gemini API error:", err.response?.data || err.message);
+    throw new Error(`Gemini API failed: ${err.response?.data?.error?.message || err.message}`);
   }
+
+  const imageBase64 =
+    geminiRes.data?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData
+      ?.data || null;
+
+  if (!imageBase64) {
+    console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
+    throw new Error("Gemini returned no image");
+  }
+
+  console.log("Image generated successfully");
+
+  const generatedBuffer = Buffer.from(imageBase64, "base64");
+
+  // Remove background with Pixian
+  console.log("Calling Pixian to remove background...");
+  const pixianForm = new FormData();
+  pixianForm.append("image", generatedBuffer, {
+    filename: "image.png",
+    contentType: "image/png",
+  });
+
+  let pixianRes;
+  try {
+    pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
+      auth: {
+        username: config.pixianUsername,
+        password: config.pixianPassword,
+      },
+      headers: pixianForm.getHeaders(),
+      responseType: "arraybuffer",
+    });
+    console.log("Pixian background removal successful");
+  } catch (err: any) {
+    console.error("Pixian API error:", err.response?.status, err.response?.data?.toString?.() || err.message);
+    throw new Error(`Pixian API failed: ${err.response?.status} ${err.message}`);
+  }
+
+  const noBgBuffer = Buffer.from(pixianRes.data);
+
+  // Resize to 512x512 and convert to webp
+  const stickerBuffer = await sharp(noBgBuffer)
+    .resize(512, 512, { fit: "fill" })
+    .webp()
+    .toBuffer();
+
+  // Upload to Supabase Storage
+  const filePathStorage = `stickers/${session.user_id}/${session.id}/${Date.now()}.webp`;
+  await supabase.storage
+    .from(config.supabaseStorageBucket)
+    .upload(filePathStorage, stickerBuffer, { contentType: "image/webp", upsert: true });
+
+  // Save sticker to history
+  await supabase.from("stickers").insert({
+    user_id: session.user_id,
+    session_id: session.id,
+    source_photo_file_id: generationType === "emotion" ? session.current_photo_file_id : sourceFileId,
+    user_input: session.user_input || null,
+    generated_prompt: session.prompt_final || null,
+    result_storage_path: filePathStorage,
+    sticker_set_name: user?.sticker_set_name || null,
+  });
+
+  const addToPackText = await getText(lang, "btn.add_to_pack");
+  const changeStyleText = await getText(lang, "btn.change_style");
+  const changeEmotionText = await getText(lang, "btn.change_emotion");
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [{ text: addToPackText, callback_data: "add_to_pack" }],
+      [
+        { text: changeStyleText, callback_data: "change_style" },
+        { text: changeEmotionText, callback_data: "change_emotion" },
+      ],
+    ],
+  };
+
+  const stickerFileId = await sendSticker(telegramId, stickerBuffer, replyMarkup);
 
   await supabase
     .from("sessions")
-    .update({ state: "done", is_active: false, sticker_set_name: stickerSetName })
+    .update({
+      state: "confirm_sticker",
+      is_active: true,
+      last_sticker_file_id: stickerFileId,
+      last_sticker_storage_path: filePathStorage,
+    })
     .eq("id", session.id);
-
-  const doneMessage = await getText(lang, "processing.done", {
-    link: `https://t.me/addstickers/${stickerSetName}`,
-  });
-  await sendMessage(telegramId, doneMessage);
 }
 
 async function poll() {
@@ -263,12 +216,12 @@ async function poll() {
       try {
         const { data: session } = await supabase
           .from("sessions")
-          .select("user_id, photos")
+          .select("user_id, photos, credits_spent")
           .eq("id", job.session_id)
           .maybeSingle();
 
         if (session?.user_id) {
-          const photosCount = Array.isArray(session.photos) ? session.photos.length : 1;
+          const creditsToRefund = session.credits_spent || 1;
 
           const { data: refundUser } = await supabase
             .from("users")
@@ -280,7 +233,7 @@ async function poll() {
             // Refund credits
             await supabase
               .from("users")
-              .update({ credits: (refundUser.credits || 0) + photosCount })
+              .update({ credits: (refundUser.credits || 0) + creditsToRefund })
               .eq("id", session.user_id);
 
             // Notify user

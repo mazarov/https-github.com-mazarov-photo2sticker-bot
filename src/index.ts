@@ -17,7 +17,21 @@ const AGENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 let stylePresetsCache: { data: any[]; timestamp: number } | null = null;
 const STYLE_PRESETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// Cache for emotion presets
+let emotionPresetsCache: { data: any[]; timestamp: number } | null = null;
+const EMOTION_PRESETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 interface StylePreset {
+  id: string;
+  name_ru: string;
+  name_en: string;
+  prompt_hint: string;
+  emoji: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+interface EmotionPreset {
   id: string;
   name_ru: string;
   name_en: string;
@@ -74,6 +88,53 @@ async function sendStyleKeyboard(ctx: any, lang: string) {
   );
 }
 
+async function getEmotionPresets(): Promise<EmotionPreset[]> {
+  const now = Date.now();
+  if (emotionPresetsCache && now - emotionPresetsCache.timestamp < EMOTION_PRESETS_CACHE_TTL) {
+    return emotionPresetsCache.data;
+  }
+
+  const { data } = await supabase
+    .from("emotion_presets")
+    .select("*")
+    .eq("is_active", true)
+    .order("sort_order");
+
+  if (data) {
+    emotionPresetsCache = { data, timestamp: now };
+  }
+  return data || [];
+}
+
+async function sendEmotionKeyboard(ctx: any, lang: string) {
+  const presets = await getEmotionPresets();
+
+  const buttons: ReturnType<typeof Markup.button.callback>[][] = [];
+  for (let i = 0; i < presets.length; i += 2) {
+    const row: ReturnType<typeof Markup.button.callback>[] = [];
+    row.push(
+      Markup.button.callback(
+        `${presets[i].emoji} ${lang === "ru" ? presets[i].name_ru : presets[i].name_en}`,
+        `emotion_${presets[i].id}`
+      )
+    );
+    if (presets[i + 1]) {
+      row.push(
+        Markup.button.callback(
+          `${presets[i + 1].emoji} ${lang === "ru" ? presets[i + 1].name_ru : presets[i + 1].name_en}`,
+          `emotion_${presets[i + 1].id}`
+        )
+      );
+    }
+    buttons.push(row);
+  }
+
+  await ctx.reply(
+    await getText(lang, "emotion.choose"),
+    Markup.inlineKeyboard(buttons)
+  );
+}
+
 async function getAgent(name: string) {
   const now = Date.now();
   if (agentCache && agentCache.data?.name === name && now - agentCache.timestamp < AGENT_CACHE_TTL) {
@@ -91,6 +152,14 @@ async function getAgent(name: string) {
     agentCache = { data, timestamp: now };
   }
   return data;
+}
+
+let botUsernameCache: string | null = config.botUsername || null;
+async function getBotUsername(): Promise<string> {
+  if (botUsernameCache) return botUsernameCache;
+  const me = await bot.telegram.getMe();
+  botUsernameCache = me.username || "bot";
+  return botUsernameCache;
 }
 
 // Generate prompt using LLM
@@ -165,6 +234,86 @@ async function generatePrompt(userInput: string): Promise<PromptResult> {
     // Fallback: return user input as-is
     return { ok: true, prompt: userInput, retry: false };
   }
+}
+
+function buildEmotionPrompt(emotionText: string) {
+  return `Update the sticker to show this emotion: ${emotionText}. Keep the same character, style, and colors.`;
+}
+
+async function enqueueJob(sessionId: string, userId: string) {
+  await supabase.from("jobs").insert({
+    session_id: sessionId,
+    user_id: userId,
+    status: "queued",
+    attempts: 0,
+  });
+}
+
+async function startGeneration(
+  ctx: any,
+  user: any,
+  session: any,
+  lang: string,
+  options: {
+    generationType: "style" | "emotion";
+    promptFinal: string;
+    userInput?: string | null;
+    emotionPrompt?: string | null;
+    selectedStyleId?: string | null;
+    selectedEmotion?: string | null;
+  }
+) {
+  const creditsNeeded = 1;
+
+  if (user.credits < creditsNeeded) {
+    await supabase
+      .from("sessions")
+      .update({
+        state: "wait_buy_credit",
+        pending_generation_type: options.generationType,
+        user_input: options.userInput || session.user_input || null,
+        prompt_final: options.promptFinal,
+        emotion_prompt: options.emotionPrompt || null,
+        selected_style_id: options.selectedStyleId || session.selected_style_id || null,
+        selected_emotion: options.selectedEmotion || null,
+        credits_spent: creditsNeeded,
+        is_active: true,
+      })
+      .eq("id", session.id);
+
+    await ctx.reply(await getText(lang, "photo.not_enough_credits", {
+      needed: creditsNeeded,
+      balance: user.credits,
+    }));
+    await sendBuyCreditsMenu(ctx, user);
+    return;
+  }
+
+  await supabase
+    .from("users")
+    .update({ credits: user.credits - creditsNeeded })
+    .eq("id", user.id);
+
+  const nextState = options.generationType === "emotion" ? "processing_emotion" : "processing";
+
+  await supabase
+    .from("sessions")
+    .update({
+      user_input: options.userInput || session.user_input || null,
+      prompt_final: options.promptFinal,
+      emotion_prompt: options.emotionPrompt || null,
+      selected_style_id: options.selectedStyleId || session.selected_style_id || null,
+      selected_emotion: options.selectedEmotion || null,
+      generation_type: options.generationType,
+      credits_spent: creditsNeeded,
+      state: nextState,
+      is_active: true,
+    })
+    .eq("id", session.id);
+
+  await enqueueJob(session.id, user.id);
+
+  await ctx.reply(await getText(lang, "photo.generation_started"));
 }
 
 // Credit packages: { credits: price_in_stars }
@@ -330,7 +479,7 @@ bot.on("photo", async (ctx) => {
 
   const { error } = await supabase
     .from("sessions")
-    .update({ photos, state: "wait_style", is_active: true })
+    .update({ photos, state: "wait_style", is_active: true, current_photo_file_id: photo.file_id })
     .eq("id", session.id);
   if (error) {
     console.error("Failed to update session to wait_style:", error);
@@ -356,70 +505,58 @@ bot.on("text", async (ctx) => {
     return;
   }
 
+  if (session.state === "wait_custom_emotion") {
+    const emotionText = ctx.message.text.trim();
+    if (!session.last_sticker_file_id) {
+      await ctx.reply(await getText(lang, "error.no_stickers_added"));
+      return;
+    }
+
+    const promptFinal = buildEmotionPrompt(emotionText);
+    await startGeneration(ctx, user, session, lang, {
+      generationType: "emotion",
+      promptFinal,
+      emotionPrompt: emotionText,
+      selectedEmotion: emotionText,
+    });
+    return;
+  }
+
   // Check if we're in wait_style state
   if (session.state !== "wait_style") {
     if (session.state === "wait_photo") {
       await ctx.reply(await getText(lang, "photo.need_photo"));
+    } else if (session.state === "wait_emotion") {
+      await ctx.reply(await getText(lang, "emotion.choose"));
     }
     return;
   }
 
-  const photosCount = Array.isArray(session.photos) ? session.photos.length : 0;
-  if (photosCount === 0) {
+  const photos = Array.isArray(session.photos) ? session.photos : [];
+  const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
+  if (!currentPhotoId) {
     await ctx.reply(await getText(lang, "photo.need_photo"));
     return;
   }
 
   // Generate prompt using LLM
   await ctx.reply(await getText(lang, "photo.processing"));
-  
+
   const promptResult = await generatePrompt(ctx.message.text);
-  
+
   if (!promptResult.ok || promptResult.retry) {
     await ctx.reply(await getText(lang, "photo.invalid_style"));
     return;
   }
 
   const generatedPrompt = promptResult.prompt || ctx.message.text;
-
   const userInput = ctx.message.text;
 
-  // Check credits
-  if (user.credits < photosCount) {
-    await supabase
-      .from("sessions")
-      .update({ state: "wait_buy_credit", user_input: userInput, prompt_final: generatedPrompt, is_active: true })
-      .eq("id", session.id);
-
-    await ctx.reply(await getText(lang, "photo.not_enough_credits", {
-      needed: photosCount,
-      balance: user.credits,
-    }));
-    await sendBuyCreditsMenu(ctx, user);
-    return;
-  }
-
-  // Deduct credits
-  await supabase
-    .from("users")
-    .update({ credits: user.credits - photosCount })
-    .eq("id", user.id);
-
-  // Update session to processing with generated prompt and user input
-  await supabase
-    .from("sessions")
-    .update({ user_input: userInput, prompt_final: generatedPrompt, state: "processing", is_active: true })
-    .eq("id", session.id);
-
-  // Create job
-  await supabase.from("jobs").insert({
-    session_id: session.id,
-    user_id: user.id,
-    status: "queued",
-    attempts: 0,
+  await startGeneration(ctx, user, session, lang, {
+    generationType: "style",
+    promptFinal: generatedPrompt,
+    userInput,
   });
-
-  await ctx.reply(await getText(lang, "photo.generation_started"));
 });
 
 // Callback: style selection
@@ -451,8 +588,9 @@ bot.action(/^style_(.+)$/, async (ctx) => {
       return;
     }
 
-  const photosCount = Array.isArray(session.photos) ? session.photos.length : 0;
-  if (photosCount === 0) {
+    const photos = Array.isArray(session.photos) ? session.photos : [];
+    const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
+    if (!currentPhotoId) {
     await ctx.reply(await getText(lang, "photo.need_photo"));
     return;
   }
@@ -470,47 +608,167 @@ bot.action(/^style_(.+)$/, async (ctx) => {
     return;
   }
 
-  const generatedPrompt = promptResult.prompt || userInput;
+    const generatedPrompt = promptResult.prompt || userInput;
 
-  // Check credits
-  if (user.credits < photosCount) {
-    await supabase
-      .from("sessions")
-      .update({ state: "wait_buy_credit", user_input: userInput, prompt_final: generatedPrompt, is_active: true })
-      .eq("id", session.id);
-
-    await ctx.reply(await getText(lang, "photo.not_enough_credits", {
-      needed: photosCount,
-      balance: user.credits,
-    }));
-    await sendBuyCreditsMenu(ctx, user);
-    return;
-  }
-
-  // Deduct credits
-  await supabase
-    .from("users")
-    .update({ credits: user.credits - photosCount })
-    .eq("id", user.id);
-
-  // Update session to processing
-  await supabase
-    .from("sessions")
-    .update({ user_input: userInput, prompt_final: generatedPrompt, state: "processing", is_active: true })
-    .eq("id", session.id);
-
-  // Create job
-  await supabase.from("jobs").insert({
-    session_id: session.id,
-    user_id: user.id,
-    status: "queued",
-    attempts: 0,
-  });
-
-  await ctx.reply(await getText(lang, "photo.generation_started"));
+    await startGeneration(ctx, user, session, lang, {
+      generationType: "style",
+      promptFinal: generatedPrompt,
+      userInput,
+      selectedStyleId: preset.id,
+    });
   } catch (err) {
     console.error("Style callback error:", err);
   }
+});
+
+// Callback: add to pack
+bot.action("add_to_pack", async (ctx) => {
+  await ctx.answerCbQuery();
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session?.last_sticker_file_id) {
+    await ctx.reply(await getText(lang, "error.no_stickers_added"));
+    return;
+  }
+
+  const botUsername = await getBotUsername();
+  const stickerSetName =
+    user.sticker_set_name || `p2s_${telegramId}_by_${botUsername}`.toLowerCase();
+  const packTitle = await getText(lang, "sticker.pack_title");
+
+  try {
+    if (!user.sticker_set_name) {
+      await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`, {
+        user_id: telegramId,
+        name: stickerSetName,
+        title: packTitle,
+        stickers: [
+          {
+            sticker: session.last_sticker_file_id,
+            format: "static",
+            emoji_list: ["🔥"],
+          },
+        ],
+      });
+
+      await supabase.from("users").update({ sticker_set_name: stickerSetName }).eq("id", user.id);
+    } else {
+      await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/addStickerToSet`, {
+        user_id: telegramId,
+        name: stickerSetName,
+        sticker: {
+          sticker: session.last_sticker_file_id,
+          format: "static",
+          emoji_list: ["🔥"],
+        },
+      });
+    }
+
+    await ctx.reply(await getText(lang, "sticker.added_to_pack", {
+      link: `https://t.me/addstickers/${stickerSetName}`,
+    }));
+  } catch (err: any) {
+    console.error("Add to pack error:", err.response?.data || err.message);
+    await ctx.reply(await getText(lang, "error.technical"));
+  }
+});
+
+// Callback: change style
+bot.action("change_style", async (ctx) => {
+  await ctx.answerCbQuery();
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session?.id) return;
+
+  await supabase
+    .from("sessions")
+    .update({
+      state: "wait_style",
+      is_active: true,
+      prompt_final: null,
+      user_input: null,
+      pending_generation_type: null,
+      selected_emotion: null,
+      emotion_prompt: null,
+    })
+    .eq("id", session.id);
+
+  await sendStyleKeyboard(ctx, lang);
+});
+
+// Callback: change emotion
+bot.action("change_emotion", async (ctx) => {
+  await ctx.answerCbQuery();
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session?.last_sticker_file_id) {
+    await ctx.reply(await getText(lang, "error.no_stickers_added"));
+    return;
+  }
+
+  await supabase
+    .from("sessions")
+    .update({ state: "wait_emotion", is_active: true, pending_generation_type: null })
+    .eq("id", session.id);
+
+  await sendEmotionKeyboard(ctx, lang);
+});
+
+// Callback: emotion selection
+bot.action(/^emotion_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session?.last_sticker_file_id) {
+    await ctx.reply(await getText(lang, "error.no_stickers_added"));
+    return;
+  }
+
+  const emotionId = ctx.match[1];
+  const presets = await getEmotionPresets();
+  const preset = presets.find((p) => p.id === emotionId);
+  if (!preset) return;
+
+  if (preset.id === "custom") {
+    await supabase
+      .from("sessions")
+      .update({ state: "wait_custom_emotion", is_active: true })
+      .eq("id", session.id);
+    await ctx.reply(await getText(lang, "emotion.custom_prompt"));
+    return;
+  }
+
+  const promptFinal = buildEmotionPrompt(preset.prompt_hint);
+  await startGeneration(ctx, user, session, lang, {
+    generationType: "emotion",
+    promptFinal,
+    emotionPrompt: preset.prompt_hint,
+    selectedEmotion: preset.id,
+  });
 });
 
 // Callback: buy_credits
@@ -540,9 +798,10 @@ bot.action("cancel", async (ctx) => {
 
   const session = await getActiveSession(user.id);
   if (session?.state === "wait_buy_credit") {
+    const nextState = session.pending_generation_type === "emotion" ? "wait_emotion" : "wait_style";
     await supabase
       .from("sessions")
-      .update({ state: "wait_style", is_active: true })
+      .update({ state: nextState, is_active: true })
       .eq("id", session.id);
 
     await ctx.reply(await getText(lang, "payment.canceled"));
@@ -701,31 +960,29 @@ bot.on("successful_payment", async (ctx) => {
     // Check if there's a pending session waiting for credits
     const session = await getActiveSession(user.id);
     if (session?.state === "wait_buy_credit" && session.prompt_final) {
-      const photosCount = Array.isArray(session.photos) ? session.photos.length : 0;
+      const creditsNeeded = session.credits_spent || 1;
 
-      if (newCredits >= photosCount) {
+      if (newCredits >= creditsNeeded) {
+        const nextState =
+          session.pending_generation_type === "emotion" ? "processing_emotion" : "processing";
+
         // Auto-continue generation
         await supabase
           .from("users")
-          .update({ credits: newCredits - photosCount })
+          .update({ credits: newCredits - creditsNeeded })
           .eq("id", user.id);
 
         await supabase
           .from("sessions")
-          .update({ state: "processing", is_active: true })
+          .update({ state: nextState, is_active: true })
           .eq("id", session.id);
 
-        await supabase.from("jobs").insert({
-          session_id: session.id,
-          user_id: user.id,
-          status: "queued",
-          attempts: 0,
-        });
+        await enqueueJob(session.id, user.id);
 
         await ctx.reply(await getText(lang, "photo.generation_continue"));
       } else {
         await ctx.reply(await getText(lang, "payment.need_more", {
-          needed: photosCount - newCredits,
+          needed: creditsNeeded - newCredits,
         }));
       }
     }
