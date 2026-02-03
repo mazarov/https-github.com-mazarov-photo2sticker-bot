@@ -169,22 +169,7 @@ async function runJob(job: any) {
     .toBuffer();
 
   await updateProgress(7);
-  // Upload to Supabase Storage
   const filePathStorage = `stickers/${session.user_id}/${session.id}/${Date.now()}.webp`;
-  await supabase.storage
-    .from(config.supabaseStorageBucket)
-    .upload(filePathStorage, stickerBuffer, { contentType: "image/webp", upsert: true });
-
-  // Save sticker to history
-  await supabase.from("stickers").insert({
-    user_id: session.user_id,
-    session_id: session.id,
-    source_photo_file_id: generationType === "emotion" ? session.current_photo_file_id : sourceFileId,
-    user_input: session.user_input || null,
-    generated_prompt: session.prompt_final || null,
-    result_storage_path: filePathStorage,
-    sticker_set_name: user?.sticker_set_name || null,
-  });
 
   const addToPackText = await getText(lang, "btn.add_to_pack");
   const changeStyleText = await getText(lang, "btn.change_style");
@@ -200,7 +185,40 @@ async function runJob(job: any) {
     ],
   };
 
-  const stickerFileId = await sendSticker(telegramId, stickerBuffer, replyMarkup);
+  console.time("step7_upload");
+  const uploadPromise = supabase.storage
+    .from(config.supabaseStorageBucket)
+    .upload(filePathStorage, stickerBuffer, { contentType: "image/webp", upsert: true })
+    .finally(() => console.timeEnd("step7_upload"));
+
+  console.time("step7_sendSticker");
+  const sendPromise = sendSticker(telegramId, stickerBuffer, replyMarkup)
+    .then((fileId) => {
+      console.timeEnd("step7_sendSticker");
+      return fileId;
+    })
+    .catch((err) => {
+      console.timeEnd("step7_sendSticker");
+      throw err;
+    });
+
+  const [, stickerFileId] = await Promise.all([uploadPromise, sendPromise]);
+
+  await clearProgress();
+
+  console.time("step7_insert");
+  await supabase
+    .from("stickers")
+    .insert({
+      user_id: session.user_id,
+      session_id: session.id,
+      source_photo_file_id: generationType === "emotion" ? session.current_photo_file_id : sourceFileId,
+      user_input: session.user_input || null,
+      generated_prompt: session.prompt_final || null,
+      result_storage_path: filePathStorage,
+      sticker_set_name: user?.sticker_set_name || null,
+    })
+    .finally(() => console.timeEnd("step7_insert"));
 
   await supabase
     .from("sessions")
@@ -213,8 +231,6 @@ async function runJob(job: any) {
       progress_chat_id: null,
     })
     .eq("id", session.id);
-
-  await clearProgress();
 }
 
 async function poll() {
