@@ -202,6 +202,7 @@ async function runJob(job: any) {
   console.timeEnd("step7_insert");
 
   const stickerId = stickerRecord?.id;
+  console.log("stickerId after insert:", stickerId);
 
   const addToPackText = await getText(lang, "btn.add_to_pack");
   const changeStyleText = await getText(lang, "btn.change_style");
@@ -240,11 +241,15 @@ async function runJob(job: any) {
   await clearProgress();
 
   // Update sticker record with telegram_file_id
+  console.log("Updating sticker with telegram_file_id:", stickerId, "fileId:", stickerFileId?.substring(0, 30) + "...");
   if (stickerId && stickerFileId) {
     await supabase
       .from("stickers")
       .update({ telegram_file_id: stickerFileId })
       .eq("id", stickerId);
+    console.log("sticker telegram_file_id updated successfully");
+  } else {
+    console.log(">>> WARNING: skipped telegram_file_id update, stickerId:", stickerId, "stickerFileId:", !!stickerFileId);
   }
 
   await supabase

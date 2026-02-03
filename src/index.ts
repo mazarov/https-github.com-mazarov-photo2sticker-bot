@@ -655,8 +655,11 @@ bot.action(/^style_(.+)$/, async (ctx) => {
 
 // Callback: add to pack (new format with sticker ID)
 bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
+  console.log("=== add_to_pack:ID callback ===");
+  console.log("callback_data:", ctx.callbackQuery?.data);
   await ctx.answerCbQuery();
   const telegramId = ctx.from?.id;
+  console.log("telegramId:", telegramId);
   if (!telegramId) return;
 
   const user = await getUser(telegramId);
@@ -664,6 +667,7 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const stickerId = ctx.match[1];
+  console.log("stickerId from callback:", stickerId);
 
   // Get sticker from DB by ID
   const { data: sticker } = await supabase
@@ -672,7 +676,10 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
     .eq("id", stickerId)
     .maybeSingle();
 
+  console.log("sticker from DB:", sticker?.user_id, "telegram_file_id:", sticker?.telegram_file_id?.substring(0, 30) + "...");
+
   if (!sticker?.telegram_file_id) {
+    console.log(">>> ERROR: no telegram_file_id for sticker", stickerId);
     await ctx.reply(await getText(lang, "error.no_stickers_added"));
     return;
   }
@@ -784,6 +791,8 @@ bot.action("add_to_pack", async (ctx) => {
 
 // Callback: change style (new format with sticker ID)
 bot.action(/^change_style:(.+)$/, async (ctx) => {
+  console.log("=== change_style:ID callback ===");
+  console.log("callback_data:", ctx.callbackQuery?.data);
   await ctx.answerCbQuery();
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -793,6 +802,7 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const stickerId = ctx.match[1];
+  console.log("stickerId:", stickerId);
 
   // Get sticker from DB by ID
   const { data: sticker } = await supabase
@@ -801,7 +811,10 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
     .eq("id", stickerId)
     .maybeSingle();
 
+  console.log("sticker from DB:", sticker?.user_id, "source_photo_file_id:", !!sticker?.source_photo_file_id);
+
   if (!sticker?.source_photo_file_id) {
+    console.log(">>> ERROR: no source_photo_file_id for sticker", stickerId);
     await ctx.reply(await getText(lang, "error.no_stickers_added"));
     return;
   }
@@ -873,6 +886,8 @@ bot.action("change_style", async (ctx) => {
 
 // Callback: change emotion (new format with sticker ID)
 bot.action(/^change_emotion:(.+)$/, async (ctx) => {
+  console.log("=== change_emotion:ID callback ===");
+  console.log("callback_data:", ctx.callbackQuery?.data);
   await ctx.answerCbQuery();
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -882,6 +897,7 @@ bot.action(/^change_emotion:(.+)$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const stickerId = ctx.match[1];
+  console.log("stickerId:", stickerId);
 
   // Get sticker from DB by ID
   const { data: sticker } = await supabase
@@ -890,7 +906,10 @@ bot.action(/^change_emotion:(.+)$/, async (ctx) => {
     .eq("id", stickerId)
     .maybeSingle();
 
+  console.log("sticker from DB:", sticker?.user_id, "telegram_file_id:", !!sticker?.telegram_file_id);
+
   if (!sticker?.telegram_file_id) {
+    console.log(">>> ERROR: no telegram_file_id for sticker", stickerId);
     await ctx.reply(await getText(lang, "error.no_stickers_added"));
     return;
   }
