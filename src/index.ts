@@ -507,7 +507,12 @@ bot.start(async (ctx) => {
 
     const { data: created } = await supabase
       .from("users")
-      .insert({ telegram_id: telegramId, lang, credits: 0 })
+      .insert({ 
+        telegram_id: telegramId, 
+        lang, 
+        credits: 0,
+        username: ctx.from?.username || null,
+      })
       .select("*")
       .single();
 
@@ -522,6 +527,16 @@ bot.start(async (ctx) => {
         state: "done",
         is_active: false,
       });
+    }
+  } else {
+    // Update username if changed (user may change their Telegram username)
+    const currentUsername = ctx.from?.username || null;
+    if (user.username !== currentUsername) {
+      await supabase
+        .from("users")
+        .update({ username: currentUsername })
+        .eq("id", user.id);
+      user.username = currentUsername;
     }
   }
 
