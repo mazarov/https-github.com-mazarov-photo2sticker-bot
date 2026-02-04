@@ -168,7 +168,8 @@ async function runJob(job: any) {
 
   await updateProgress(5);
   // Remove background with Pixian
-  console.log("Calling Pixian to remove background...");
+  const imageSizeKb = Math.round(paddedBuffer.length / 1024);
+  console.log(`Calling Pixian to remove background... (image size: ${imageSizeKb} KB)`);
   const pixianForm = new FormData();
   pixianForm.append("image", paddedBuffer, {
     filename: "image.png",
@@ -176,6 +177,7 @@ async function runJob(job: any) {
   });
 
   let pixianRes;
+  const pixianStartTime = Date.now();
   try {
     pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
       auth: {
@@ -184,14 +186,35 @@ async function runJob(job: any) {
       },
       headers: pixianForm.getHeaders(),
       responseType: "arraybuffer",
+      timeout: 60000, // 60 seconds timeout
     });
-    console.log("Pixian background removal successful");
+    const pixianDuration = Date.now() - pixianStartTime;
+    console.log(`Pixian background removal successful (took ${pixianDuration}ms)`);
   } catch (err: any) {
-    console.error("Pixian API error:", err.response?.status, err.response?.data?.toString?.() || err.message);
+    const pixianDuration = Date.now() - pixianStartTime;
+    const responseBody = err.response?.data ? 
+      (typeof err.response.data === 'string' ? err.response.data : err.response.data.toString?.().slice(0, 500)) : 
+      'no response body';
+    
+    console.error("=== Pixian API Error ===");
+    console.error("Status:", err.response?.status || "no status");
+    console.error("Message:", err.message);
+    console.error("Code:", err.code);
+    console.error("Duration:", pixianDuration, "ms");
+    console.error("Image size:", imageSizeKb, "KB");
+    console.error("Response headers:", JSON.stringify(err.response?.headers || {}));
+    console.error("Response body:", responseBody);
+    
     await sendAlert({
       type: "rembg_failed",
-      message: `Pixian API failed: ${err.response?.status || "unknown"} ${err.message}`,
-      details: { sessionId: session.id },
+      message: `Pixian API failed: ${err.response?.status || err.code || "unknown"} ${err.message}`,
+      details: { 
+        sessionId: session.id,
+        imageSizeKb,
+        durationMs: pixianDuration,
+        errorCode: err.code,
+        status: err.response?.status,
+      },
     });
     throw new Error(`Pixian API failed: ${err.response?.status} ${err.message}`);
   }
