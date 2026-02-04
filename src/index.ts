@@ -404,10 +404,10 @@ async function startGeneration(
   await sendProgressStart(ctx, session.id, lang);
 }
 
-// Credit packages: { credits, price_in_stars, label_ru, label_en }
+// Credit packages: { credits, price_in_stars, label_ru, label_en, price_rub }
 const CREDIT_PACKS = [
-  { credits: 5, price: 75, label_ru: "🧪 Попробовать", label_en: "🧪 Try" },
-  { credits: 30, price: 150, label_ru: "⭐ Выгодный", label_en: "⭐ Value" },
+  { credits: 5, price: 75, price_rub: 150, label_ru: "🧪 Лайт", label_en: "🧪 Light" },
+  { credits: 30, price: 150, price_rub: 300, label_ru: "⭐ Бро", label_en: "⭐ Bro" },
 ];
 
 // Helper: get user by telegram_id
@@ -460,7 +460,7 @@ async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
     const unit = lang === "ru" ? "стикеров" : "stickers";
     buttons.push([
       Markup.button.callback(
-        `${label}: ${pack.credits} ${unit} — ${pack.price}⭐`,
+        `${label}: ${pack.credits} ${unit} — ${pack.price}⭐ (${pack.price_rub}₽)`,
         `pack_${pack.credits}_${pack.price}`
       )
     ]);
