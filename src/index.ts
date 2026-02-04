@@ -4,6 +4,7 @@ import axios from "axios";
 import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
+import { sendAlert } from "./lib/alerts";
 
 const bot = new Telegraf(config.telegramBotToken);
 const app = express();
@@ -1665,9 +1666,34 @@ async function startBot() {
   }
 }
 
-startBot().catch((err) => {
+startBot().catch(async (err) => {
   console.error("Failed to start bot:", err);
+  await sendAlert({
+    type: "api_error",
+    message: err?.message || String(err),
+    stack: err?.stack,
+  });
   process.exit(1);
+});
+
+// Handle uncaught exceptions
+process.on("uncaughtException", async (err) => {
+  console.error("Uncaught exception:", err);
+  await sendAlert({
+    type: "api_error",
+    message: err.message,
+    stack: err.stack,
+  });
+  process.exit(1);
+});
+
+process.on("unhandledRejection", async (reason: any) => {
+  console.error("Unhandled rejection:", reason);
+  await sendAlert({
+    type: "api_error",
+    message: reason?.message || String(reason),
+    stack: reason?.stack,
+  });
 });
 
 process.once("SIGINT", () => bot.stop("SIGINT"));

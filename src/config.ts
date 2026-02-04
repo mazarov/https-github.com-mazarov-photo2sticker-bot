@@ -22,4 +22,5 @@ export const config = {
   publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
   jobPollIntervalMs: Number(process.env.JOB_POLL_INTERVAL_MS || 2000),
   botUsername: process.env.BOT_USERNAME || "",
+  alertChannelId: process.env.ALERT_CHANNEL_ID || "",
 };

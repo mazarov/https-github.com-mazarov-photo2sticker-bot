@@ -6,6 +6,7 @@ import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, editMessageText, deleteMessage } from "./lib/telegram";
 import { getText } from "./lib/texts";
+import { sendAlert } from "./lib/alerts";
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
@@ -124,6 +125,11 @@ async function runJob(job: any) {
     );
   } catch (err: any) {
     console.error("Gemini API error:", err.response?.data || err.message);
+    await sendAlert({
+      type: "gemini_error",
+      message: err.response?.data?.error?.message || err.message,
+      details: { sessionId: session.id, generationType },
+    });
     throw new Error(`Gemini API failed: ${err.response?.data?.error?.message || err.message}`);
   }
 
@@ -133,6 +139,16 @@ async function runJob(job: any) {
 
   if (!imageBase64) {
     console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
+    const geminiText = geminiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No text response";
+    await sendAlert({
+      type: "generation_failed",
+      message: "Gemini returned no image",
+      details: { 
+        sessionId: session.id, 
+        generationType,
+        geminiResponse: geminiText.slice(0, 200),
+      },
+    });
     throw new Error("Gemini returned no image");
   }
 
@@ -172,6 +188,11 @@ async function runJob(job: any) {
     console.log("Pixian background removal successful");
   } catch (err: any) {
     console.error("Pixian API error:", err.response?.status, err.response?.data?.toString?.() || err.message);
+    await sendAlert({
+      type: "rembg_failed",
+      message: `Pixian API failed: ${err.response?.status || "unknown"} ${err.message}`,
+      details: { sessionId: session.id },
+    });
     throw new Error(`Pixian API failed: ${err.response?.status} ${err.message}`);
   }
 
@@ -353,7 +374,35 @@ async function poll() {
   }
 }
 
-poll().catch((e) => {
+// Handle uncaught exceptions
+process.on("uncaughtException", async (err) => {
+  console.error("Uncaught exception:", err);
+  await sendAlert({
+    type: "worker_error",
+    message: err.message,
+    stack: err.stack,
+    details: { workerId: WORKER_ID },
+  });
+  process.exit(1);
+});
+
+process.on("unhandledRejection", async (reason: any) => {
+  console.error("Unhandled rejection:", reason);
+  await sendAlert({
+    type: "worker_error",
+    message: reason?.message || String(reason),
+    stack: reason?.stack,
+    details: { workerId: WORKER_ID },
+  });
+});
+
+poll().catch(async (e) => {
   console.error(e);
+  await sendAlert({
+    type: "worker_error",
+    message: e?.message || String(e),
+    stack: e?.stack,
+    details: { workerId: WORKER_ID },
+  });
   process.exit(1);
 });
