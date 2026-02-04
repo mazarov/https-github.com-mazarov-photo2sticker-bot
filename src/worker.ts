@@ -336,17 +336,16 @@ async function runJob(job: any) {
 
 async function poll() {
   while (true) {
-    const { data: jobs } = await supabase
-      .from("jobs")
-      .update({
-        status: "processing",
-        worker_id: WORKER_ID,
-        started_at: new Date().toISOString(),
-      })
-      .eq("status", "queued")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .select("*");
+    // Atomic job claim using PostgreSQL FOR UPDATE SKIP LOCKED
+    const { data: jobs, error } = await supabase.rpc("claim_job", {
+      p_worker_id: WORKER_ID,
+    });
+
+    if (error) {
+      console.error("Error claiming job:", error.message);
+      await sleep(config.jobPollIntervalMs);
+      continue;
+    }
 
     const job = jobs?.[0];
     if (!job) {
