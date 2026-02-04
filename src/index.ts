@@ -869,24 +869,46 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
   }
 
   const botUsername = await getBotUsername();
-  const stickerSetName =
-    user.sticker_set_name || `p2s_${telegramId}_by_${botUsername}`.toLowerCase();
+  let stickerSetName = user.sticker_set_name || `p2s_${telegramId}_by_${botUsername}`.toLowerCase();
   const packTitle = await getText(lang, "sticker.pack_title");
 
   try {
     if (!user.sticker_set_name) {
-      await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`, {
-        user_id: telegramId,
-        name: stickerSetName,
-        title: packTitle,
-        stickers: [
-          {
-            sticker: sticker.telegram_file_id,
-            format: "static",
-            emoji_list: ["🔥"],
-          },
-        ],
-      });
+      // Try to create new sticker set
+      try {
+        await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`, {
+          user_id: telegramId,
+          name: stickerSetName,
+          title: packTitle,
+          stickers: [
+            {
+              sticker: sticker.telegram_file_id,
+              format: "static",
+              emoji_list: ["🔥"],
+            },
+          ],
+        });
+      } catch (createErr: any) {
+        // If name is occupied, try with timestamp
+        if (createErr.response?.data?.description?.includes("already occupied")) {
+          console.log("Sticker set name occupied, trying with timestamp...");
+          stickerSetName = `p2s_${telegramId}_${Date.now()}_by_${botUsername}`.toLowerCase();
+          await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`, {
+            user_id: telegramId,
+            name: stickerSetName,
+            title: packTitle,
+            stickers: [
+              {
+                sticker: sticker.telegram_file_id,
+                format: "static",
+                emoji_list: ["🔥"],
+              },
+            ],
+          });
+        } else {
+          throw createErr;
+        }
+      }
 
       await supabase.from("users").update({ sticker_set_name: stickerSetName }).eq("id", user.id);
     } else {
@@ -906,6 +928,16 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
     }));
   } catch (err: any) {
     console.error("Add to pack error:", err.response?.data || err.message);
+    await sendAlert({
+      type: "api_error",
+      message: `Add to pack failed: ${err.response?.data?.description || err.message}`,
+      details: { 
+        userId: user.id,
+        telegramId,
+        stickerSetName,
+        errorCode: err.response?.data?.error_code,
+      },
+    });
     await ctx.reply(await getText(lang, "error.technical"));
   }
 });
@@ -927,24 +959,46 @@ bot.action("add_to_pack", async (ctx) => {
   }
 
   const botUsername = await getBotUsername();
-  const stickerSetName =
-    user.sticker_set_name || `p2s_${telegramId}_by_${botUsername}`.toLowerCase();
+  let stickerSetName = user.sticker_set_name || `p2s_${telegramId}_by_${botUsername}`.toLowerCase();
   const packTitle = await getText(lang, "sticker.pack_title");
 
   try {
     if (!user.sticker_set_name) {
-      await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`, {
-        user_id: telegramId,
-        name: stickerSetName,
-        title: packTitle,
-        stickers: [
-          {
-            sticker: session.last_sticker_file_id,
-            format: "static",
-            emoji_list: ["🔥"],
-          },
-        ],
-      });
+      // Try to create new sticker set
+      try {
+        await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`, {
+          user_id: telegramId,
+          name: stickerSetName,
+          title: packTitle,
+          stickers: [
+            {
+              sticker: session.last_sticker_file_id,
+              format: "static",
+              emoji_list: ["🔥"],
+            },
+          ],
+        });
+      } catch (createErr: any) {
+        // If name is occupied, try with timestamp
+        if (createErr.response?.data?.description?.includes("already occupied")) {
+          console.log("Sticker set name occupied, trying with timestamp...");
+          stickerSetName = `p2s_${telegramId}_${Date.now()}_by_${botUsername}`.toLowerCase();
+          await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`, {
+            user_id: telegramId,
+            name: stickerSetName,
+            title: packTitle,
+            stickers: [
+              {
+                sticker: session.last_sticker_file_id,
+                format: "static",
+                emoji_list: ["🔥"],
+              },
+            ],
+          });
+        } else {
+          throw createErr;
+        }
+      }
 
       await supabase.from("users").update({ sticker_set_name: stickerSetName }).eq("id", user.id);
     } else {
@@ -964,6 +1018,16 @@ bot.action("add_to_pack", async (ctx) => {
     }));
   } catch (err: any) {
     console.error("Add to pack error:", err.response?.data || err.message);
+    await sendAlert({
+      type: "api_error",
+      message: `Add to pack failed: ${err.response?.data?.description || err.message}`,
+      details: { 
+        userId: user.id,
+        telegramId,
+        stickerSetName,
+        errorCode: err.response?.data?.error_code,
+      },
+    });
     await ctx.reply(await getText(lang, "error.technical"));
   }
 });
