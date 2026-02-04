@@ -499,6 +499,8 @@ bot.start(async (ctx) => {
       ? "ru"
       : "en";
 
+    console.log("New user - language_code:", ctx.from?.language_code, "-> lang:", lang);
+
     const { data: created } = await supabase
       .from("users")
       .insert({ telegram_id: telegramId, lang, credits: 0 })
