@@ -407,7 +407,7 @@ async function startGeneration(
 // Credit packages: { credits, price_in_stars, label_ru, label_en }
 const CREDIT_PACKS = [
   { credits: 5, price: 75, label_ru: "🧪 Попробовать", label_en: "🧪 Try" },
-  { credits: 30, price: 150, label_ru: "⭐ Выгодный (в 3× дешевле!)", label_en: "⭐ Value (3× cheaper!)" },
+  { credits: 30, price: 150, label_ru: "⭐ Выгодный", label_en: "⭐ Value" },
 ];
 
 // Helper: get user by telegram_id
