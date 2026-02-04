@@ -92,7 +92,7 @@ async function runJob(job: any) {
   let geminiRes;
   try {
     geminiRes = await axios.post(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
       {
         contents: [
           {
