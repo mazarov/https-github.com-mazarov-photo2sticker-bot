@@ -115,8 +115,8 @@ sendNotification({
 
 ## Checklist
 
-- [ ] Обновить `src/lib/alerts.ts` — добавить `sendNotification` с поддержкой изображений
-- [ ] Интегрировать в `index.ts` — new_user при /start
-- [ ] Интегрировать в `worker.ts` — new_sticker после генерации
-- [ ] Интегрировать в `index.ts` — new_payment после оплаты
+- [x] Обновить `src/lib/alerts.ts` — добавить `sendNotification` с поддержкой изображений
+- [x] Интегрировать в `index.ts` — new_user при /start
+- [x] Интегрировать в `worker.ts` — new_sticker после генерации
+- [x] Интегрировать в `index.ts` — new_payment после оплаты
 - [ ] Тестирование всех трёх типов уведомлений
