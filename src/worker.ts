@@ -88,7 +88,11 @@ async function runJob(job: any) {
 
   await updateProgress(3);
   console.log("Calling Gemini image generation...");
-  console.log("Prompt:", session.prompt_final?.substring(0, 100) + "...");
+  console.log("generationType:", generationType);
+  console.log("session.generation_type:", session.generation_type);
+  console.log("session.state:", session.state);
+  console.log("Full prompt:", session.prompt_final);
+  console.log("text_prompt:", session.text_prompt);
 
   let geminiRes;
   try {
