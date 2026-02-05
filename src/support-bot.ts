@@ -13,11 +13,26 @@ const ADMIN_IDS = config.adminIds;
 // Состояние reply в памяти
 const pendingReplies = new Map<number, number>(); // admin_id -> target_user_id
 
+// Map для отслеживания кто ожидает ввода feedback
+const pendingFeedback = new Map<number, string>(); // telegram_id -> user_id
+
 console.log("Admin IDs:", ADMIN_IDS);
 
 // /start handler
 bot.start(async (ctx) => {
   const payload = ctx.startPayload;
+  
+  // Пользователь пришёл оставить feedback (из кнопки в основном боте)
+  if (payload?.startsWith("feedback_")) {
+    const userId = payload.replace("feedback_", "");
+    pendingFeedback.set(ctx.from.id, userId);
+    
+    await ctx.reply(
+      "Спасибо что решили оставить отзыв! 🙏\n\n" +
+      "Напишите пару слов — что понравилось, что не понравилось, чего не хватает?"
+    );
+    return;
+  }
   
   // Админ хочет ответить
   if (payload?.startsWith("reply_") && ADMIN_IDS.includes(ctx.from.id)) {
@@ -38,17 +53,17 @@ bot.start(async (ctx) => {
     return;
   }
   
-  await ctx.reply("Это бот поддержки photo2sticker. Ожидайте сообщений от нас!");
+  await ctx.reply("Это бот поддержки photo2sticker. Напишите ваш вопрос!");
 });
 
 // Text handler
 bot.on("text", async (ctx) => {
-  const userId = ctx.from.id;
+  const telegramId = ctx.from.id;
   
   // Админ отвечает пользователю
-  if (ADMIN_IDS.includes(userId) && pendingReplies.has(userId)) {
-    const targetId = pendingReplies.get(userId)!;
-    pendingReplies.delete(userId);
+  if (ADMIN_IDS.includes(telegramId) && pendingReplies.has(telegramId)) {
+    const targetId = pendingReplies.get(telegramId)!;
+    pendingReplies.delete(telegramId);
     
     try {
       await bot.telegram.sendMessage(targetId, ctx.message.text);
@@ -75,11 +90,32 @@ bot.on("text", async (ctx) => {
     return;
   }
   
-  // Пользователь отвечает на feedback
+  // Пользователь оставляет feedback (пришёл по кнопке из основного бота)
+  if (pendingFeedback.has(telegramId)) {
+    const userId = pendingFeedback.get(telegramId)!;
+    pendingFeedback.delete(telegramId);
+    
+    // Сохраняем в базу
+    await supabase.from("user_feedback").upsert({
+      user_id: userId,
+      telegram_id: telegramId,
+      username: ctx.from.username,
+      answer_text: ctx.message.text,
+      answer_at: new Date().toISOString(),
+    }, { onConflict: "user_id" });
+    
+    // Отправляем алерт в Support Channel
+    await sendFeedbackAlert(ctx.from, ctx.message.text);
+    
+    await ctx.reply("Спасибо за отзыв! Мы обязательно его прочитаем 💜");
+    return;
+  }
+  
+  // Пользователь отвечает на feedback (старый флоу - для совместимости)
   const { data: feedback } = await supabase
     .from("user_feedback")
     .select("*")
-    .eq("telegram_id", userId)
+    .eq("telegram_id", telegramId)
     .is("answer_text", null)
     .maybeSingle();
   
@@ -103,65 +139,6 @@ bot.on("text", async (ctx) => {
   
   await ctx.reply("Спасибо за сообщение! Мы свяжемся с вами если потребуется.");
 });
-
-// Cron: обработка триггеров (каждую минуту)
-async function processTriggers() {
-  try {
-    const now = new Date().toISOString();
-    
-    const { data: triggers, error } = await supabase
-      .from("notification_triggers")
-      .select("*, users(username)")
-      .eq("status", "pending")
-      .eq("trigger_type", "feedback_zero_credits")
-      .lte("fire_after", now)
-      .limit(10);
-    
-    if (error) {
-      console.error("Error fetching triggers:", error);
-      return;
-    }
-    
-    if (!triggers?.length) return;
-    
-    console.log(`Processing ${triggers.length} feedback triggers`);
-    
-    for (const trigger of triggers) {
-      try {
-        await bot.telegram.sendMessage(trigger.telegram_id,
-          "👋 Привет! Вы попробовали создать стикер в @photo2sticker_bot.\n\n" +
-          "Понравился результат? Что помешало продолжить?\n\n" +
-          "Напишите пару слов — мы читаем каждый ответ 🙏"
-        );
-        
-        // Обновляем триггер как выполненный
-        await supabase.from("notification_triggers")
-          .update({ status: "fired", fired_at: new Date().toISOString() })
-          .eq("id", trigger.id);
-        
-        // Создаём запись feedback
-        await supabase.from("user_feedback").insert({
-          user_id: trigger.user_id,
-          telegram_id: trigger.telegram_id,
-          username: (trigger as any).users?.username,
-        });
-        
-        console.log(`Feedback sent to ${trigger.telegram_id}`);
-      } catch (err: any) {
-        console.error(`Failed to send feedback to ${trigger.telegram_id}:`, err.message);
-        
-        // Если пользователь заблокировал бота — отменяем триггер
-        if (err.response?.error_code === 403) {
-          await supabase.from("notification_triggers")
-            .update({ status: "cancelled", metadata: { error: "blocked" } })
-            .eq("id", trigger.id);
-        }
-      }
-    }
-  } catch (err) {
-    console.error("Error in processTriggers:", err);
-  }
-}
 
 // Отправка в Support Channel
 async function sendToSupportChannel(text: string) {
@@ -238,20 +215,7 @@ process.once("SIGTERM", () => bot.stop("SIGTERM"));
 console.log("Starting bot.launch()...");
 bot.launch({ dropPendingUpdates: true }).then(() => {
   console.log("Support bot started");
-  
-  // Запускаем cron сразу и каждую минуту
-  console.log("Starting cron...");
-  processTriggers();
-  setInterval(processTriggers, 60 * 1000);
-  console.log("Cron started");
 }).catch((err) => {
   console.error("Failed to start support bot:", err);
   process.exit(1);
 });
-
-// Fallback: если bot.launch() зависает, запустить cron через 10 сек
-setTimeout(() => {
-  console.log("Fallback: starting cron after 10s timeout");
-  processTriggers();
-  setInterval(processTriggers, 60 * 1000);
-}, 10000);
