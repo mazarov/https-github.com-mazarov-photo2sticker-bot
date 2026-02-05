@@ -317,11 +317,16 @@ async function runJob(job: any) {
 
   // Set feedback trigger if user has 0 credits (fire-and-forget)
   if (user.credits === 0 && !user.feedback_trigger_at) {
-    supabase.from("users")
-      .update({ feedback_trigger_at: new Date().toISOString() })
-      .eq("id", session.user_id)
-      .then(() => console.log("Feedback trigger set for user:", session.user_id))
-      .catch(console.error);
+    (async () => {
+      try {
+        await supabase.from("users")
+          .update({ feedback_trigger_at: new Date().toISOString() })
+          .eq("id", session.user_id);
+        console.log("Feedback trigger set for user:", session.user_id);
+      } catch (err) {
+        console.error("Failed to set feedback trigger:", err);
+      }
+    })();
   }
 
   await clearProgress();
