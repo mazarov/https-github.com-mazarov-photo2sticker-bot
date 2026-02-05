@@ -235,7 +235,7 @@ process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
 // Запуск
-bot.launch().then(() => {
+bot.launch({ dropPendingUpdates: true }).then(() => {
   console.log("Support bot started");
   
   // Запускаем cron сразу и каждую минуту
