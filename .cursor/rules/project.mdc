@@ -1,0 +1,65 @@
+# Photo2Sticker Bot — Project Rules
+
+## Перед деплоем (ОБЯЗАТЕЛЬНО)
+
+1. **Проверить билд локально:**
+   ```bash
+   npm run build
+   ```
+   Если есть ошибки TypeScript — исправить до коммита.
+
+2. **При изменении select запросов** — проверить что все нужные поля включены в select.
+
+## Работа с кодом
+
+- После создания SQL миграции — напомнить пользователю выполнить в Supabase
+- Новые фичи документировать в `docs/` перед реализацией
+- Читать `docs/known-bugs.md` при работе с соответствующими компонентами
+
+## Коммиты
+
+- Формат: `type: description` (feat, fix, docs, refactor)
+- Пушить сразу после коммита
+
+## Известные ограничения
+
+- Support bot не может писать первым — использовать deep links из основного бота
+- Telegram API `sendMediaGroup` рендерит прозрачность как белый фон
+- `pendingFeedback` и `pendingIssues` в support-bot хранятся в памяти, теряются при рестарте
+
+## Структура проекта
+
+```
+src/
+├── index.ts        — основной бот (Telegraf)
+├── worker.ts       — воркер генерации стикеров
+├── support-bot.ts  — саппорт бот
+├── config.ts       — конфигурация
+└── lib/
+    ├── alerts.ts   — алерты и нотификации
+    ├── supabase.ts — клиент Supabase
+    ├── telegram.ts — утилиты Telegram API
+    └── texts.ts    — локализация (ru/en)
+
+docs/           — требования и документация
+docs/done/      — завершённые фичи
+sql/            — миграции (нумерация 001, 002...)
+```
+
+## Локализация
+
+- Все пользовательские сообщения через `getText(lang, key)`
+- Поддерживаемые языки: `ru`, `en`
+- Тексты в `src/lib/texts.ts`
+
+## База данных (Supabase)
+
+- Таблицы: users, sessions, jobs, stickers, sticker_sets, transactions, notification_triggers, sticker_ratings, sticker_issues
+- RPC функции: `claim_job` (атомарный захват job воркером)
+- При добавлении полей — создавать миграцию в `sql/`
+
+## Модели генерации
+
+- Основная: `gemini-2.5-flash-image`
+- Для текста (планируется): `gemini-3-pro-vision` (Nano Banana Pro)
+- Выбор модели в `worker.ts`
