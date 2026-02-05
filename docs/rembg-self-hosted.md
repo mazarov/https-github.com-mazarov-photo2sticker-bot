@@ -225,13 +225,13 @@ curl http://rembg:5000/health
 
 ## Checklist
 
-- [ ] Создать `Dockerfile.rembg`
-- [ ] Создать `rembg_server.py`
-- [ ] Задеплоить контейнер в Dockhost
-- [ ] Настроить внутреннюю сеть
-- [ ] Добавить `REMBG_URL` в Worker
-- [ ] Обновить `worker.ts` — использовать rembg
-- [ ] Добавить fallback на Pixian
+- [x] Создать `Dockerfile.rembg`
+- [x] Создать `rembg_server.py`
+- [x] Задеплоить контейнер в Dockhost
+- [x] Настроить внутреннюю сеть
+- [x] Добавить `REMBG_URL` в Worker
+- [x] Обновить `worker.ts` — использовать rembg
+- [x] Добавить fallback на Pixian
 - [ ] Тестирование
 - [ ] Мониторинг
 
