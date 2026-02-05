@@ -348,17 +348,21 @@ async function runJob(job: any) {
           ? "💬 Написать о проблеме"
           : "💬 Report an issue";
 
+        const supportUrl = `https://t.me/p2s_support_bot?start=issue_${stickerId}`;
+        console.log("Rating buttons for sticker:", stickerId, "rating:", ratingRecord.id);
+        console.log("Support URL:", supportUrl);
+        
         const ratingMsg = await sendMessage(telegramId, ratingText, {
           inline_keyboard: [
             [
-              { text: "⭐ 1", callback_data: `rate:${ratingRecord.id}:1` },
-              { text: "⭐ 2", callback_data: `rate:${ratingRecord.id}:2` },
-              { text: "⭐ 3", callback_data: `rate:${ratingRecord.id}:3` },
-              { text: "⭐ 4", callback_data: `rate:${ratingRecord.id}:4` },
-              { text: "⭐ 5", callback_data: `rate:${ratingRecord.id}:5` },
+              { text: "⭐1", callback_data: `rate:${ratingRecord.id}:1` },
+              { text: "⭐2", callback_data: `rate:${ratingRecord.id}:2` },
+              { text: "⭐3", callback_data: `rate:${ratingRecord.id}:3` },
+              { text: "⭐4", callback_data: `rate:${ratingRecord.id}:4` },
+              { text: "⭐5", callback_data: `rate:${ratingRecord.id}:5` },
             ],
             [
-              { text: issueButtonText, url: `https://t.me/p2s_support_bot?start=issue_${stickerId}` }
+              { text: issueButtonText, url: supportUrl }
             ]
           ]
         });
