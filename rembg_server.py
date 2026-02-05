@@ -35,25 +35,34 @@ def remove_background():
     Expects: multipart/form-data with 'image' file
     Returns: PNG image with transparent background
     """
+    request_id = f"{int(time.time()*1000)}"
     start_time = time.time()
+    logger.info(f"[{request_id}] === REQUEST RECEIVED ===")
     
     # Check if image is provided
     if 'image' not in request.files:
+        logger.warning(f"[{request_id}] No image in request")
         return jsonify({'error': 'No image provided'}), 400
     
     try:
         # Read input image
+        read_start = time.time()
         input_data = request.files['image'].read()
         input_size_kb = len(input_data) / 1024
-        logger.info(f"Processing image: {input_size_kb:.1f} KB")
+        read_time = int((time.time() - read_start) * 1000)
+        logger.info(f"[{request_id}] Image read: {input_size_kb:.1f} KB in {read_time}ms")
         
         # Remove background
+        process_start = time.time()
+        logger.info(f"[{request_id}] Starting rembg processing...")
         output_data = remove(input_data, session=session)
+        process_time = int((time.time() - process_start) * 1000)
+        logger.info(f"[{request_id}] rembg processing done in {process_time}ms")
         
         # Calculate stats
         duration_ms = int((time.time() - start_time) * 1000)
         output_size_kb = len(output_data) / 1024
-        logger.info(f"Done: {duration_ms}ms, output: {output_size_kb:.1f} KB")
+        logger.info(f"[{request_id}] === COMPLETED: total={duration_ms}ms, process={process_time}ms, output={output_size_kb:.1f}KB ===")
         
         # Return PNG with transparent background
         return Response(
@@ -63,12 +72,16 @@ def remove_background():
                 'X-Processing-Time-Ms': str(duration_ms),
                 'X-Input-Size-Kb': str(int(input_size_kb)),
                 'X-Output-Size-Kb': str(int(output_size_kb)),
+                'X-Request-Id': request_id,
             }
         )
         
     except Exception as e:
-        logger.error(f"Error processing image: {e}")
-        return jsonify({'error': str(e)}), 500
+        duration_ms = int((time.time() - start_time) * 1000)
+        logger.error(f"[{request_id}] === ERROR after {duration_ms}ms: {e} ===")
+        import traceback
+        logger.error(f"[{request_id}] Traceback: {traceback.format_exc()}")
+        return jsonify({'error': str(e), 'request_id': request_id}), 500
 
 
 @app.route('/', methods=['GET'])

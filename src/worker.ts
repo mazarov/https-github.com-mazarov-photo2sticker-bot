@@ -229,7 +229,17 @@ async function runJob(job: any) {
       .png()
       .toBuffer();
     const rembgSizeKb = Math.round(rembgBuffer.length / 1024);
-    console.log(`Trying rembg at ${rembgUrl}... (resized: ${rembgSizeKb} KB, original: ${imageSizeKb} KB)`);
+    console.log(`[rembg] Starting request to ${rembgUrl} (resized: ${rembgSizeKb} KB, original: ${imageSizeKb} KB)`);
+    
+    // Health check first to see if rembg is reachable
+    try {
+      const healthStart = Date.now();
+      const healthRes = await axios.get(`${rembgUrl}/health`, { timeout: 5000 });
+      console.log(`[rembg] Health check OK (${Date.now() - healthStart}ms):`, healthRes.data);
+    } catch (healthErr: any) {
+      console.error(`[rembg] Health check FAILED: ${healthErr.code || healthErr.message}`);
+      // Continue anyway, maybe just health endpoint is slow
+    }
     
     const rembgForm = new FormData();
     rembgForm.append("image", rembgBuffer, {
@@ -238,19 +248,34 @@ async function runJob(job: any) {
     });
     
     try {
+      let attemptNum = 0;
       const rembgRes = await retryWithBackoff(
-        () => axios.post(`${rembgUrl}/remove-background`, rembgForm, {
-          headers: rembgForm.getHeaders(),
-          responseType: "arraybuffer",
-          timeout: 90000, // 90 seconds for CPU processing
-        }),
+        () => {
+          attemptNum++;
+          const attemptStart = Date.now();
+          console.log(`[rembg] Attempt ${attemptNum}/2 starting...`);
+          return axios.post(`${rembgUrl}/remove-background`, rembgForm, {
+            headers: rembgForm.getHeaders(),
+            responseType: "arraybuffer",
+            timeout: 90000, // 90 seconds for CPU processing
+          }).then(res => {
+            console.log(`[rembg] Attempt ${attemptNum} completed in ${Date.now() - attemptStart}ms`);
+            return res;
+          });
+        },
         { maxAttempts: 2, baseDelayMs: 3000, name: "rembg" }
       );
       const duration = Date.now() - startTime;
-      console.log(`rembg background removal successful (took ${duration}ms)`);
+      const processingTime = rembgRes.headers?.['x-processing-time-ms'] || 'unknown';
+      console.log(`[rembg] SUCCESS total=${duration}ms, server_processing=${processingTime}ms`);
       noBgBuffer = Buffer.from(rembgRes.data);
     } catch (rembgErr: any) {
-      console.error("rembg failed, falling back to Pixian:", rembgErr.message);
+      const duration = Date.now() - startTime;
+      console.error(`[rembg] FAILED after ${duration}ms:`);
+      console.error(`[rembg]   code: ${rembgErr.code || 'none'}`);
+      console.error(`[rembg]   message: ${rembgErr.message}`);
+      console.error(`[rembg]   status: ${rembgErr.response?.status || 'no response'}`);
+      console.error(`[rembg]   response: ${rembgErr.response?.data ? Buffer.from(rembgErr.response.data).toString().slice(0, 200) : 'none'}`);
       // Fall through to Pixian
     }
   }
