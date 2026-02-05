@@ -205,18 +205,24 @@ async function sendMotionKeyboard(ctx: any, lang: string) {
 }
 
 function buildMotionPrompt(motionText: string) {
-  return `Update the sticker to show this pose/action: ${motionText}. Keep the same character, style, and colors. Requirements: solid green background (#00FF00), no watermark, no logo, no frame.`;
+  return `Create a high-contrast messenger sticker.
+Action: ${motionText} — show this pose/action clearly.
+Character: Use the character from the previous sticker. Preserve recognizable facial features, style, and colors.
+Composition: Character occupies maximum canvas area, clear silhouette, bold uniform border around the character (thick, approx 25–35% outline width), smooth and consistent outline.
+Visual design: High contrast, strong edge separation, simplified shapes, no soft edges.
+Requirements: Solid black background, no watermark, no logo, no frame.
+Quality: Optimized for clean background removal and messenger sticker use.`;
 }
 
 function buildTextPrompt(text: string): string {
-  return `Add the following text EXACTLY as written to the sticker: "${text}"
-
-IMPORTANT: 
-- Do NOT translate the text
-- Do NOT change the text in any way
-- Use the EXACT characters provided by the user
-
-The text should be integrated naturally and visually appealing - it can appear on a sign, banner, speech bubble, or creatively placed within the image. Keep the same character, style, and colors. Requirements: solid green background (#00FF00), no watermark, no logo, no frame.`;
+  return `Create a high-contrast messenger sticker with text.
+Text: "${text}" — add this text EXACTLY as written, do NOT translate or change it.
+Character: Use the character from the previous sticker. Preserve recognizable facial features, style, and colors.
+Text placement: Integrate naturally — on a sign, banner, speech bubble, or creatively placed within the image.
+Composition: Character occupies maximum canvas area, clear silhouette, bold uniform border around the character (thick, approx 25–35% outline width), smooth and consistent outline.
+Visual design: High contrast, strong edge separation, simplified shapes, no soft edges. Text must be clearly readable.
+Requirements: Solid black background, no watermark, no logo, no frame.
+Quality: Optimized for clean background removal and messenger sticker use.`;
 }
 
 async function getAgent(name: string) {
@@ -321,7 +327,13 @@ async function generatePrompt(userInput: string): Promise<PromptResult> {
 }
 
 function buildEmotionPrompt(emotionText: string) {
-  return `Update the sticker to show this emotion: ${emotionText}. Keep the same character, style, and colors. Requirements: solid green background (#00FF00), no watermark, no logo, no frame.`;
+  return `Create a high-contrast messenger sticker.
+Emotion: ${emotionText} — show this emotion clearly on the character's face and body language.
+Character: Use the character from the previous sticker. Preserve recognizable facial features, style, and colors.
+Composition: Character occupies maximum canvas area, clear silhouette, bold uniform border around the character (thick, approx 25–35% outline width), smooth and consistent outline.
+Visual design: High contrast, strong edge separation, simplified shapes, no soft edges.
+Requirements: Solid black background, no watermark, no logo, no frame.
+Quality: Optimized for clean background removal and messenger sticker use.`;
 }
 
 async function enqueueJob(sessionId: string, userId: string) {
