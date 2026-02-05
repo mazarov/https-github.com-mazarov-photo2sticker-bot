@@ -54,7 +54,7 @@ async function runJob(job: any) {
 
   const { data: user } = await supabase
     .from("users")
-    .select("telegram_id, lang, sticker_set_name, username, credits, total_generations")
+    .select("telegram_id, lang, sticker_set_name, username, credits, total_generations, onboarding_step")
     .eq("id", session.user_id)
     .maybeSingle();
 
@@ -409,6 +409,53 @@ async function runJob(job: any) {
 
   // Note: total_generations is now incremented in index.ts immediately when job is created
   // to prevent double free generation race condition
+
+  // Onboarding messages
+  const onboardingStep = user.onboarding_step ?? 99;
+  
+  // After first sticker (step 0 → 1): prompt to try emotion
+  if (onboardingStep === 1 && generationType === "style" && stickerId) {
+    const onboardingText = lang === "ru"
+      ? "🎉 Вот твой первый стикер!\n\nА теперь давай оживим его — добавь эмоцию:"
+      : "🎉 Here's your first sticker!\n\nNow let's bring it to life — add an emotion:";
+    
+    const onboardingEmotions = [
+      { emoji: "😂", id: "laughing", label_ru: "Смех", label_en: "Laughing" },
+      { emoji: "😎", id: "cool", label_ru: "Крутой", label_en: "Cool" },
+      { emoji: "😢", id: "sad", label_ru: "Грустный", label_en: "Sad" },
+      { emoji: "😡", id: "angry", label_ru: "Злой", label_en: "Angry" },
+    ];
+    
+    const emotionButtons = onboardingEmotions.map(e => [{
+      text: `${e.emoji} ${lang === "ru" ? e.label_ru : e.label_en}`,
+      callback_data: `onboarding_emotion:${stickerId}:${e.id}`,
+    }]);
+    
+    const skipText = lang === "ru" ? "Пропустить →" : "Skip →";
+    emotionButtons.push([{ text: skipText, callback_data: "onboarding_skip" }]);
+    
+    await sendMessage(telegramId, onboardingText, {
+      reply_markup: { inline_keyboard: emotionButtons },
+    });
+  }
+  // After emotion in onboarding (step 1 → 2): final message
+  else if (onboardingStep === 2 && generationType === "emotion") {
+    const finalText = lang === "ru"
+      ? "🔥 Отлично! Теперь ты умеешь создавать живые стикеры.\n\nЕщё можно:\n🏃 Добавить движение\n💬 Написать текст на стикере\n\nХочешь создать ещё?"
+      : "🔥 Awesome! Now you know how to create lively stickers.\n\nYou can also:\n🏃 Add motion\n💬 Add text to sticker\n\nWant to create more?";
+    
+    const buyText = lang === "ru" ? "🛒 Купить кредиты" : "🛒 Buy credits";
+    const newPhotoText = lang === "ru" ? "📷 Новое фото" : "📷 New photo";
+    
+    await sendMessage(telegramId, finalText, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: buyText, callback_data: "buy_credits" }],
+          [{ text: newPhotoText, callback_data: "new_photo" }],
+        ],
+      },
+    });
+  }
 
   // Send sticker notification (async, non-blocking)
   const emotionText = session.selected_emotion || "-";

@@ -372,32 +372,44 @@ async function startGeneration(
   }
 ) {
   const creditsNeeded = 1;
-  const mightBeFirstFree = (user.total_generations || 0) === 0;
+  const onboardingStep = user.onboarding_step ?? 0;
 
   console.log("=== startGeneration ===");
   console.log("user.id:", user?.id);
   console.log("user.credits:", user?.credits, "type:", typeof user?.credits);
-  console.log("user.total_generations:", user?.total_generations);
-  console.log("mightBeFirstFree:", mightBeFirstFree);
+  console.log("user.onboarding_step:", onboardingStep);
+  console.log("generationType:", options.generationType);
   console.log("creditsNeeded:", creditsNeeded);
 
-  let isFirstFree = false;
+  let isOnboardingFree = false;
 
-  if (mightBeFirstFree) {
-    // Try to atomically claim first free generation
+  // Onboarding step 0 → first sticker is free (any style)
+  if (onboardingStep === 0 && options.generationType === "style") {
     const { data: claimed, error: claimError } = await supabase
-      .rpc("claim_first_free_generation", { p_user_id: user.id });
+      .rpc("claim_onboarding_step_1", { p_user_id: user.id });
     
     if (claimError) {
-      console.error("claim_first_free_generation error:", claimError.message);
+      console.error("claim_onboarding_step_1 error:", claimError.message);
     }
     
-    isFirstFree = claimed === true;
-    console.log("claim_first_free_generation result:", claimed, "isFirstFree:", isFirstFree);
+    isOnboardingFree = claimed === true;
+    console.log("claim_onboarding_step_1 result:", claimed, "isOnboardingFree:", isOnboardingFree);
+  }
+  // Onboarding step 1 → emotion is free
+  else if (onboardingStep === 1 && options.generationType === "emotion") {
+    const { data: claimed, error: claimError } = await supabase
+      .rpc("claim_onboarding_step_2", { p_user_id: user.id });
+    
+    if (claimError) {
+      console.error("claim_onboarding_step_2 error:", claimError.message);
+    }
+    
+    isOnboardingFree = claimed === true;
+    console.log("claim_onboarding_step_2 result:", claimed, "isOnboardingFree:", isOnboardingFree);
   }
 
-  // If not first free, must pay
-  if (!isFirstFree) {
+  // If not onboarding free, must pay
+  if (!isOnboardingFree) {
     // Quick check if user has enough credits (optimistic)
     if (user.credits < creditsNeeded) {
       // Send alert (async, non-blocking)
@@ -470,13 +482,13 @@ async function startGeneration(
       selected_emotion: options.selectedEmotion || null,
       text_prompt: options.textPrompt || null,
       generation_type: options.generationType,
-      credits_spent: isFirstFree ? 0 : creditsNeeded,
+      credits_spent: isOnboardingFree ? 0 : creditsNeeded,
       state: nextState,
       is_active: true,
     })
     .eq("id", session.id);
 
-  await enqueueJob(session.id, user.id, isFirstFree);
+  await enqueueJob(session.id, user.id, isOnboardingFree);
 
   await sendProgressStart(ctx, session.id, lang);
 }
@@ -1550,6 +1562,135 @@ bot.action(/^rate:(.+):(\d)$/, async (ctx) => {
     const thankYouText = "⭐".repeat(score) + " Спасибо за оценку! 🙏";
     await ctx.editMessageText(thankYouText);
   }
+});
+
+// Callback: onboarding emotion selection
+bot.action(/^onboarding_emotion:(.+):(.+)$/, async (ctx) => {
+  console.log("=== onboarding_emotion callback ===");
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const stickerId = ctx.match[1];
+  const emotionId = ctx.match[2];
+  console.log("stickerId:", stickerId, "emotionId:", emotionId);
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+
+  // Check if user is in onboarding step 1
+  if (user.onboarding_step !== 1) {
+    console.log("User not in onboarding step 1, skipping");
+    return;
+  }
+
+  // Get sticker to find source photo
+  const { data: sticker } = await supabase
+    .from("stickers")
+    .select("source_photo_file_id, user_id")
+    .eq("id", stickerId)
+    .maybeSingle();
+
+  if (!sticker?.source_photo_file_id || sticker.user_id !== user.id) {
+    console.log("Sticker not found or doesn't belong to user");
+    return;
+  }
+
+  // Get or create session
+  let session = await getActiveSession(user.id);
+  if (!session?.id) {
+    const { data: newSession } = await supabase
+      .from("sessions")
+      .insert({ user_id: user.id, state: "wait_emotion", is_active: true })
+      .select()
+      .single();
+    session = newSession;
+  }
+  if (!session?.id) return;
+
+  // Update session with photo and emotion
+  await supabase
+    .from("sessions")
+    .update({
+      state: "wait_emotion",
+      is_active: true,
+      current_photo_file_id: sticker.source_photo_file_id,
+      selected_emotion: emotionId,
+    })
+    .eq("id", session.id);
+
+  // Get emotion preset
+  const { data: emotionPreset } = await supabase
+    .from("emotion_presets")
+    .select("prompt_hint")
+    .eq("id", emotionId)
+    .maybeSingle();
+
+  const emotionHint = emotionPreset?.prompt_hint || emotionId;
+
+  // Start generation
+  await startGeneration(ctx, user, session, lang, {
+    generationType: "emotion",
+    promptFinal: `Add ${emotionHint} expression to this sticker character`,
+    emotionPrompt: emotionHint,
+    selectedEmotion: emotionId,
+  });
+
+  // Delete onboarding message
+  await ctx.deleteMessage().catch(() => {});
+});
+
+// Callback: skip onboarding
+bot.action("onboarding_skip", async (ctx) => {
+  console.log("=== onboarding_skip callback ===");
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+
+  // Skip onboarding
+  await supabase.rpc("skip_onboarding", { p_user_id: user.id });
+
+  const skipText = lang === "ru"
+    ? "Хорошо! Когда захочешь добавить эмоцию — нажми кнопку под стикером 😊"
+    : "Okay! When you want to add an emotion — click the button under the sticker 😊";
+
+  await ctx.editMessageText(skipText);
+});
+
+// Callback: new_photo (after onboarding)
+bot.action("new_photo", async (ctx) => {
+  console.log("=== new_photo callback ===");
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+
+  // Create new session
+  await supabase
+    .from("sessions")
+    .update({ is_active: false })
+    .eq("user_id", user.id);
+
+  await supabase
+    .from("sessions")
+    .insert({ user_id: user.id, state: "wait_photo", is_active: true });
+
+  const text = lang === "ru"
+    ? "📷 Отправь фото — сделаем новый стикер!"
+    : "📷 Send a photo — let's create a new sticker!";
+
+  await ctx.editMessageText(text);
 });
 
 // Callback: cancel
