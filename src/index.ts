@@ -499,7 +499,7 @@ async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
   // Button to buy Stars for rubles (RU only)
   if (lang === "ru") {
     buttons.push([
-      Markup.button.url("💵 Купить Stars за ₽", "https://t.me/StarsZakupBot?start=stars")
+      Markup.button.url("💵 Купить Stars за ₽", "https://t.me/StarsZakupBot?start=ref_r_0477825983")
     ]);
   }
 
