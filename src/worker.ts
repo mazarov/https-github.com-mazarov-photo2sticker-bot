@@ -121,11 +121,14 @@ async function runJob(job: any) {
   console.log("Full prompt:", session.prompt_final);
   console.log("text_prompt:", session.text_prompt);
 
-  // Select model: better quality for first free generation
-  const model = job.is_first_free 
-    ? "gemini-2.5-flash-image"  // TODO: change to better model for wow-effect
-    : "gemini-2.5-flash-image"; // Standard model
-  console.log("Using model:", model, "is_first_free:", job.is_first_free);
+  // Select model by generation type:
+  // - style/text: Pro model for quality (first impression matters)
+  // - emotion/motion: Flash model for speed/cost (iterations)
+  const model = 
+    generationType === "style" || generationType === "text"
+      ? "gemini-2.0-flash-exp"    // Nano Banana Pro — качество
+      : "gemini-2.5-flash-image"; // Flash — скорость/цена
+  console.log("Using model:", model, "generationType:", generationType);
 
   let geminiRes;
   try {
