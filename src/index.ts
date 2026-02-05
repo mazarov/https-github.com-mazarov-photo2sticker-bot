@@ -628,7 +628,7 @@ bot.start(async (ctx) => {
   await ctx.reply(greeting);
 });
 
-// /balance command
+// /balance command - shows balance + tariffs directly (no intermediate "Top up" button)
 bot.command("balance", async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -642,12 +642,7 @@ bot.command("balance", async (ctx) => {
 
   const lang = user.lang || "en";
   const text = await getText(lang, "balance.info", { credits: user.credits || 0 });
-  const btnText = await getText(lang, "btn.top_up");
-
-  await ctx.reply(
-    text,
-    Markup.inlineKeyboard([[Markup.button.callback(btnText, "buy_credits")]])
-  );
+  await sendBuyCreditsMenu(ctx, user, text);
 });
 
 // /support command
