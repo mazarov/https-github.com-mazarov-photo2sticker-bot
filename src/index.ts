@@ -419,12 +419,21 @@ async function startGeneration(
     return;
   }
 
-  // Deduct credits only if not first free
+  // Deduct credits atomically (prevents race condition)
   if (!isFirstFree) {
-    await supabase
-      .from("users")
-      .update({ credits: user.credits - creditsNeeded })
-      .eq("id", user.id);
+    const { data: deducted, error: deductError } = await supabase
+      .rpc("deduct_credits", { p_user_id: user.id, p_amount: creditsNeeded });
+    
+    if (deductError || !deducted) {
+      // Race condition: credits were already spent by another request
+      console.error("Atomic deduct failed - race condition detected:", deductError?.message || "not enough credits");
+      await ctx.reply(await getText(lang, "photo.not_enough_credits", {
+        needed: creditsNeeded,
+        balance: 0,
+      }));
+      await sendBuyCreditsMenu(ctx, user);
+      return;
+    }
   }
 
   const nextState = 
@@ -1762,20 +1771,22 @@ bot.on("successful_payment", async (ctx) => {
         const nextState =
           session.pending_generation_type === "emotion" ? "processing_emotion" : "processing";
 
-        // Auto-continue generation: deduct credits for the pending generation
-        await supabase
-          .from("users")
-          .update({ credits: currentCredits - creditsNeeded })
-          .eq("id", finalUser.id);
+        // Auto-continue generation: deduct credits atomically
+        const { data: deducted } = await supabase
+          .rpc("deduct_credits", { p_user_id: finalUser.id, p_amount: creditsNeeded });
 
-        await supabase
-          .from("sessions")
-          .update({ state: nextState, is_active: true })
-          .eq("id", session.id);
+        if (deducted) {
+          await supabase
+            .from("sessions")
+            .update({ state: nextState, is_active: true })
+            .eq("id", session.id);
 
-        await enqueueJob(session.id, finalUser.id);
+          await enqueueJob(session.id, finalUser.id);
 
-        await sendProgressStart(ctx, session.id, lang);
+          await sendProgressStart(ctx, session.id, lang);
+        } else {
+          console.error("Auto-continue failed: not enough credits after payment");
+        }
       } else {
         await ctx.reply(await getText(lang, "payment.need_more", {
           needed: creditsNeeded - currentCredits,
