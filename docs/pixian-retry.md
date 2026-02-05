@@ -97,10 +97,9 @@ Pixian background removal successful (took 45123ms, attempts: 3)
 
 ## Checklist
 
-- [ ] Создать функцию `retryWithBackoff`
-- [ ] Обернуть вызов Pixian API
-- [ ] Обновить логирование (добавить attempts)
-- [ ] Обновить алерт (добавить attempts в details)
-- [ ] Проверить билд: `npm run build`
+- [x] Создать функцию `retryWithBackoff`
+- [x] Обернуть вызов Pixian API
+- [x] Обновить логирование (добавить attempts)
+- [x] Обновить алерт (добавить attempts в details)
 - [ ] Деплой
 - [ ] Мониторинг ошибок
