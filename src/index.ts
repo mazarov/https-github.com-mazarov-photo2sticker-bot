@@ -372,55 +372,71 @@ async function startGeneration(
   }
 ) {
   const creditsNeeded = 1;
-  const isFirstFree = (user.total_generations || 0) === 0;
+  const mightBeFirstFree = (user.total_generations || 0) === 0;
 
   console.log("=== startGeneration ===");
   console.log("user.id:", user?.id);
   console.log("user.credits:", user?.credits, "type:", typeof user?.credits);
   console.log("user.total_generations:", user?.total_generations);
-  console.log("isFirstFree:", isFirstFree);
+  console.log("mightBeFirstFree:", mightBeFirstFree);
   console.log("creditsNeeded:", creditsNeeded);
 
-  // First generation is FREE
-  if (!isFirstFree && user.credits < creditsNeeded) {
-    // Send alert (async, non-blocking)
-    sendAlert({
-      type: "not_enough_credits",
-      message: "Not enough credits!",
-      details: {
-        user: `@${user.username || user.telegram_id}`,
-        type: options.generationType,
-        style: options.selectedStyleId || "-",
-        credits: user.credits,
-        needed: creditsNeeded,
-      },
-    }).catch(console.error);
+  let isFirstFree = false;
 
-    await supabase
-      .from("sessions")
-      .update({
-        state: "wait_buy_credit",
-        pending_generation_type: options.generationType,
-        user_input: options.userInput || session.user_input || null,
-        prompt_final: options.promptFinal,
-        emotion_prompt: options.emotionPrompt || null,
-        selected_style_id: options.selectedStyleId || session.selected_style_id || null,
-        selected_emotion: options.selectedEmotion || null,
-        credits_spent: creditsNeeded,
-        is_active: true,
-      })
-      .eq("id", session.id);
-
-    await ctx.reply(await getText(lang, "photo.not_enough_credits", {
-      needed: creditsNeeded,
-      balance: user.credits,
-    }));
-    await sendBuyCreditsMenu(ctx, user);
-    return;
+  if (mightBeFirstFree) {
+    // Try to atomically claim first free generation
+    const { data: claimed, error: claimError } = await supabase
+      .rpc("claim_first_free_generation", { p_user_id: user.id });
+    
+    if (claimError) {
+      console.error("claim_first_free_generation error:", claimError.message);
+    }
+    
+    isFirstFree = claimed === true;
+    console.log("claim_first_free_generation result:", claimed, "isFirstFree:", isFirstFree);
   }
 
-  // Deduct credits atomically (prevents race condition)
+  // If not first free, must pay
   if (!isFirstFree) {
+    // Quick check if user has enough credits (optimistic)
+    if (user.credits < creditsNeeded) {
+      // Send alert (async, non-blocking)
+      sendAlert({
+        type: "not_enough_credits",
+        message: "Not enough credits!",
+        details: {
+          user: `@${user.username || user.telegram_id}`,
+          type: options.generationType,
+          style: options.selectedStyleId || "-",
+          credits: user.credits,
+          needed: creditsNeeded,
+        },
+      }).catch(console.error);
+
+      await supabase
+        .from("sessions")
+        .update({
+          state: "wait_buy_credit",
+          pending_generation_type: options.generationType,
+          user_input: options.userInput || session.user_input || null,
+          prompt_final: options.promptFinal,
+          emotion_prompt: options.emotionPrompt || null,
+          selected_style_id: options.selectedStyleId || session.selected_style_id || null,
+          selected_emotion: options.selectedEmotion || null,
+          credits_spent: creditsNeeded,
+          is_active: true,
+        })
+        .eq("id", session.id);
+
+      await ctx.reply(await getText(lang, "photo.not_enough_credits", {
+        needed: creditsNeeded,
+        balance: user.credits,
+      }));
+      await sendBuyCreditsMenu(ctx, user);
+      return;
+    }
+
+    // Deduct credits atomically (prevents race condition)
     const { data: deducted, error: deductError } = await supabase
       .rpc("deduct_credits", { p_user_id: user.id, p_amount: creditsNeeded });
     
@@ -434,6 +450,9 @@ async function startGeneration(
       await sendBuyCreditsMenu(ctx, user);
       return;
     }
+
+    // Increment total_generations for paid generation
+    await supabase.rpc("increment_generations", { p_user_id: user.id });
   }
 
   const nextState = 
@@ -566,17 +585,9 @@ bot.start(async (ctx) => {
 
     user = created;
 
-    // Create transaction for free credit
+    // Send notification (async, non-blocking)
+    // Note: first generation is free via isFirstFree logic, no need for credit transaction
     if (user?.id) {
-      await supabase.from("transactions").insert({
-        user_id: user.id,
-        amount: 1,
-        price: 0,
-        state: "done",
-        is_active: false,
-      });
-
-      // Send notification (async, non-blocking)
       sendNotification({
         type: "new_user",
         message: `@${ctx.from?.username || "no\\_username"} (${telegramId})\n🌐 Язык: ${lang}`,

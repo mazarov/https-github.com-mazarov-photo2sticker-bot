@@ -407,12 +407,8 @@ async function runJob(job: any) {
     console.log(">>> WARNING: skipped telegram_file_id update, stickerId:", stickerId, "stickerFileId:", !!stickerFileId);
   }
 
-  // Increment total_generations counter
-  await supabase
-    .from("users")
-    .update({ total_generations: (user.total_generations || 0) + 1 })
-    .eq("id", session.user_id);
-  console.log("total_generations incremented for user:", session.user_id);
+  // Note: total_generations is now incremented in index.ts immediately when job is created
+  // to prevent double free generation race condition
 
   // Send sticker notification (async, non-blocking)
   const emotionText = session.selected_emotion || "-";

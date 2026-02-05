@@ -1,8 +1,8 @@
-# Atomic Credit Deduction
+# Atomic Credit Deduction & First Free Generation
 
-## Проблема
+## Проблема 1: Race Condition при списании кредитов
 
-Обнаружен критический баг: пользователь `@diiilina` сделал 2 генерации, имея только 1 кредит.
+Пользователь `@diiilina` сделал 2 генерации, имея только 1 кредит.
 
 ### Причина: Race Condition
 
@@ -84,17 +84,54 @@ if (!deducted) {
 await enqueueJob(session.id, user.id);
 ```
 
+## Проблема 2: Double First Free Generation
+
+Пользователь мог получить 2 бесплатных генерации, быстро нажав "изменить стиль" после первой.
+
+### Причина
+
+`total_generations` инкрементировался в worker ПОСЛЕ обработки, а проверка `isFirstFree` в bot ДО создания job:
+
+```
+Время   Запрос A                    Запрос B
+─────   ────────                    ────────
+t1      getUser() → generations=0
+t2      isFirstFree=true ✓
+t3      enqueueJob()
+t4                                  getUser() → generations=0 (ещё не обновлён!)
+t5                                  isFirstFree=true ✓
+t6                                  enqueueJob()
+
+Результат: 2 бесплатных генерации
+```
+
+### Решение
+
+SQL функция `claim_first_free_generation()` атомарно проверяет и устанавливает `total_generations = 1`:
+
+```sql
+CREATE OR REPLACE FUNCTION claim_first_free_generation(p_user_id uuid)
+RETURNS boolean
+AS $$
+  UPDATE users SET total_generations = 1
+  WHERE id = p_user_id AND (total_generations IS NULL OR total_generations = 0);
+  RETURN ROW_COUNT > 0;
+$$;
+```
+
 ## Места исправления
 
 | Файл | Функция | Описание |
 |------|---------|----------|
-| `src/index.ts` | `startGeneration()` | Основное списание при генерации |
+| `src/index.ts` | `startGeneration()` | Атомарное списание кредитов + claim first free |
 | `src/index.ts` | `successful_payment` handler | Авто-продолжение после покупки |
+| `src/worker.ts` | `processJob()` | Убран increment total_generations (перенесён в bot) |
 
-## Миграция
+## Миграции
 
 ```bash
 psql $DATABASE_URL -f sql/030_atomic_credit_deduction.sql
+psql $DATABASE_URL -f sql/031_atomic_first_generation.sql
 ```
 
 ## Тестирование
@@ -105,8 +142,10 @@ psql $DATABASE_URL -f sql/030_atomic_credit_deduction.sql
 
 ## Статус
 
-- [x] SQL миграция создана
+- [x] SQL миграция 030 создана (deduct_credits)
+- [x] SQL миграция 031 создана (claim_first_free_generation, increment_generations)
 - [x] Код обновлён
-- [ ] Миграция применена
+- [x] Миграция 030 применена
+- [ ] Миграция 031 применена
 - [ ] Редеплой bot
 - [ ] Редеплой worker
