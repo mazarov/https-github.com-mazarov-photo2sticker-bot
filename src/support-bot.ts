@@ -104,73 +104,62 @@ bot.on("text", async (ctx) => {
   await ctx.reply("Спасибо за сообщение! Мы свяжемся с вами если потребуется.");
 });
 
-// Cron: отправка вопросов (каждую минуту)
-async function sendFeedbackQuestions() {
+// Cron: обработка триггеров (каждую минуту)
+async function processTriggers() {
   try {
-    const delayMs = 10 * 1000; // 10 seconds for testing (TODO: change to 15 * 60 * 1000 for production)
-    const triggerTime = new Date(Date.now() - delayMs).toISOString();
+    const now = new Date().toISOString();
     
-    const { data: users, error } = await supabase
-      .from("users")
-      .select("id, telegram_id, username, feedback_trigger_at, credits")
-      .not("feedback_trigger_at", "is", null)
-      .lt("feedback_trigger_at", triggerTime)
-      .eq("credits", 0)
+    const { data: triggers, error } = await supabase
+      .from("notification_triggers")
+      .select("*, users(username)")
+      .eq("status", "pending")
+      .eq("trigger_type", "feedback_zero_credits")
+      .lte("fire_after", now)
       .limit(10);
     
     if (error) {
-      console.error("Error fetching users for feedback:", error);
+      console.error("Error fetching triggers:", error);
       return;
     }
     
-    if (!users?.length) return;
+    if (!triggers?.length) return;
     
-    console.log(`Found ${users.length} users for feedback`);
+    console.log(`Processing ${triggers.length} feedback triggers`);
     
-    for (const user of users) {
-      // Проверяем что feedback ещё не отправлялся
-      const { data: existing } = await supabase
-        .from("user_feedback")
-        .select("id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      
-      if (existing) {
-        console.log(`Feedback already sent to ${user.telegram_id}, skipping`);
-        continue;
-      }
-      
+    for (const trigger of triggers) {
       try {
-        await bot.telegram.sendMessage(user.telegram_id,
+        await bot.telegram.sendMessage(trigger.telegram_id,
           "👋 Привет! Вы попробовали создать стикер в @photo2sticker_bot.\n\n" +
           "Понравился результат? Что помешало продолжить?\n\n" +
           "Напишите пару слов — мы читаем каждый ответ 🙏"
         );
         
+        // Обновляем триггер как выполненный
+        await supabase.from("notification_triggers")
+          .update({ status: "fired", fired_at: new Date().toISOString() })
+          .eq("id", trigger.id);
+        
+        // Создаём запись feedback
         await supabase.from("user_feedback").insert({
-          user_id: user.id,
-          telegram_id: user.telegram_id,
-          username: user.username,
+          user_id: trigger.user_id,
+          telegram_id: trigger.telegram_id,
+          username: (trigger as any).users?.username,
         });
         
-        console.log(`Feedback question sent to ${user.telegram_id}`);
+        console.log(`Feedback sent to ${trigger.telegram_id}`);
       } catch (err: any) {
-        console.error(`Failed to send feedback to ${user.telegram_id}:`, err.message);
+        console.error(`Failed to send feedback to ${trigger.telegram_id}:`, err.message);
         
-        // Если пользователь заблокировал бота, отмечаем чтобы не спамить
+        // Если пользователь заблокировал бота — отменяем триггер
         if (err.response?.error_code === 403) {
-          await supabase.from("user_feedback").insert({
-            user_id: user.id,
-            telegram_id: user.telegram_id,
-            username: user.username,
-            answer_text: "[BLOCKED]",
-            answer_at: new Date().toISOString(),
-          });
+          await supabase.from("notification_triggers")
+            .update({ status: "cancelled", metadata: { error: "blocked" } })
+            .eq("id", trigger.id);
         }
       }
     }
   } catch (err) {
-    console.error("Error in sendFeedbackQuestions:", err);
+    console.error("Error in processTriggers:", err);
   }
 }
 
@@ -250,8 +239,8 @@ bot.launch().then(() => {
   console.log("Support bot started");
   
   // Запускаем cron сразу и каждую минуту
-  sendFeedbackQuestions();
-  setInterval(sendFeedbackQuestions, 60 * 1000);
+  processTriggers();
+  setInterval(processTriggers, 60 * 1000);
 }).catch((err) => {
   console.error("Failed to start support bot:", err);
   process.exit(1);

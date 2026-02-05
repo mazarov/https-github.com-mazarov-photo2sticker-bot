@@ -28,7 +28,7 @@ async function runJob(job: any) {
 
   const { data: user } = await supabase
     .from("users")
-    .select("telegram_id, lang, sticker_set_name, username, credits, feedback_trigger_at")
+    .select("telegram_id, lang, sticker_set_name, username, credits")
     .eq("id", session.user_id)
     .maybeSingle();
 
@@ -315,16 +315,22 @@ async function runJob(job: any) {
     imageBuffer: stickerBuffer,
   }).catch(console.error);
 
-  // Set feedback trigger if user has 0 credits (fire-and-forget)
-  if (user.credits === 0 && !user.feedback_trigger_at) {
+  // Create feedback trigger if user has 0 credits (fire-and-forget)
+  if (user.credits === 0) {
     (async () => {
       try {
-        await supabase.from("users")
-          .update({ feedback_trigger_at: new Date().toISOString() })
-          .eq("id", session.user_id);
-        console.log("Feedback trigger set for user:", session.user_id);
+        const fireAfter = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // +15 min
+        await supabase.from("notification_triggers")
+          .upsert({
+            user_id: session.user_id,
+            telegram_id: user.telegram_id,
+            trigger_type: "feedback_zero_credits",
+            fire_after: fireAfter,
+            status: "pending",
+          }, { onConflict: "user_id,trigger_type", ignoreDuplicates: true });
+        console.log("Feedback trigger created for user:", session.user_id);
       } catch (err) {
-        console.error("Failed to set feedback trigger:", err);
+        console.error("Failed to create feedback trigger:", err);
       }
     })();
   }

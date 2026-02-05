@@ -64,13 +64,34 @@
 
 ## База данных
 
-### Миграция
+### Таблица `notification_triggers` (универсальная)
 
 ```sql
--- Поле для триггера в users
-ALTER TABLE users ADD COLUMN feedback_trigger_at timestamptz;
+CREATE TABLE notification_triggers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES users(id),
+  telegram_id bigint NOT NULL,
+  trigger_type text NOT NULL,  -- 'feedback_zero_credits', 'inactive_7d', etc.
+  trigger_at timestamptz DEFAULT now(),
+  fire_after timestamptz NOT NULL,  -- когда отправить (trigger_at + delay)
+  fired_at timestamptz,  -- когда реально отправили
+  status text DEFAULT 'pending',  -- pending, fired, cancelled
+  metadata jsonb,  -- доп. данные
+  created_at timestamptz DEFAULT now()
+);
 
--- Таблица feedback
+CREATE INDEX idx_triggers_pending 
+ON notification_triggers(fire_after) 
+WHERE status = 'pending';
+
+CREATE UNIQUE INDEX idx_triggers_unique_pending
+ON notification_triggers(user_id, trigger_type)
+WHERE status = 'pending';
+```
+
+### Таблица `user_feedback` (ответы)
+
+```sql
 CREATE TABLE user_feedback (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid REFERENCES users(id) UNIQUE,
@@ -83,12 +104,15 @@ CREATE TABLE user_feedback (
   admin_reply_at timestamptz,
   created_at timestamptz DEFAULT now()
 );
-
--- Индекс для cron-запроса
-CREATE INDEX users_feedback_trigger_idx 
-  ON users(feedback_trigger_at) 
-  WHERE feedback_trigger_at IS NOT NULL;
 ```
+
+### Типы триггеров
+
+| trigger_type | Описание | Delay |
+|--------------|----------|-------|
+| `feedback_zero_credits` | Фидбек после бесплатной генерации | 15 мин |
+| `inactive_7d` | Неактивный пользователь | 7 дней |
+| (будущие) | ... | ... |
 
 ## Переменные окружения
 
@@ -107,16 +131,23 @@ SUPPORT_CHANNEL_ID=-100yyy    # фидбек, диалоги с пользова
 
 ```typescript
 // После успешной отправки стикера, fire-and-forget
-if (user.credits === 0 && !user.feedback_trigger_at) {
-  supabase.from("users")
-    .update({ feedback_trigger_at: new Date().toISOString() })
-    .eq("id", user.id)
-    .then(() => console.log("Feedback trigger set"))
+if (user.credits === 0) {
+  const fireAfter = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // +15 min
+  
+  supabase.from("notification_triggers")
+    .upsert({
+      user_id: user.id,
+      telegram_id: user.telegram_id,
+      trigger_type: "feedback_zero_credits",
+      fire_after: fireAfter,
+      status: "pending",
+    }, { onConflict: "user_id,trigger_type", ignoreDuplicates: true })
+    .then(() => console.log("Feedback trigger created"))
     .catch(console.error);
 }
 ```
 
-**Изменения в основном флоу:** минимальные (1 UPDATE без await)
+**Изменения в основном флоу:** минимальные (1 UPSERT без await)
 
 ### 2. support-bot.ts — новый файл
 
@@ -212,44 +243,50 @@ bot.on("text", async (ctx) => {
   await ctx.reply("Спасибо за сообщение! Мы свяжемся с вами если потребуется.");
 });
 
-// Cron: отправка вопросов (каждую минуту)
-async function sendFeedbackQuestions() {
-  const { data: users } = await supabase
-    .from("users")
-    .select("id, telegram_id, username, feedback_trigger_at, credits")
-    .not("feedback_trigger_at", "is", null)
-    .lt("feedback_trigger_at", new Date(Date.now() - 15 * 60 * 1000).toISOString())
-    .eq("credits", 0)
+// Cron: обработка триггеров (каждую минуту)
+async function processTriggers() {
+  const { data: triggers } = await supabase
+    .from("notification_triggers")
+    .select("*, users(username)")
+    .eq("status", "pending")
+    .eq("trigger_type", "feedback_zero_credits")
+    .lte("fire_after", new Date().toISOString())
     .limit(10);
   
-  if (!users?.length) return;
+  if (!triggers?.length) return;
   
-  for (const user of users) {
-    // Проверяем что feedback ещё не отправлялся
-    const { data: existing } = await supabase
-      .from("user_feedback")
-      .select("id")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    
-    if (existing) continue;
-    
+  console.log(`Processing ${triggers.length} feedback triggers`);
+  
+  for (const trigger of triggers) {
     try {
-      await bot.telegram.sendMessage(user.telegram_id,
+      await bot.telegram.sendMessage(trigger.telegram_id,
         "👋 Привет! Вы попробовали создать стикер в @photo2sticker_bot.\n\n" +
         "Понравился результат? Что помешало продолжить?\n\n" +
         "Напишите пару слов — мы читаем каждый ответ 🙏"
       );
       
+      // Обновляем триггер как выполненный
+      await supabase.from("notification_triggers")
+        .update({ status: "fired", fired_at: new Date().toISOString() })
+        .eq("id", trigger.id);
+      
+      // Создаём запись feedback
       await supabase.from("user_feedback").insert({
-        user_id: user.id,
-        telegram_id: user.telegram_id,
-        username: user.username,
+        user_id: trigger.user_id,
+        telegram_id: trigger.telegram_id,
+        username: trigger.users?.username,
       });
       
-      console.log(`Feedback question sent to ${user.telegram_id}`);
-    } catch (err) {
-      console.error(`Failed to send feedback to ${user.telegram_id}:`, err);
+      console.log(`Feedback sent to ${trigger.telegram_id}`);
+    } catch (err: any) {
+      console.error(`Failed to send feedback to ${trigger.telegram_id}:`, err.message);
+      
+      // Если заблокировал бота — отменяем триггер
+      if (err.response?.error_code === 403) {
+        await supabase.from("notification_triggers")
+          .update({ status: "cancelled", metadata: { error: "blocked" } })
+          .eq("id", trigger.id);
+      }
     }
   }
 }
@@ -297,10 +334,11 @@ async function sendFeedbackAlert(from: any, text: string) {
 }
 
 // Запуск
-bot.launch();
-setInterval(sendFeedbackQuestions, 60 * 1000);
-
-console.log("Support bot started");
+bot.launch().then(() => {
+  console.log("Support bot started");
+  processTriggers();
+  setInterval(processTriggers, 60 * 1000);
+});
 ```
 
 ### 3. config.ts — добавить токены
@@ -323,16 +361,17 @@ export const config = {
 
 ## Checklist
 
-- [ ] Создать бота @p2s_support_bot в BotFather
-- [ ] Создать канал "P2S Support"
-- [ ] Добавить @p2s_support_bot как админа в канал
-- [ ] Добавить SUPPORT_BOT_TOKEN в env
-- [ ] Добавить SUPPORT_CHANNEL_ID в env
-- [ ] Добавить ADMIN_IDS в env (твой telegram_id)
-- [x] SQL миграция (feedback_trigger_at + user_feedback) → `sql/022_feedback.sql`
-- [x] Обновить worker.ts (установка триггера)
-- [x] Создать support-bot.ts
+- [x] Создать бота @p2s_support_bot в BotFather
+- [x] Создать канал "P2S Support"
+- [x] Добавить @p2s_support_bot как админа в канал
+- [x] Добавить SUPPORT_BOT_TOKEN в env
+- [x] Добавить SUPPORT_CHANNEL_ID в env
+- [x] Добавить ADMIN_IDS в env (твой telegram_id)
+- [x] SQL миграция user_feedback → `sql/022_feedback.sql`
+- [ ] SQL миграция notification_triggers → `sql/024_notification_triggers.sql`
+- [ ] Обновить worker.ts (использовать notification_triggers)
+- [ ] Обновить support-bot.ts (использовать notification_triggers)
 - [x] Обновить config.ts
 - [x] Создать Dockerfile.support
-- [ ] Деплой support бота
+- [x] Деплой support бота
 - [ ] Тестирование
