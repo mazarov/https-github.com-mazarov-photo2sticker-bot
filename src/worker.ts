@@ -223,9 +223,16 @@ async function runJob(job: any) {
   
   // Try rembg (self-hosted) first
   if (rembgUrl) {
-    console.log(`Trying rembg at ${rembgUrl}... (image size: ${imageSizeKb} KB)`);
+    // Resize image for faster rembg processing (max 1024px)
+    const rembgBuffer = await sharp(paddedBuffer)
+      .resize(1024, 1024, { fit: "inside", withoutEnlargement: true })
+      .png()
+      .toBuffer();
+    const rembgSizeKb = Math.round(rembgBuffer.length / 1024);
+    console.log(`Trying rembg at ${rembgUrl}... (resized: ${rembgSizeKb} KB, original: ${imageSizeKb} KB)`);
+    
     const rembgForm = new FormData();
-    rembgForm.append("image", paddedBuffer, {
+    rembgForm.append("image", rembgBuffer, {
       filename: "image.png",
       contentType: "image/png",
     });
@@ -235,7 +242,7 @@ async function runJob(job: any) {
         () => axios.post(`${rembgUrl}/remove-background`, rembgForm, {
           headers: rembgForm.getHeaders(),
           responseType: "arraybuffer",
-          timeout: 120000, // 2 minutes for CPU processing
+          timeout: 90000, // 90 seconds for CPU processing
         }),
         { maxAttempts: 2, baseDelayMs: 3000, name: "rembg" }
       );
