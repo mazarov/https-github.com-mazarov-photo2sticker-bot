@@ -493,8 +493,9 @@ async function runJob(job: any) {
     resultImageBuffer: stickerBuffer,
   }).catch(console.error);
 
-  // Send rating request after 3 seconds (skip during onboarding)
-  const skipRating = isOnboardingFirstSticker || isOnboardingEmotion;
+  // Send rating request (skip for first sticker, delayed 30s for onboarding emotion)
+  const skipRating = isOnboardingFirstSticker;
+  const ratingDelay = isOnboardingEmotion ? 30000 : 3000;  // 30s for onboarding, 3s normally
   if (stickerId && !skipRating) {
     setTimeout(async () => {
       try {
@@ -558,7 +559,7 @@ async function runJob(job: any) {
       } catch (err) {
         console.error("Failed to send rating request:", err);
       }
-    }, 3000);
+    }, ratingDelay);
   }
 
   await clearProgress();
