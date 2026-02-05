@@ -168,10 +168,10 @@ WHERE name = 'prompt_generator';
 
 ## Checklist
 
-- [ ] Создать миграцию `sql/025_prompt_templates.sql`
+- [x] Создать миграцию `sql/025_prompt_templates.sql`
 - [ ] Применить миграцию в Supabase
-- [ ] Обновить `src/index.ts` — добавить `getPromptTemplate`, `buildPromptFromTemplate`
-- [ ] Удалить старые функции `buildEmotionPrompt`, `buildMotionPrompt`, `buildTextPrompt`
-- [ ] Обновить `prompt_generator` agent (изоляция персонажа)
+- [x] Обновить `src/index.ts` — добавить `getPromptTemplate`, `buildPromptFromTemplate`
+- [x] Удалить старые функции `buildEmotionPrompt`, `buildMotionPrompt`, `buildTextPrompt`
+- [x] Обновить `prompt_generator` agent (изоляция персонажа) — в миграции
 - [ ] Редеплой API
 - [ ] Тестирование

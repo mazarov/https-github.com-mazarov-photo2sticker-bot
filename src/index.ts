@@ -26,6 +26,10 @@ const EMOTION_PRESETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 let motionPresetsCache: { data: any[]; timestamp: number } | null = null;
 const MOTION_PRESETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// Cache for prompt templates
+let promptTemplatesCache: { data: Map<string, string>; timestamp: number } | null = null;
+const PROMPT_TEMPLATES_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 function safeAnswerCbQuery(ctx: any, payload?: any) {
   if (typeof ctx?.answerCbQuery !== "function") return;
   ctx.answerCbQuery(payload).catch((err: any) => {
@@ -204,25 +208,31 @@ async function sendMotionKeyboard(ctx: any, lang: string) {
   );
 }
 
-function buildMotionPrompt(motionText: string) {
-  return `Create a high-contrast messenger sticker.
-Action: ${motionText} — show this pose/action clearly.
-Character: Use the character from the previous sticker. Preserve recognizable facial features, style, and colors.
-Composition: Character occupies maximum canvas area, clear silhouette, bold uniform border around the character (thick, approx 25–35% outline width), smooth and consistent outline.
-Visual design: High contrast, strong edge separation, simplified shapes, no soft edges.
-Requirements: Solid black background, no watermark, no logo, no frame.
-Quality: Optimized for clean background removal and messenger sticker use.`;
+async function getPromptTemplate(id: string): Promise<string> {
+  const now = Date.now();
+  
+  if (promptTemplatesCache && now - promptTemplatesCache.timestamp < PROMPT_TEMPLATES_CACHE_TTL) {
+    return promptTemplatesCache.data.get(id) || "";
+  }
+  
+  const { data } = await supabase
+    .from("prompt_templates")
+    .select("id, template");
+  
+  if (data) {
+    const map = new Map<string, string>();
+    for (const row of data) {
+      map.set(row.id, row.template);
+    }
+    promptTemplatesCache = { data: map, timestamp: now };
+    return map.get(id) || "";
+  }
+  
+  return "";
 }
 
-function buildTextPrompt(text: string): string {
-  return `Create a high-contrast messenger sticker with text.
-Text: "${text}" — add this text EXACTLY as written, do NOT translate or change it.
-Character: Use the character from the previous sticker. Preserve recognizable facial features, style, and colors.
-Text placement: Integrate naturally — on a sign, banner, speech bubble, or creatively placed within the image.
-Composition: Character occupies maximum canvas area, clear silhouette, bold uniform border around the character (thick, approx 25–35% outline width), smooth and consistent outline.
-Visual design: High contrast, strong edge separation, simplified shapes, no soft edges. Text must be clearly readable.
-Requirements: Solid black background, no watermark, no logo, no frame.
-Quality: Optimized for clean background removal and messenger sticker use.`;
+function buildPromptFromTemplate(template: string, input: string): string {
+  return template.replace(/{input}/g, input);
 }
 
 async function getAgent(name: string) {
@@ -324,16 +334,6 @@ async function generatePrompt(userInput: string): Promise<PromptResult> {
     // Fallback: return user input as-is
     return { ok: true, prompt: userInput, retry: false };
   }
-}
-
-function buildEmotionPrompt(emotionText: string) {
-  return `Create a high-contrast messenger sticker.
-Emotion: ${emotionText} — show this emotion clearly on the character's face and body language.
-Character: Use the character from the previous sticker. Preserve recognizable facial features, style, and colors.
-Composition: Character occupies maximum canvas area, clear silhouette, bold uniform border around the character (thick, approx 25–35% outline width), smooth and consistent outline.
-Visual design: High contrast, strong edge separation, simplified shapes, no soft edges.
-Requirements: Solid black background, no watermark, no logo, no frame.
-Quality: Optimized for clean background removal and messenger sticker use.`;
 }
 
 async function enqueueJob(sessionId: string, userId: string) {
@@ -705,7 +705,8 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    const promptFinal = buildEmotionPrompt(emotionText);
+    const emotionTemplate = await getPromptTemplate("emotion");
+    const promptFinal = buildPromptFromTemplate(emotionTemplate, emotionText);
     await startGeneration(ctx, user, session, lang, {
       generationType: "emotion",
       promptFinal,
@@ -722,7 +723,8 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    const promptFinal = buildMotionPrompt(motionText);
+    const motionTemplate = await getPromptTemplate("motion");
+    const promptFinal = buildPromptFromTemplate(motionTemplate, motionText);
     await startGeneration(ctx, user, session, lang, {
       generationType: "motion",
       promptFinal,
@@ -739,7 +741,8 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    const promptFinal = buildTextPrompt(textInput);
+    const textTemplate = await getPromptTemplate("text");
+    const promptFinal = buildPromptFromTemplate(textTemplate, textInput);
     await startGeneration(ctx, user, session, lang, {
       generationType: "text",
       promptFinal,
@@ -1296,7 +1299,8 @@ bot.action(/^emotion_(.+)$/, async (ctx) => {
     return;
   }
 
-  const promptFinal = buildEmotionPrompt(preset.prompt_hint);
+  const emotionTemplate = await getPromptTemplate("emotion");
+  const promptFinal = buildPromptFromTemplate(emotionTemplate, preset.prompt_hint);
   await startGeneration(ctx, user, session, lang, {
     generationType: "emotion",
     promptFinal,
@@ -1421,7 +1425,8 @@ bot.action(/^motion_(.+)$/, async (ctx) => {
     return;
   }
 
-  const promptFinal = buildMotionPrompt(preset.prompt_hint);
+  const motionTemplate = await getPromptTemplate("motion");
+  const promptFinal = buildPromptFromTemplate(motionTemplate, preset.prompt_hint);
   await startGeneration(ctx, user, session, lang, {
     generationType: "motion",
     promptFinal,
