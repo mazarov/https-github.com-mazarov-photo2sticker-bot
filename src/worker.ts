@@ -500,39 +500,6 @@ async function runJob(job: any) {
     }, 3000);
   }
 
-  // Create feedback trigger if user has 0 credits (fire-and-forget)
-  if (user.credits === 0) {
-    (async () => {
-      try {
-        // Check if pending trigger already exists (partial unique index doesn't work with upsert)
-        const { data: existing } = await supabase
-          .from("notification_triggers")
-          .select("id")
-          .eq("user_id", session.user_id)
-          .eq("trigger_type", "feedback_zero_credits")
-          .eq("status", "pending")
-          .maybeSingle();
-        
-        if (existing) {
-          console.log("Feedback trigger already exists for user:", session.user_id);
-          return;
-        }
-        
-        const fireAfter = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // +15 min
-        await supabase.from("notification_triggers").insert({
-          user_id: session.user_id,
-          telegram_id: user.telegram_id,
-          trigger_type: "feedback_zero_credits",
-          fire_after: fireAfter,
-          status: "pending",
-        });
-        console.log("Feedback trigger created for user:", session.user_id);
-      } catch (err) {
-        console.error("Failed to create feedback trigger:", err);
-      }
-    })();
-  }
-
   await clearProgress();
 
   // Upload to storage in background (non-critical, can be slow)
