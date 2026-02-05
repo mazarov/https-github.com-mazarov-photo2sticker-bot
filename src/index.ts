@@ -372,100 +372,67 @@ async function startGeneration(
   }
 ) {
   const creditsNeeded = 1;
-  const onboardingStep = user.onboarding_step ?? 0;
 
   console.log("=== startGeneration ===");
   console.log("user.id:", user?.id);
   console.log("user.credits:", user?.credits, "type:", typeof user?.credits);
-  console.log("user.onboarding_step:", onboardingStep);
+  console.log("user.onboarding_step:", user.onboarding_step);
   console.log("generationType:", options.generationType);
   console.log("creditsNeeded:", creditsNeeded);
 
-  let isOnboardingFree = false;
-
-  // Onboarding step 0 → first sticker is free (any style)
-  if (onboardingStep === 0 && options.generationType === "style") {
-    const { data: claimed, error: claimError } = await supabase
-      .rpc("claim_onboarding_step_1", { p_user_id: user.id });
-    
-    if (claimError) {
-      console.error("claim_onboarding_step_1 error:", claimError.message);
-    }
-    
-    isOnboardingFree = claimed === true;
-    console.log("claim_onboarding_step_1 result:", claimed, "isOnboardingFree:", isOnboardingFree);
-  }
-  // Onboarding step 1 → emotion is free
-  else if (onboardingStep === 1 && options.generationType === "emotion") {
-    const { data: claimed, error: claimError } = await supabase
-      .rpc("claim_onboarding_step_2", { p_user_id: user.id });
-    
-    if (claimError) {
-      console.error("claim_onboarding_step_2 error:", claimError.message);
-    }
-    
-    isOnboardingFree = claimed === true;
-    console.log("claim_onboarding_step_2 result:", claimed, "isOnboardingFree:", isOnboardingFree);
-  }
-
-  // If not onboarding free, must pay
-  if (!isOnboardingFree) {
-    // Quick check if user has enough credits (optimistic)
-    if (user.credits < creditsNeeded) {
-      // Send alert (async, non-blocking)
-      sendAlert({
-        type: "not_enough_credits",
-        message: "Not enough credits!",
-        details: {
-          user: `@${user.username || user.telegram_id}`,
-          type: options.generationType,
-          style: options.selectedStyleId || "-",
-          credits: user.credits,
-          needed: creditsNeeded,
-        },
-      }).catch(console.error);
-
-      await supabase
-        .from("sessions")
-        .update({
-          state: "wait_buy_credit",
-          pending_generation_type: options.generationType,
-          user_input: options.userInput || session.user_input || null,
-          prompt_final: options.promptFinal,
-          emotion_prompt: options.emotionPrompt || null,
-          selected_style_id: options.selectedStyleId || session.selected_style_id || null,
-          selected_emotion: options.selectedEmotion || null,
-          credits_spent: creditsNeeded,
-          is_active: true,
-        })
-        .eq("id", session.id);
-
-      await ctx.reply(await getText(lang, "photo.not_enough_credits", {
+  // Check if user has enough credits
+  if (user.credits < creditsNeeded) {
+    sendAlert({
+      type: "not_enough_credits",
+      message: "Not enough credits!",
+      details: {
+        user: `@${user.username || user.telegram_id}`,
+        type: options.generationType,
+        style: options.selectedStyleId || "-",
+        credits: user.credits,
         needed: creditsNeeded,
-        balance: user.credits,
-      }));
-      await sendBuyCreditsMenu(ctx, user);
-      return;
-    }
+      },
+    }).catch(console.error);
 
-    // Deduct credits atomically (prevents race condition)
-    const { data: deducted, error: deductError } = await supabase
-      .rpc("deduct_credits", { p_user_id: user.id, p_amount: creditsNeeded });
-    
-    if (deductError || !deducted) {
-      // Race condition: credits were already spent by another request
-      console.error("Atomic deduct failed - race condition detected:", deductError?.message || "not enough credits");
-      await ctx.reply(await getText(lang, "photo.not_enough_credits", {
-        needed: creditsNeeded,
-        balance: 0,
-      }));
-      await sendBuyCreditsMenu(ctx, user);
-      return;
-    }
+    await supabase
+      .from("sessions")
+      .update({
+        state: "wait_buy_credit",
+        pending_generation_type: options.generationType,
+        user_input: options.userInput || session.user_input || null,
+        prompt_final: options.promptFinal,
+        emotion_prompt: options.emotionPrompt || null,
+        selected_style_id: options.selectedStyleId || session.selected_style_id || null,
+        selected_emotion: options.selectedEmotion || null,
+        credits_spent: creditsNeeded,
+        is_active: true,
+      })
+      .eq("id", session.id);
 
-    // Increment total_generations for paid generation
-    await supabase.rpc("increment_generations", { p_user_id: user.id });
+    await ctx.reply(await getText(lang, "photo.not_enough_credits", {
+      needed: creditsNeeded,
+      balance: user.credits,
+    }));
+    await sendBuyCreditsMenu(ctx, user);
+    return;
   }
+
+  // Deduct credits atomically (prevents race condition)
+  const { data: deducted, error: deductError } = await supabase
+    .rpc("deduct_credits", { p_user_id: user.id, p_amount: creditsNeeded });
+  
+  if (deductError || !deducted) {
+    console.error("Atomic deduct failed - race condition detected:", deductError?.message || "not enough credits");
+    await ctx.reply(await getText(lang, "photo.not_enough_credits", {
+      needed: creditsNeeded,
+      balance: 0,
+    }));
+    await sendBuyCreditsMenu(ctx, user);
+    return;
+  }
+
+  // Increment total_generations
+  await supabase.rpc("increment_generations", { p_user_id: user.id });
 
   const nextState = 
     options.generationType === "emotion" ? "processing_emotion" :
@@ -482,13 +449,13 @@ async function startGeneration(
       selected_emotion: options.selectedEmotion || null,
       text_prompt: options.textPrompt || null,
       generation_type: options.generationType,
-      credits_spent: isOnboardingFree ? 0 : creditsNeeded,
+      credits_spent: creditsNeeded,
       state: nextState,
       is_active: true,
     })
     .eq("id", session.id);
 
-  await enqueueJob(session.id, user.id, isOnboardingFree);
+  await enqueueJob(session.id, user.id, false);
 
   await sendProgressStart(ctx, session.id, lang);
 }
@@ -597,9 +564,17 @@ bot.start(async (ctx) => {
 
     user = created;
 
-    // Send notification (async, non-blocking)
-    // Note: first generation is free via isFirstFree logic, no need for credit transaction
+    // Give 2 free credits for onboarding (trigger will add to user.credits)
     if (user?.id) {
+      await supabase.from("transactions").insert({
+        user_id: user.id,
+        amount: 2,
+        price: 0,
+        state: "done",
+        is_active: false,
+      });
+
+      // Send notification (async, non-blocking)
       sendNotification({
         type: "new_user",
         message: `@${ctx.from?.username || "no\\_username"} (${telegramId})\n🌐 Язык: ${lang}`,

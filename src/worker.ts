@@ -369,6 +369,13 @@ async function runJob(job: any) {
   const stickerId = stickerRecord?.id;
   console.log("stickerId after insert:", stickerId);
 
+  // Onboarding logic - determine UI based on onboarding_step
+  const onboardingStep = user.onboarding_step ?? 99;
+  const isOnboardingFirstSticker = onboardingStep === 0 && generationType === "style";
+  const isOnboardingEmotion = onboardingStep === 1 && generationType === "emotion";
+  
+  console.log("onboarding_step:", onboardingStep, "isOnboardingFirstSticker:", isOnboardingFirstSticker, "isOnboardingEmotion:", isOnboardingEmotion);
+
   const addToPackText = await getText(lang, "btn.add_to_pack");
   const changeStyleText = await getText(lang, "btn.change_style");
   const changeEmotionText = await getText(lang, "btn.change_emotion");
@@ -390,9 +397,10 @@ async function runJob(job: any) {
     ],
   };
 
-  // Send sticker first (critical path - user sees result)
+  // Send sticker (WITHOUT buttons during first onboarding step)
   console.time("step7_sendSticker");
-  const stickerFileId = await sendSticker(telegramId, stickerBuffer, replyMarkup);
+  const stickerMarkup = isOnboardingFirstSticker ? undefined : replyMarkup;
+  const stickerFileId = await sendSticker(telegramId, stickerBuffer, stickerMarkup);
   console.timeEnd("step7_sendSticker");
 
   // Update telegram_file_id IMMEDIATELY after sending (before user can click buttons)
@@ -407,14 +415,9 @@ async function runJob(job: any) {
     console.log(">>> WARNING: skipped telegram_file_id update, stickerId:", stickerId, "stickerFileId:", !!stickerFileId);
   }
 
-  // Note: total_generations is now incremented in index.ts immediately when job is created
-  // to prevent double free generation race condition
-
-  // Onboarding messages
-  const onboardingStep = user.onboarding_step ?? 99;
-  
-  // After first sticker (step 0 → 1): prompt to try emotion
-  if (onboardingStep === 1 && generationType === "style" && stickerId) {
+  // Onboarding messages and step updates
+  if (isOnboardingFirstSticker && stickerId) {
+    // First sticker: show emotion selection, update step to 1
     const onboardingText = lang === "ru"
       ? "🎉 Вот твой первый стикер!\n\nА теперь давай оживим его — добавь эмоцию:"
       : "🎉 Here's your first sticker!\n\nNow let's bring it to life — add an emotion:";
@@ -437,9 +440,16 @@ async function runJob(job: any) {
     await sendMessage(telegramId, onboardingText, {
       reply_markup: { inline_keyboard: emotionButtons },
     });
+
+    // Update onboarding_step to 1
+    await supabase
+      .from("users")
+      .update({ onboarding_step: 1 })
+      .eq("id", session.user_id);
+    console.log("onboarding_step updated to 1");
   }
-  // After emotion in onboarding (step 1 → 2): final message
-  else if (onboardingStep === 2 && generationType === "emotion") {
+  else if (isOnboardingEmotion) {
+    // Emotion during onboarding: show final message, update step to 2
     const finalText = lang === "ru"
       ? "🔥 Отлично! Теперь ты умеешь создавать живые стикеры.\n\nЕщё можно:\n🏃 Добавить движение\n💬 Написать текст на стикере\n\nХочешь создать ещё?"
       : "🔥 Awesome! Now you know how to create lively stickers.\n\nYou can also:\n🏃 Add motion\n💬 Add text to sticker\n\nWant to create more?";
@@ -455,6 +465,13 @@ async function runJob(job: any) {
         ],
       },
     });
+
+    // Update onboarding_step to 2
+    await supabase
+      .from("users")
+      .update({ onboarding_step: 2 })
+      .eq("id", session.user_id);
+    console.log("onboarding_step updated to 2");
   }
 
   // Send sticker notification (async, non-blocking)
@@ -476,8 +493,9 @@ async function runJob(job: any) {
     resultImageBuffer: stickerBuffer,
   }).catch(console.error);
 
-  // Send rating request after 3 seconds (fire-and-forget)
-  if (stickerId) {
+  // Send rating request after 3 seconds (skip during onboarding)
+  const skipRating = isOnboardingFirstSticker || isOnboardingEmotion;
+  if (stickerId && !skipRating) {
     setTimeout(async () => {
       try {
         // Create rating record
