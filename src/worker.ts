@@ -28,7 +28,7 @@ async function runJob(job: any) {
 
   const { data: user } = await supabase
     .from("users")
-    .select("telegram_id, lang, sticker_set_name, username")
+    .select("telegram_id, lang, sticker_set_name, username, credits, feedback_trigger_at")
     .eq("id", session.user_id)
     .maybeSingle();
 
@@ -314,6 +314,15 @@ async function runJob(job: any) {
     message: `👤 @${user.username || telegramId}\n🎭 Тип: ${generationType}`,
     imageBuffer: stickerBuffer,
   }).catch(console.error);
+
+  // Set feedback trigger if user has 0 credits (fire-and-forget)
+  if (user.credits === 0 && !user.feedback_trigger_at) {
+    supabase.from("users")
+      .update({ feedback_trigger_at: new Date().toISOString() })
+      .eq("id", session.user_id)
+      .then(() => console.log("Feedback trigger set for user:", session.user_id))
+      .catch(console.error);
+  }
 
   await clearProgress();
 

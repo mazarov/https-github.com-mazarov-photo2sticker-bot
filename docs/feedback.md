@@ -328,9 +328,11 @@ export const config = {
 - [ ] Добавить @p2s_support_bot как админа в канал
 - [ ] Добавить SUPPORT_BOT_TOKEN в env
 - [ ] Добавить SUPPORT_CHANNEL_ID в env
-- [ ] SQL миграция (feedback_trigger_at + user_feedback)
-- [ ] Обновить worker.ts (установка триггера)
-- [ ] Создать support-bot.ts
-- [ ] Обновить config.ts
+- [ ] Добавить ADMIN_IDS в env (твой telegram_id)
+- [x] SQL миграция (feedback_trigger_at + user_feedback) → `sql/022_feedback.sql`
+- [x] Обновить worker.ts (установка триггера)
+- [x] Создать support-bot.ts
+- [x] Обновить config.ts
+- [x] Создать Dockerfile.support
 - [ ] Деплой support бота
 - [ ] Тестирование

@@ -23,4 +23,8 @@ export const config = {
   jobPollIntervalMs: Number(process.env.JOB_POLL_INTERVAL_MS || 2000),
   botUsername: process.env.BOT_USERNAME || "",
   alertChannelId: process.env.ALERT_CHANNEL_ID || "",
+  supportBotToken: process.env.SUPPORT_BOT_TOKEN || "",
+  supportChannelId: process.env.SUPPORT_CHANNEL_ID || "",
+  supportBotUsername: process.env.SUPPORT_BOT_USERNAME || "p2s_support_bot",
+  adminIds: (process.env.ADMIN_IDS || "").split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)),
 };
