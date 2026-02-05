@@ -434,9 +434,6 @@ async function runJob(job: any) {
       callback_data: `onboarding_emotion:${stickerId}:${e.id}`,
     }]);
     
-    const skipText = lang === "ru" ? "Пропустить →" : "Skip →";
-    emotionButtons.push([{ text: skipText, callback_data: "onboarding_skip" }]);
-    
     await sendMessage(telegramId, onboardingText, {
       inline_keyboard: emotionButtons,
     });
