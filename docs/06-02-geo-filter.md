@@ -120,17 +120,20 @@ if (freeCredits > 0) {
 }
 ```
 
-### 4. (Опционально) Сохранять language_code для аналитики
+### 4. SQL миграция — сохранять оригинальный language_code
 
 ```sql
+-- 038_language_code.sql
 ALTER TABLE users ADD COLUMN IF NOT EXISTS language_code text;
 ```
+
+### 5. Сохранять language_code при регистрации
 
 ```typescript
 await supabase.from("users").insert({ 
   telegram_id: telegramId, 
-  lang,
-  language_code: ctx.from?.language_code || null,  // для аналитики
+  lang,  // ru или en (для UI)
+  language_code: ctx.from?.language_code || null,  // оригинальный код
   ...
 });
 ```
@@ -139,11 +142,11 @@ await supabase.from("users").insert({
 
 ## Чеклист
 
+- [ ] SQL миграция `038_language_code.sql`
 - [ ] Добавить `allowedLangPrefixes` в config.ts
 - [ ] Функция `isAllowedLanguage()`
+- [ ] Сохранять `language_code` при регистрации
 - [ ] Условное начисление кредитов в /start
-- [ ] (Опционально) SQL миграция для `language_code`
-- [ ] (Опционально) Сохранять `language_code` при регистрации
 - [ ] Тестирование
 
 ---
