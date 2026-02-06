@@ -8,6 +8,60 @@
 
 ---
 
+## Источник данных
+
+### Откуда берём `language_code`
+
+```typescript
+ctx.from?.language_code  // Telegraf/Telegram Bot API
+```
+
+**Telegram Bot API** возвращает в объекте `User`:
+- `language_code` (string, optional) — [IETF language tag](https://en.wikipedia.org/wiki/IETF_language_tag) языка интерфейса Telegram пользователя
+
+### Когда доступно
+
+| Момент | Доступно? | Пример |
+|--------|-----------|--------|
+| `/start` команда | ✅ Да | `ctx.from.language_code` |
+| Любое сообщение | ✅ Да | `ctx.from.language_code` |
+| Callback query | ✅ Да | `ctx.from.language_code` |
+| Webhook (без ctx) | ❌ Нет | Нужно из update |
+
+### Когда проверяем и сохраняем
+
+**Момент:** При регистрации нового пользователя в `/start`
+
+```typescript
+bot.start(async (ctx) => {
+  const telegramId = ctx.from?.id;
+  let user = await getUser(telegramId);
+  
+  if (!user) {
+    // === ЗДЕСЬ берём language_code ===
+    const languageCode = ctx.from?.language_code || "";  // "ru", "de", "hi", etc.
+    const lang = languageCode.startsWith("ru") ? "ru" : "en";  // UI язык
+    
+    // Проверяем whitelist
+    const freeCredits = isAllowedLanguage(languageCode) ? 2 : 0;
+    
+    // Сохраняем в БД
+    await supabase.from("users").insert({ 
+      telegram_id: telegramId, 
+      lang,
+      language_code: languageCode || null,  // сохраняем оригинал
+    });
+    
+    // Начисляем кредиты (если разрешено)
+    if (freeCredits > 0) {
+      await supabase.from("transactions").insert({ ... });
+    }
+  }
+});
+```
+
+---
+
 ## Whitelist языков
 
 ```typescript
