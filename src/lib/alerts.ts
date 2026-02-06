@@ -117,7 +117,8 @@ export async function sendNotification(options: NotificationOptions): Promise<vo
 
   const emoji = NOTIFICATION_EMOJI[options.type];
   const title = NOTIFICATION_TITLE[options.type];
-  const caption = `${emoji} *${title}*\n\n${options.message}`;
+  const escapedMessage = escapeMarkdown(options.message);
+  const caption = `${emoji} *${title}*\n\n${escapedMessage}`;
 
   try {
     // Media group: исходное фото + результат
