@@ -690,6 +690,15 @@ async function getUser(telegramId: number) {
   return data;
 }
 
+// Helper: get persistent menu keyboard
+function getMainMenuKeyboard(lang: string) {
+  const texts = lang === "ru" 
+    ? ["📷 Фото", "💰 Баланс", "❓ Помощь"]
+    : ["📷 Photo", "💰 Balance", "❓ Help"];
+  
+  return Markup.keyboard([texts]).resize().persistent();
+}
+
 // Helper: get active session
 async function getActiveSession(userId: string) {
   const { data, error } = await supabase
@@ -845,7 +854,7 @@ bot.start(async (ctx) => {
     ? await getText(lang, "start.greeting_new")
     : await getText(lang, "start.greeting_return", { credits: user?.credits || 0 });
 
-  await ctx.reply(greeting);
+  await ctx.reply(greeting, getMainMenuKeyboard(lang));
 });
 
 // /balance command - shows balance + tariffs directly (no intermediate "Top up" button)
@@ -930,6 +939,45 @@ bot.on("photo", async (ctx) => {
   } else {
     await sendStyleKeyboard(ctx, lang);
   }
+});
+
+// ============================================
+// Persistent menu handlers (Reply Keyboard)
+// ============================================
+
+// Menu: Photo button
+bot.hears(["📷 Фото", "📷 Photo"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  const lang = user?.lang || "en";
+  await ctx.reply(await getText(lang, "menu.send_photo"), getMainMenuKeyboard(lang));
+});
+
+// Menu: Balance button
+bot.hears(["💰 Баланс", "💰 Balance"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) {
+    const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
+    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang));
+    return;
+  }
+
+  await sendBuyCreditsMenu(ctx, user);
+});
+
+// Menu: Help button
+bot.hears(["❓ Помощь", "❓ Help"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  const lang = user?.lang || "en";
+  await ctx.reply(await getText(lang, "menu.help"), getMainMenuKeyboard(lang));
 });
 
 // Text handler (style description)

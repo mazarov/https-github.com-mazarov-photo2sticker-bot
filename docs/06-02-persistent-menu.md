@@ -98,10 +98,10 @@ bot.command("start", async (ctx) => {
 
 ## Чеклист
 
-- [ ] Функция `getMainMenuKeyboard(lang)`
-- [ ] Показ меню в `/start`
-- [ ] `bot.hears()` для "📷 Фото" / "📷 Photo"
-- [ ] `bot.hears()` для "💰 Баланс" / "💰 Balance"
-- [ ] `bot.hears()` для "❓ Помощь" / "❓ Help"
-- [ ] Тексты `menu.send_photo` и `menu.help` в texts.ts
+- [x] Функция `getMainMenuKeyboard(lang)`
+- [x] Показ меню в `/start`
+- [x] `bot.hears()` для "📷 Фото" / "📷 Photo"
+- [x] `bot.hears()` для "💰 Баланс" / "💰 Balance"
+- [x] `bot.hears()` для "❓ Помощь" / "❓ Help"
+- [x] Тексты `menu.send_photo` и `menu.help` в texts.ts
 - [ ] Тестирование
