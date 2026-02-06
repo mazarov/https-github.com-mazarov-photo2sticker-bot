@@ -1269,9 +1269,8 @@ bot.action(/^style_groups_back(:.*)?$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
-    const session = await getActiveSession(user.id);
-    if (!session?.id || session.state !== "wait_style") return;
-
+    
+    // Just navigate back - no state check needed
     const messageId = ctx.callbackQuery?.message?.message_id;
     await ctx.telegram.editMessageText(
       ctx.chat?.id,
