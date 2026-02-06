@@ -1987,7 +1987,7 @@ app.listen(config.port, () => {
 // ABANDONED CART PROCESSING
 // ============================================
 
-const ABANDONED_CART_DELAY_MS = 30 * 60 * 1000; // 30 minutes
+const ABANDONED_CART_DELAY_MS = 15 * 60 * 1000; // 15 minutes
 const ABANDONED_CART_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Map original price to discounted price (10% off)
