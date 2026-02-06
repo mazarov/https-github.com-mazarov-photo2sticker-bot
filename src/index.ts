@@ -699,6 +699,12 @@ function getMainMenuKeyboard(lang: string) {
   return Markup.keyboard([texts]).resize().persistent();
 }
 
+// Helper: check if language is in whitelist for free credits
+function isAllowedLanguage(languageCode: string): boolean {
+  const code = (languageCode || "").toLowerCase();
+  return config.allowedLangPrefixes.some(prefix => code.startsWith(prefix));
+}
+
 // Helper: get active session
 async function getActiveSession(userId: string) {
   const { data, error } = await supabase
@@ -772,17 +778,21 @@ bot.start(async (ctx) => {
 
   if (!user) {
     isNewUser = true;
-    const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru")
-      ? "ru"
-      : "en";
+    const languageCode = ctx.from?.language_code || "";
+    const lang = languageCode.toLowerCase().startsWith("ru") ? "ru" : "en";
 
-    console.log("New user - language_code:", ctx.from?.language_code, "-> lang:", lang);
+    // Check if user's language is in whitelist for free credits
+    const isAllowed = isAllowedLanguage(languageCode);
+    const freeCredits = isAllowed ? 2 : 0;
+
+    console.log("New user - language_code:", languageCode, "-> lang:", lang, "isAllowed:", isAllowed, "freeCredits:", freeCredits);
 
     const { data: created, error: insertError } = await supabase
       .from("users")
       .insert({ 
         telegram_id: telegramId, 
         lang, 
+        language_code: languageCode || null,  // save original language code
         credits: 0,
         username: ctx.from?.username || null,
       })
@@ -806,20 +816,22 @@ bot.start(async (ctx) => {
       user = created;
     }
 
-    // Give 2 free credits for onboarding (trigger will add to user.credits)
-    if (user?.id) {
+    // Give free credits only if language is in whitelist
+    if (user?.id && freeCredits > 0) {
       await supabase.from("transactions").insert({
         user_id: user.id,
-        amount: 2,
+        amount: freeCredits,
         price: 0,
         state: "done",
         is_active: false,
       });
+    }
 
-      // Send notification (async, non-blocking)
+    // Send notification (async, non-blocking)
+    if (user?.id) {
       sendNotification({
         type: "new_user",
-        message: `@${ctx.from?.username || "no\\_username"} (${telegramId})\n🌐 Язык: ${lang}`,
+        message: `@${ctx.from?.username || "no\\_username"} (${telegramId})\n🌐 Язык: ${languageCode || "unknown"}\n💰 Кредиты: ${freeCredits}`,
       }).catch(console.error);
     }
   } else {

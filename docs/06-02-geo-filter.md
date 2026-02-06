@@ -196,11 +196,11 @@ await supabase.from("users").insert({
 
 ## Чеклист
 
-- [ ] SQL миграция `038_language_code.sql`
-- [ ] Добавить `allowedLangPrefixes` в config.ts
-- [ ] Функция `isAllowedLanguage()`
-- [ ] Сохранять `language_code` при регистрации
-- [ ] Условное начисление кредитов в /start
+- [x] SQL миграция `038_language_code.sql`
+- [x] Добавить `allowedLangPrefixes` в config.ts
+- [x] Функция `isAllowedLanguage()`
+- [x] Сохранять `language_code` при регистрации
+- [x] Условное начисление кредитов в /start
 - [ ] Тестирование
 
 ---

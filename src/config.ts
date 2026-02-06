@@ -29,4 +29,13 @@ export const config = {
   adminIds: (process.env.ADMIN_IDS || "").split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)),
   // Styles v2: feature flag - telegram_ids that see new UI with groups
   stylesV2EnabledUsers: [42269230],
+  // Geo-filter: whitelist of language prefixes that get free credits
+  allowedLangPrefixes: [
+    // Россия + Беларусь
+    "ru", "be",
+    // США + Англоязычные + Европа
+    "en", "de", "fr", "es", "it", "pt", "nl", "pl", "cs", "sk",
+    "hu", "ro", "bg", "el", "sv", "da", "fi", "no", "et", "lv",
+    "lt", "sl", "hr", "sr", "tr",
+  ],
 };
