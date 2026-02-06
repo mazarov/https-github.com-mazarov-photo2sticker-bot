@@ -145,6 +145,7 @@ interface StylePresetV2 {
   prompt_hint: string;
   sort_order: number;
   is_active: boolean;
+  show_in_onboarding: boolean;
 }
 
 // Cache for style_groups
@@ -240,12 +241,16 @@ async function sendStyleGroupsKeyboard(ctx: any, lang: string, messageId?: numbe
   }
 }
 
-async function sendSubstylesKeyboard(ctx: any, lang: string, groupId: string, messageId?: number) {
+async function sendSubstylesKeyboard(ctx: any, lang: string, groupId: string, messageId?: number, isOnboarding: boolean = false) {
   const groups = await getStyleGroups();
   const group = groups.find(g => g.id === groupId);
   if (!group) return;
 
-  const substyles = await getStylePresetsV2(groupId);
+  const allSubstyles = await getStylePresetsV2(groupId);
+  // Filter substyles for onboarding users
+  const substyles = isOnboarding
+    ? allSubstyles.filter(s => s.show_in_onboarding !== false)
+    : allSubstyles;
   const backText = await getText(lang, "btn.back_to_groups");
   const exampleText = await getText(lang, "btn.example");
   
@@ -1183,11 +1188,12 @@ bot.action(/^style_group:(.+)$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
+    const isOnboarding = (user.onboarding_step ?? 99) < 2;
     const session = await getActiveSession(user.id);
     if (!session?.id || session.state !== "wait_style") return;
 
     const groupId = ctx.match[1];
-    console.log("[Styles v2] Group selected:", groupId);
+    console.log("[Styles v2] Group selected:", groupId, "isOnboarding:", isOnboarding);
 
     // Update session with selected group for analytics
     await supabase
@@ -1195,8 +1201,8 @@ bot.action(/^style_group:(.+)$/, async (ctx) => {
       .update({ selected_style_group: groupId })
       .eq("id", session.id);
 
-    // Show substyles
-    await sendSubstylesKeyboard(ctx, lang, groupId, ctx.callbackQuery?.message?.message_id);
+    // Show substyles (filtered for onboarding)
+    await sendSubstylesKeyboard(ctx, lang, groupId, ctx.callbackQuery?.message?.message_id, isOnboarding);
   } catch (err) {
     console.error("Style group callback error:", err);
   }
@@ -1398,11 +1404,12 @@ bot.action(/^back_to_substyles_v2:(.+)$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
+    const isOnboarding = (user.onboarding_step ?? 99) < 2;
     const groupId = ctx.match[1];
 
-    // Delete current message and show substyles
+    // Delete current message and show substyles (filtered for onboarding)
     await ctx.deleteMessage().catch(() => {});
-    await sendSubstylesKeyboard(ctx, lang, groupId);
+    await sendSubstylesKeyboard(ctx, lang, groupId, undefined, isOnboarding);
   } catch (err) {
     console.error("Back to substyles v2 error:", err);
   }

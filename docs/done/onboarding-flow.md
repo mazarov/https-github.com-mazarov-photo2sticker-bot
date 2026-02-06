@@ -98,21 +98,30 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_step int DEFAULT 0;
 
 ### 3.1 Фильтрация стилей для онбординга (Styles V2)
 
-Группы стилей можно скрыть для пользователей в процессе онбординга (`onboarding_step < 2`):
+Стили можно скрыть для пользователей в процессе онбординга (`onboarding_step < 2`):
+
+| Уровень | Таблица | Эффект |
+|---------|---------|--------|
+| Группа | `style_groups` | Скрыть всю категорию |
+| Подстиль | `style_presets_v2` | Скрыть конкретный стиль в группе |
 
 ```sql
--- Колонка в style_groups
+-- Колонка в обеих таблицах
 show_in_onboarding boolean DEFAULT true
 
--- Скрыть "Русские" и "Сериалы" для новичков
+-- Скрыть группы для новичков
 UPDATE style_groups SET show_in_onboarding = false WHERE id IN ('russian', 'tv');
+
+-- Скрыть подстиль для новичков
+UPDATE style_presets_v2 SET show_in_onboarding = false WHERE id = 'anime_dark';
 ```
 
 **В коде:**
 ```typescript
 const isOnboarding = (user.onboarding_step ?? 99) < 2;
 await sendStyleGroupsKeyboard(ctx, lang, undefined, isOnboarding);
-// isOnboarding=true → фильтруем группы по show_in_onboarding
+await sendSubstylesKeyboard(ctx, lang, groupId, messageId, isOnboarding);
+// isOnboarding=true → фильтруем по show_in_onboarding
 ```
 
 ### 4. Логика в worker.ts
