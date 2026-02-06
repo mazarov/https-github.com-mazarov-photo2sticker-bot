@@ -8,7 +8,7 @@ const TEXTS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 // Fallback texts (used if DB is unavailable)
 const fallbackTexts: Record<string, Record<string, string>> = {
   ru: {
-    "start.greeting_new": "Привет! 🎨\n\nЯ превращаю фото в стикеры.\nТебе начислен 1 бесплатный кредит.\n\nПришли фото, из которого сделать стикер.",
+    "start.greeting_new": "Привет! 🎨\n\nЯ превращаю фото в крутые стикеры.\n\n💡 Бонус +2 кредита к первой покупке!\n\nПришли фото, чтобы начать.",
     "start.greeting_return": "С возвращением! 🎨\n\nТвой баланс: {credits} кредитов.\n\nПришли фото, из которого сделать стикер.",
     "start.need_start": "Нажми /start чтобы начать.",
     "photo.ask_style": "Отлично! Теперь выбери стиль стикера из вариантов ниже или напиши свой текстом.",
@@ -73,9 +73,12 @@ const fallbackTexts: Record<string, Record<string, string>> = {
     "style.custom_prompt_v2": "✍️ Опиши желаемый стиль:\n\nНапример:\n• в стиле комиксов Marvel\n• как персонаж Наруто\n• в стиле советского плаката\n• пиксельный ретро-стиль",
     "btn.custom_style": "✍️ Свой стиль",
     "btn.back_to_groups": "⬅️ Назад",
+    // Paywall
+    "paywall.message": "Стикер почти готов! 🔥\n\nРазблокируй генерацию, купив пакет кредитов.\n\n🎁 Бонус: +2 кредита к первой покупке!",
+    "paywall.bonus_applied": "🎁 Бонус +2 кредита начислен!",
   },
   en: {
-    "start.greeting_new": "Hello! 🎨\n\nI turn photos into stickers.\nYou've received 1 free credit.\n\nSend a photo to make a sticker.",
+    "start.greeting_new": "Hello! 🎨\n\nI turn photos into cool stickers.\n\n💡 Bonus +2 credits with your first purchase!\n\nSend a photo to start.",
     "start.greeting_return": "Welcome back! 🎨\n\nYour balance: {credits} credits.\n\nSend a photo to make a sticker.",
     "start.need_start": "Press /start to begin.",
     "photo.ask_style": "Great! Now choose a sticker style from the options below or describe your own.",
@@ -140,6 +143,9 @@ const fallbackTexts: Record<string, Record<string, string>> = {
     "style.custom_prompt_v2": "✍️ Describe the style you want:\n\nExamples:\n• Marvel comics style\n• like a Naruto character\n• Soviet poster style\n• pixel retro style",
     "btn.custom_style": "✍️ Custom style",
     "btn.back_to_groups": "⬅️ Back",
+    // Paywall
+    "paywall.message": "Sticker almost ready! 🔥\n\nUnlock generation by purchasing a credit package.\n\n🎁 Bonus: +2 credits with your first purchase!",
+    "paywall.bonus_applied": "🎁 Bonus +2 credits applied!",
   },
 };
 

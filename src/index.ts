@@ -586,15 +586,19 @@ async function startGeneration(
   console.log("=== startGeneration ===");
   console.log("user.id:", user?.id);
   console.log("user.credits:", user?.credits, "type:", typeof user?.credits);
+  console.log("user.has_purchased:", user.has_purchased);
   console.log("user.onboarding_step:", user.onboarding_step);
   console.log("generationType:", options.generationType);
   console.log("creditsNeeded:", creditsNeeded);
 
   // Check if user has enough credits
   if (user.credits < creditsNeeded) {
+    // Paywall for users who haven't purchased yet
+    const isPaywall = !user.has_purchased;
+    
     sendAlert({
-      type: "not_enough_credits",
-      message: "Not enough credits!",
+      type: isPaywall ? "paywall_shown" : "not_enough_credits",
+      message: isPaywall ? "Paywall shown to new user" : "Not enough credits!",
       details: {
         user: `@${user.username || user.telegram_id}`,
         sessionId: session.id,
@@ -603,13 +607,14 @@ async function startGeneration(
         styleId: options.selectedStyleId || "-",
         credits: user.credits,
         needed: creditsNeeded,
+        hasPurchased: user.has_purchased,
       },
     }).catch(console.error);
 
     await supabase
       .from("sessions")
       .update({
-        state: "wait_buy_credit",
+        state: isPaywall ? "wait_first_purchase" : "wait_buy_credit",
         pending_generation_type: options.generationType,
         user_input: options.userInput || session.user_input || null,
         prompt_final: options.promptFinal,
@@ -621,10 +626,15 @@ async function startGeneration(
       })
       .eq("id", session.id);
 
-    await ctx.reply(await getText(lang, "photo.not_enough_credits", {
-      needed: creditsNeeded,
-      balance: user.credits,
-    }));
+    if (isPaywall) {
+      // Show paywall message with bonus info
+      await ctx.reply(await getText(lang, "paywall.message"));
+    } else {
+      await ctx.reply(await getText(lang, "photo.not_enough_credits", {
+        needed: creditsNeeded,
+        balance: user.credits,
+      }));
+    }
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -675,11 +685,13 @@ async function startGeneration(
 // Credit packages: { credits, price_in_stars, label_ru, label_en, price_rub, adminOnly?, hidden? }
 const CREDIT_PACKS = [
   { credits: 1, price: 1, price_rub: 1, label_ru: "🔧 Тест", label_en: "🔧 Test", adminOnly: true },
-  { credits: 10, price: 150, price_rub: 150, label_ru: "🧪 Лайт", label_en: "🧪 Light" },
-  { credits: 30, price: 300, price_rub: 300, label_ru: "⭐ Бро", label_en: "⭐ Bro" },
+  { credits: 10, price: 150, price_rub: 99, label_ru: "⭐ Старт", label_en: "⭐ Start" },
+  { credits: 30, price: 300, price_rub: 249, label_ru: "💎 Популярный", label_en: "💎 Popular" },
+  { credits: 100, price: 700, price_rub: 699, label_ru: "👑 Про", label_en: "👑 Pro" },
+  { credits: 250, price: 1500, price_rub: 1490, label_ru: "🚀 Макс", label_en: "🚀 Max" },
   // Hidden discount packs for abandoned carts (not shown in UI, used via direct callback)
-  { credits: 10, price: 135, price_rub: 135, label_ru: "🧪 Лайт -10%", label_en: "🧪 Light -10%", hidden: true },
-  { credits: 30, price: 270, price_rub: 270, label_ru: "⭐ Бро -10%", label_en: "⭐ Bро -10%", hidden: true },
+  { credits: 10, price: 135, price_rub: 89, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
+  { credits: 30, price: 270, price_rub: 224, label_ru: "💎 Популярный -10%", label_en: "💎 Popular -10%", hidden: true },
 ];
 
 // Helper: get user by telegram_id
@@ -695,8 +707,8 @@ async function getUser(telegramId: number) {
 // Helper: get persistent menu keyboard
 function getMainMenuKeyboard(lang: string) {
   const texts = lang === "ru" 
-    ? ["📷 Фото", "💰 Баланс", "❓ Помощь"]
-    : ["📷 Photo", "💰 Balance", "❓ Help"];
+    ? ["✨ Ещё стикеры", "❓ Помощь"]
+    : ["✨ More stickers", "❓ Help"];
   
   return Markup.keyboard([texts]).resize().persistent();
 }
@@ -783,11 +795,7 @@ bot.start(async (ctx) => {
     const languageCode = ctx.from?.language_code || "";
     const lang = languageCode.toLowerCase().startsWith("ru") ? "ru" : "en";
 
-    // Check if user's language is in whitelist for free credits
-    const isAllowed = isAllowedLanguage(languageCode);
-    const freeCredits = isAllowed ? 2 : 0;
-
-    console.log("New user - language_code:", languageCode, "-> lang:", lang, "isAllowed:", isAllowed, "freeCredits:", freeCredits);
+    console.log("New user - language_code:", languageCode, "-> lang:", lang);
 
     const { data: created, error: insertError } = await supabase
       .from("users")
@@ -796,6 +804,7 @@ bot.start(async (ctx) => {
         lang, 
         language_code: languageCode || null,  // save original language code
         credits: 0,
+        has_purchased: false,
         username: ctx.from?.username || null,
       })
       .select("*")
@@ -818,22 +827,14 @@ bot.start(async (ctx) => {
       user = created;
     }
 
-    // Give free credits only if language is in whitelist
-    if (user?.id && freeCredits > 0) {
-      await supabase.from("transactions").insert({
-        user_id: user.id,
-        amount: freeCredits,
-        price: 0,
-        state: "done",
-        is_active: false,
-      });
-    }
+    // No free credits - paywall will show before first generation
+    // Bonus +2 credits given on first purchase
 
     // Send notification (async, non-blocking)
     if (user?.id) {
       sendNotification({
         type: "new_user",
-        message: `@${ctx.from?.username || "no\\_username"} (${telegramId})\n🌐 Язык: ${languageCode || "unknown"}\n💰 Кредиты: ${freeCredits}`,
+        message: `@${ctx.from?.username || "no\\_username"} (${telegramId})\n🌐 Язык: ${languageCode || "unknown"}`,
       }).catch(console.error);
     }
   } else {
@@ -2855,7 +2856,30 @@ bot.on("successful_payment", async (ctx) => {
   // We do NOT add credits here to avoid double crediting.
   // The trigger is also used by other bots via n8n workflow.
 
-  // Re-fetch user to get updated balance (after trigger executed)
+  // First purchase bonus: +2 credits
+  const isFirstPurchase = user && !user.has_purchased;
+  const bonusCredits = isFirstPurchase ? 2 : 0;
+  
+  if (isFirstPurchase) {
+    console.log("First purchase detected! Adding bonus:", bonusCredits);
+    
+    // Add bonus credits via transaction
+    await supabase.from("transactions").insert({
+      user_id: user.id,
+      amount: bonusCredits,
+      price: 0,
+      state: "done",
+      is_active: false,
+    });
+    
+    // Set has_purchased = true
+    await supabase
+      .from("users")
+      .update({ has_purchased: true })
+      .eq("id", user.id);
+  }
+
+  // Re-fetch user to get updated balance (after trigger executed + bonus)
   const { data: updatedUser } = await supabase
     .from("users")
     .select("*")
@@ -2863,26 +2887,34 @@ bot.on("successful_payment", async (ctx) => {
     .maybeSingle();
 
   const finalUser = updatedUser || user;
-  console.log("user after trigger:", finalUser?.id, "credits:", finalUser?.credits, "added:", transaction.amount);
+  console.log("user after trigger:", finalUser?.id, "credits:", finalUser?.credits, "added:", transaction.amount, "bonus:", bonusCredits);
 
   if (finalUser) {
     const lang = finalUser.lang || "en";
     const currentCredits = finalUser.credits || 0;
 
+    // Show payment success message
     await ctx.reply(await getText(lang, "payment.success", {
       amount: transaction.amount,
       balance: currentCredits,
     }));
 
+    // Show bonus message if first purchase
+    if (isFirstPurchase) {
+      await ctx.reply(await getText(lang, "paywall.bonus_applied"));
+    }
+
     // Send payment notification (async, non-blocking)
     sendNotification({
       type: "new_payment",
-      message: `👤 @${finalUser.username || finalUser.telegram_id}\n📦 Пакет: ${transaction.amount} кредитов\n⭐ Сумма: ${transaction.price} Stars`,
+      message: `👤 @${finalUser.username || finalUser.telegram_id}\n📦 Пакет: ${transaction.amount} кредитов\n⭐ Сумма: ${transaction.price} Stars${isFirstPurchase ? "\n🎁 Первая покупка! +2 бонус" : ""}`,
     }).catch(console.error);
 
-    // Check if there's a pending session waiting for credits
+    // Check if there's a pending session waiting for credits (paywall or normal)
     const session = await getActiveSession(finalUser.id);
-    if (session?.state === "wait_buy_credit" && session.prompt_final) {
+    const isWaitingForCredits = session?.state === "wait_buy_credit" || session?.state === "wait_first_purchase";
+    
+    if (isWaitingForCredits && session.prompt_final) {
       const creditsNeeded = session.credits_spent || 1;
 
       if (currentCredits >= creditsNeeded) {
