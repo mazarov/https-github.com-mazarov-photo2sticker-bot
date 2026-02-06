@@ -1701,34 +1701,53 @@ bot.action("cancel", async (ctx) => {
 
 // Callback: pack_N_PRICE (e.g., pack_5_30)
 bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
+  const startTime = Date.now();
+  console.log("=== PAYMENT: pack_select START ===");
+  console.log("timestamp:", new Date().toISOString());
+  
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
-  if (!telegramId) return;
+  console.log("telegramId:", telegramId);
+  if (!telegramId) {
+    console.log("PAYMENT ERROR: no telegramId");
+    return;
+  }
 
   const user = await getUser(telegramId);
-  if (!user?.id) return;
+  console.log("getUser took:", Date.now() - startTime, "ms");
+  if (!user?.id) {
+    console.log("PAYMENT ERROR: user not found");
+    return;
+  }
+  console.log("user_id:", user.id, "username:", user.username);
 
   const lang = user.lang || "en";
   const match = ctx.match;
   const credits = parseInt(match[1], 10);
   const price = parseInt(match[2], 10);
+  console.log("pack selected: credits=", credits, "price=", price);
 
   // Validate pack
   const pack = CREDIT_PACKS.find((p) => p.credits === credits && p.price === price);
   if (!pack) {
+    console.log("PAYMENT ERROR: invalid pack");
     await ctx.reply(await getText(lang, "payment.invalid_pack"));
     return;
   }
+  console.log("pack validated:", pack.label_en);
 
   // Cancel old active transactions
+  const cancelStart = Date.now();
   await supabase
     .from("transactions")
     .update({ state: "canceled", is_active: false })
     .eq("user_id", user.id)
     .eq("is_active", true);
+  console.log("cancel old transactions took:", Date.now() - cancelStart, "ms");
 
   // Create new transaction
-  const { data: transaction } = await supabase
+  const createStart = Date.now();
+  const { data: transaction, error: createError } = await supabase
     .from("transactions")
     .insert({
       user_id: user.id,
@@ -1739,11 +1758,14 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
     })
     .select("*")
     .single();
+  console.log("create transaction took:", Date.now() - createStart, "ms");
 
   if (!transaction) {
+    console.log("PAYMENT ERROR: transaction not created, error:", createError);
     await ctx.reply(await getText(lang, "payment.error_create"));
     return;
   }
+  console.log("transaction created:", transaction.id);
 
   // Send invoice via Telegram Stars
   try {
@@ -1752,7 +1774,9 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
     const description = await getText(lang, "payment.invoice_description", { credits });
     const label = await getText(lang, "payment.invoice_label");
 
-    await axios.post(
+    console.log("sending invoice: payload=", invoicePayload, "price=", price);
+    const invoiceStart = Date.now();
+    const response = await axios.post(
       `https://api.telegram.org/bot${config.telegramBotToken}/sendInvoice`,
       {
         chat_id: telegramId,
@@ -1763,23 +1787,41 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
         prices: [{ label, amount: price }],
       }
     );
+    console.log("sendInvoice took:", Date.now() - invoiceStart, "ms");
+    console.log("sendInvoice response ok:", response.data?.ok);
+    console.log("=== PAYMENT: pack_select COMPLETE ===");
+    console.log("total time:", Date.now() - startTime, "ms");
   } catch (err: any) {
-    console.error("sendInvoice error:", err.response?.data || err.message);
+    console.error("=== PAYMENT ERROR: sendInvoice failed ===");
+    console.error("error:", err.response?.data || err.message);
+    console.error("total time:", Date.now() - startTime, "ms");
     await ctx.reply(await getText(lang, "payment.error_invoice"));
   }
 });
 
 // Pre-checkout query handler
 bot.on("pre_checkout_query", async (ctx) => {
+  const startTime = Date.now();
+  console.log("=== PAYMENT: pre_checkout_query START ===");
+  console.log("timestamp:", new Date().toISOString());
+  
   const query = ctx.preCheckoutQuery;
   const invoicePayload = query.invoice_payload;
   const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
 
+  console.log("query_id:", query.id);
+  console.log("from:", ctx.from?.id, ctx.from?.username);
+  console.log("payload:", invoicePayload);
+  console.log("amount:", query.total_amount);
+  console.log("currency:", query.currency);
+
   // Extract transaction ID from payload like "[uuid]"
   const transactionId = invoicePayload.replace(/[\[\]]/g, "");
+  console.log("transactionId:", transactionId);
 
   // Atomic update: change state from "created" to "processed"
-  const { data: updatedTransactions } = await supabase
+  const updateStart = Date.now();
+  const { data: updatedTransactions, error: updateError } = await supabase
     .from("transactions")
     .update({
       state: "processed",
@@ -1788,49 +1830,70 @@ bot.on("pre_checkout_query", async (ctx) => {
     .eq("id", transactionId)
     .eq("state", "created")
     .select("*");
+  console.log("update transaction took:", Date.now() - updateStart, "ms");
+
+  if (updateError) {
+    console.log("PAYMENT ERROR: update failed:", updateError);
+  }
 
   if (!updatedTransactions?.length) {
+    console.log("PAYMENT ERROR: transaction not found or already processed");
+    console.log("total time before error response:", Date.now() - startTime, "ms");
     const errorMsg = await getText(lang, "payment.transaction_not_found");
     await ctx.answerPreCheckoutQuery(false, errorMsg);
+    console.log("=== PAYMENT: pre_checkout_query FAILED ===");
     return;
   }
 
+  console.log("transaction updated to processed:", updatedTransactions[0].id);
+  
   // Answer OK
+  const answerStart = Date.now();
   await ctx.answerPreCheckoutQuery(true);
+  console.log("answerPreCheckoutQuery took:", Date.now() - answerStart, "ms");
+  console.log("=== PAYMENT: pre_checkout_query SUCCESS ===");
+  console.log("total time:", Date.now() - startTime, "ms");
 });
 
 // Successful payment handler
 bot.on("successful_payment", async (ctx) => {
+  const startTime = Date.now();
+  console.log("=== PAYMENT: successful_payment START ===");
+  console.log("timestamp:", new Date().toISOString());
+  
   const payment = ctx.message.successful_payment;
   const invoicePayload = payment.invoice_payload;
 
-  // === PAYMENT DEBUG LOGS ===
-  console.log("=== successful_payment received ===");
+  console.log("from:", ctx.from?.id, ctx.from?.username);
   console.log("charge_id:", payment.telegram_payment_charge_id);
+  console.log("provider_charge_id:", payment.provider_payment_charge_id);
   console.log("amount:", payment.total_amount);
+  console.log("currency:", payment.currency);
   console.log("payload:", invoicePayload);
-  console.log("timestamp:", new Date().toISOString());
 
   // Extract transaction ID
   const transactionId = invoicePayload.replace(/[\[\]]/g, "");
   console.log("transactionId:", transactionId);
 
   // Idempotency guard: if this charge was already processed, skip
+  const checkStart = Date.now();
   const { data: existingCharge } = await supabase
     .from("transactions")
     .select("id, state")
     .eq("telegram_payment_charge_id", payment.telegram_payment_charge_id)
     .maybeSingle();
-
-  console.log("existingCharge check:", existingCharge?.id, existingCharge?.state);
+  console.log("idempotency check took:", Date.now() - checkStart, "ms");
+  console.log("existingCharge:", existingCharge?.id, existingCharge?.state);
 
   if (existingCharge?.state === "done") {
     console.log(">>> SKIP: Payment already processed by charge id:", payment.telegram_payment_charge_id);
+    console.log("=== PAYMENT: successful_payment SKIPPED (duplicate) ===");
     return;
   }
 
   // Atomic update: only one request can successfully change state from "processed" to "done"
-  const { data: updatedTransactions } = await supabase
+  const updateStart = Date.now();
+  const { data: updatedTransactions, error: updateError } = await supabase
     .from("transactions")
     .update({
       state: "done",
@@ -1842,6 +1905,11 @@ bot.on("successful_payment", async (ctx) => {
     .eq("state", "processed")
     .is("telegram_payment_charge_id", null)
     .select("*");
+  console.log("update transaction took:", Date.now() - updateStart, "ms");
+
+  if (updateError) {
+    console.log("PAYMENT ERROR: update to done failed:", updateError);
+  }
 
   const transaction = updatedTransactions?.[0];
   console.log("update result - transaction found:", !!transaction, "id:", transaction?.id);
@@ -1849,6 +1917,7 @@ bot.on("successful_payment", async (ctx) => {
   if (!transaction) {
     // Already processed or not found - this prevents double crediting
     console.log(">>> SKIP: Transaction already processed or not found:", transactionId);
+    console.log("=== PAYMENT: successful_payment SKIPPED (no transaction) ===");
     return;
   }
 
@@ -1920,6 +1989,8 @@ bot.on("successful_payment", async (ctx) => {
         }));
       }
     }
+    console.log("=== PAYMENT: successful_payment COMPLETE ===");
+    console.log("total time:", Date.now() - startTime, "ms");
   }
 });
 
