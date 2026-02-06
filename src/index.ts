@@ -116,6 +116,151 @@ async function countStyleExamples(styleId: string): Promise<number> {
   return count || 0;
 }
 
+// ============================================
+// Styles v2: Groups + Substyles (isolated)
+// ============================================
+
+// Feature flag helper
+function useStylesV2(telegramId: number): boolean {
+  return config.stylesV2EnabledUsers?.includes(telegramId) ?? false;
+}
+
+// Interfaces for v2
+interface StyleGroup {
+  id: string;
+  emoji: string;
+  name_ru: string;
+  name_en: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+interface StylePresetV2 {
+  id: string;
+  group_id: string;
+  emoji: string;
+  name_ru: string;
+  name_en: string;
+  prompt_hint: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+// Cache for style_groups
+let styleGroupsCache: { data: StyleGroup[]; timestamp: number } | null = null;
+const STYLE_GROUPS_CACHE_TTL = 5 * 60 * 1000;
+
+// Cache for style_presets_v2
+let stylePresetsV2Cache: { data: StylePresetV2[]; timestamp: number } | null = null;
+const STYLE_PRESETS_V2_CACHE_TTL = 5 * 60 * 1000;
+
+async function getStyleGroups(): Promise<StyleGroup[]> {
+  const now = Date.now();
+  if (styleGroupsCache && now - styleGroupsCache.timestamp < STYLE_GROUPS_CACHE_TTL) {
+    return styleGroupsCache.data;
+  }
+
+  const { data } = await supabase
+    .from("style_groups")
+    .select("*")
+    .eq("is_active", true)
+    .order("sort_order");
+
+  if (data) {
+    styleGroupsCache = { data, timestamp: now };
+  }
+  return data || [];
+}
+
+async function getStylePresetsV2(groupId?: string): Promise<StylePresetV2[]> {
+  const now = Date.now();
+  if (stylePresetsV2Cache && now - stylePresetsV2Cache.timestamp < STYLE_PRESETS_V2_CACHE_TTL) {
+    const cached = stylePresetsV2Cache.data;
+    return groupId ? cached.filter(p => p.group_id === groupId) : cached;
+  }
+
+  const { data } = await supabase
+    .from("style_presets_v2")
+    .select("*")
+    .eq("is_active", true)
+    .order("sort_order");
+
+  if (data) {
+    stylePresetsV2Cache = { data, timestamp: now };
+  }
+  const result = data || [];
+  return groupId ? result.filter(p => p.group_id === groupId) : result;
+}
+
+async function getStylePresetV2ById(id: string): Promise<StylePresetV2 | null> {
+  const presets = await getStylePresetsV2();
+  return presets.find(p => p.id === id) || null;
+}
+
+async function sendStyleGroupsKeyboard(ctx: any, lang: string, messageId?: number) {
+  const groups = await getStyleGroups();
+  const customText = await getText(lang, "btn.custom_style");
+  
+  // 2 columns for groups
+  const buttons: any[][] = [];
+  for (let i = 0; i < groups.length; i += 2) {
+    const row: any[] = [];
+    row.push(Markup.button.callback(
+      `${groups[i].emoji} ${lang === "ru" ? groups[i].name_ru : groups[i].name_en}`,
+      `style_group:${groups[i].id}`
+    ));
+    if (groups[i + 1]) {
+      row.push(Markup.button.callback(
+        `${groups[i + 1].emoji} ${lang === "ru" ? groups[i + 1].name_ru : groups[i + 1].name_en}`,
+        `style_group:${groups[i + 1].id}`
+      ));
+    }
+    buttons.push(row);
+  }
+  
+  // Custom style button
+  buttons.push([Markup.button.callback(customText, "style_custom_v2")]);
+
+  const text = await getText(lang, "style.select_group");
+  const markup = Markup.inlineKeyboard(buttons);
+
+  if (messageId) {
+    await ctx.telegram.editMessageText(ctx.chat.id, messageId, null, text, markup);
+  } else {
+    await ctx.reply(text, markup);
+  }
+}
+
+async function sendSubstylesKeyboard(ctx: any, lang: string, groupId: string, messageId?: number) {
+  const groups = await getStyleGroups();
+  const group = groups.find(g => g.id === groupId);
+  if (!group) return;
+
+  const substyles = await getStylePresetsV2(groupId);
+  const backText = await getText(lang, "btn.back_to_groups");
+  
+  // 1 column for substyles
+  const buttons: any[][] = substyles.map(s => [
+    Markup.button.callback(
+      `${s.emoji} ${lang === "ru" ? s.name_ru : s.name_en}`,
+      `style_v2:${s.id}`
+    )
+  ]);
+  
+  // Back button
+  buttons.push([Markup.button.callback(backText, "style_groups_back")]);
+
+  const groupName = lang === "ru" ? group.name_ru : group.name_en;
+  const text = await getText(lang, "style.select_substyle", { emoji: group.emoji, name: groupName });
+  const markup = Markup.inlineKeyboard(buttons);
+
+  if (messageId) {
+    await ctx.telegram.editMessageText(ctx.chat.id, messageId, null, text, markup);
+  } else {
+    await ctx.reply(text, markup);
+  }
+}
+
 async function sendStyleKeyboard(ctx: any, lang: string, messageId?: number) {
   const presets = await getStylePresets();
   const exampleText = await getText(lang, "btn.example");
@@ -754,7 +899,13 @@ bot.on("photo", async (ctx) => {
     console.error("Failed to update session to wait_style:", error);
   }
 
-  await sendStyleKeyboard(ctx, lang);
+  // Show v2 groups for enabled users, old flat list for others
+  if (useStylesV2(telegramId)) {
+    console.log("[Styles v2] Showing groups for user:", telegramId);
+    await sendStyleGroupsKeyboard(ctx, lang);
+  } else {
+    await sendStyleKeyboard(ctx, lang);
+  }
 });
 
 // Text handler (style description)
@@ -851,6 +1002,34 @@ bot.on("text", async (ctx) => {
       promptFinal: generatedPrompt,
       userInput: styleText,
       selectedStyleId: "custom",
+    });
+    return;
+  }
+
+  // Handle custom style v2 (same logic, different state name)
+  if (session.state === "wait_custom_style_v2") {
+    const styleText = ctx.message.text.trim();
+    const photos = Array.isArray(session.photos) ? session.photos : [];
+    const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
+    if (!currentPhotoId) {
+      await ctx.reply(await getText(lang, "photo.need_photo"));
+      return;
+    }
+
+    await ctx.reply(await getText(lang, "photo.processing"));
+    const promptResult = await generatePrompt(styleText);
+
+    if (!promptResult.ok || promptResult.retry) {
+      await ctx.reply(await getText(lang, "photo.invalid_style"));
+      return;
+    }
+
+    const generatedPrompt = promptResult.prompt || styleText;
+    await startGeneration(ctx, user, session, lang, {
+      generationType: "style",
+      promptFinal: generatedPrompt,
+      userInput: styleText,
+      selectedStyleId: "custom_v2",
     });
     return;
   }
@@ -963,6 +1142,159 @@ bot.action(/^style_([^:]+)$/, async (ctx) => {
     console.error("Style callback error:", err);
   }
 });
+
+// ============================================
+// Styles v2 handlers (isolated, only for enabled users)
+// ============================================
+
+// Callback: style group selected (v2)
+bot.action(/^style_group:(.+)$/, async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+    
+    // Double-check feature flag
+    if (!useStylesV2(telegramId)) {
+      console.log("style_group callback for non-v2 user, ignoring");
+      return;
+    }
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+
+    const lang = user.lang || "en";
+    const session = await getActiveSession(user.id);
+    if (!session?.id || session.state !== "wait_style") return;
+
+    const groupId = ctx.match[1];
+    console.log("[Styles v2] Group selected:", groupId);
+
+    // Update session with selected group for analytics
+    await supabase
+      .from("sessions")
+      .update({ selected_style_group: groupId })
+      .eq("id", session.id);
+
+    // Show substyles
+    await sendSubstylesKeyboard(ctx, lang, groupId, ctx.callbackQuery?.message?.message_id);
+  } catch (err) {
+    console.error("Style group callback error:", err);
+  }
+});
+
+// Callback: substyle selected (v2)
+bot.action(/^style_v2:(.+)$/, async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    // Double-check feature flag
+    if (!useStylesV2(telegramId)) {
+      console.log("style_v2 callback for non-v2 user, ignoring");
+      return;
+    }
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+
+    const lang = user.lang || "en";
+    const session = await getActiveSession(user.id);
+    if (!session?.id || session.state !== "wait_style") return;
+
+    const styleId = ctx.match[1];
+    console.log("[Styles v2] Substyle selected:", styleId);
+
+    const preset = await getStylePresetV2ById(styleId);
+    if (!preset) {
+      console.log("[Styles v2] Preset not found:", styleId);
+      return;
+    }
+
+    const photos = Array.isArray(session.photos) ? session.photos : [];
+    const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
+    if (!currentPhotoId) {
+      await ctx.reply(await getText(lang, "photo.need_photo"));
+      return;
+    }
+
+    // Use prompt_hint as userInput
+    const userInput = preset.prompt_hint;
+    await ctx.reply(await getText(lang, "photo.processing"));
+
+    const promptResult = await generatePrompt(userInput);
+    if (!promptResult.ok || promptResult.retry) {
+      await ctx.reply(await getText(lang, "photo.invalid_style"));
+      return;
+    }
+
+    const generatedPrompt = promptResult.prompt || userInput;
+
+    await startGeneration(ctx, user, session, lang, {
+      generationType: "style",
+      promptFinal: generatedPrompt,
+      userInput,
+      selectedStyleId: preset.id,
+    });
+  } catch (err) {
+    console.error("Style v2 callback error:", err);
+  }
+});
+
+// Callback: back to groups (v2)
+bot.action("style_groups_back", async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    if (!useStylesV2(telegramId)) return;
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+
+    const lang = user.lang || "en";
+    const session = await getActiveSession(user.id);
+    if (!session?.id || session.state !== "wait_style") return;
+
+    await sendStyleGroupsKeyboard(ctx, lang, ctx.callbackQuery?.message?.message_id);
+  } catch (err) {
+    console.error("Style groups back callback error:", err);
+  }
+});
+
+// Callback: custom style (v2)
+bot.action("style_custom_v2", async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    if (!useStylesV2(telegramId)) return;
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+
+    const lang = user.lang || "en";
+    const session = await getActiveSession(user.id);
+    if (!session?.id || session.state !== "wait_style") return;
+
+    // Switch state to wait for custom style text
+    await supabase
+      .from("sessions")
+      .update({ state: "wait_custom_style_v2", is_active: true })
+      .eq("id", session.id);
+
+    await ctx.reply(await getText(lang, "style.custom_prompt_v2"));
+  } catch (err) {
+    console.error("Style custom v2 callback error:", err);
+  }
+});
+
+// ============================================
+// End of Styles v2 handlers
+// ============================================
 
 // Callback: add to pack (new format with sticker ID)
 bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
@@ -1227,7 +1559,12 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendStyleKeyboard(ctx, lang);
+  // Show v2 groups for enabled users
+  if (useStylesV2(telegramId)) {
+    await sendStyleGroupsKeyboard(ctx, lang);
+  } else {
+    await sendStyleKeyboard(ctx, lang);
+  }
 });
 
 // Callback: change style (old format - fallback)
@@ -1256,7 +1593,12 @@ bot.action("change_style", async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendStyleKeyboard(ctx, lang);
+  // Show v2 groups for enabled users
+  if (useStylesV2(telegramId)) {
+    await sendStyleGroupsKeyboard(ctx, lang);
+  } else {
+    await sendStyleKeyboard(ctx, lang);
+  }
 });
 
 // Callback: change emotion (new format with sticker ID)
@@ -1843,8 +2185,12 @@ bot.action("back_to_styles", async (ctx) => {
   // Delete current message
   await ctx.deleteMessage().catch(() => {});
 
-  // Show style keyboard
-  await sendStyleKeyboard(ctx, lang);
+  // Show v2 groups for enabled users
+  if (useStylesV2(telegramId)) {
+    await sendStyleGroupsKeyboard(ctx, lang);
+  } else {
+    await sendStyleKeyboard(ctx, lang);
+  }
 });
 
 // Callback: onboarding emotion selection

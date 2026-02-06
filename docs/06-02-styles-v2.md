@@ -369,23 +369,23 @@ GROUP BY selected_style_group;
 ## 9. Checklist
 
 ### Фаза 1: БД
-- [ ] Миграция `036_style_groups.sql` — создать `style_groups`
-- [ ] Миграция `036_style_groups.sql` — создать `style_presets_v2` (отдельная таблица!)
-- [ ] Вставить группы в `style_groups`
-- [ ] Вставить подстили в `style_presets_v2`
-- [ ] **НЕ трогать** существующую `style_presets`
+- [x] Миграция `036_style_groups.sql` — создать `style_groups`
+- [x] Миграция `036_style_groups.sql` — создать `style_presets_v2` (отдельная таблица!)
+- [x] Вставить группы в `style_groups`
+- [x] Вставить подстили в `style_presets_v2`
+- [x] **НЕ трогать** существующую `style_presets`
 
 ### Фаза 2: Код
-- [ ] Feature flag в config
-- [ ] Хелпер `useStylesV2()`
-- [ ] Функция `sendStyleGroupsKeyboard()`
-- [ ] Функция `sendSubstylesKeyboard()`
-- [ ] Хендлер `style_group:*`
-- [ ] Хендлер `style_v2:*`
-- [ ] Хендлер `style_groups_back`
-- [ ] Хендлер `style_custom_v2` (кнопка → запрос текста)
-- [ ] Обработка текста для custom стиля (state: `wait_custom_style`)
-- [ ] Изменить photo handler
+- [x] Feature flag в config
+- [x] Хелпер `useStylesV2()`
+- [x] Функция `sendStyleGroupsKeyboard()`
+- [x] Функция `sendSubstylesKeyboard()`
+- [x] Хендлер `style_group:*`
+- [x] Хендлер `style_v2:*`
+- [x] Хендлер `style_groups_back`
+- [x] Хендлер `style_custom_v2` (кнопка → запрос текста)
+- [x] Обработка текста для custom стиля (state: `wait_custom_style_v2`)
+- [x] Изменить photo handler
 
 ### Фаза 3: Тест
 - [ ] Тест на своём аккаунте

@@ -27,4 +27,6 @@ export const config = {
   supportChannelId: process.env.SUPPORT_CHANNEL_ID || "",
   supportBotUsername: process.env.SUPPORT_BOT_USERNAME || "p2s_support_bot",
   adminIds: (process.env.ADMIN_IDS || "").split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)),
+  // Styles v2: feature flag - telegram_ids that see new UI with groups
+  stylesV2EnabledUsers: [42269230],
 };

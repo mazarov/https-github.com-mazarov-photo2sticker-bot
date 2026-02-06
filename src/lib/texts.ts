@@ -65,6 +65,12 @@ const fallbackTexts: Record<string, Record<string, string>> = {
     "btn.example": "Пример",
     "btn.more": "Ещё",
     "btn.back_to_styles": "← Назад",
+    // Styles v2
+    "style.select_group": "Выбери категорию стиля:",
+    "style.select_substyle": "{emoji} {name} — выбери стиль:",
+    "style.custom_prompt_v2": "✍️ Опиши желаемый стиль:\n\nНапример:\n• в стиле комиксов Marvel\n• как персонаж Наруто\n• в стиле советского плаката\n• пиксельный ретро-стиль",
+    "btn.custom_style": "✍️ Свой стиль",
+    "btn.back_to_groups": "⬅️ Назад",
   },
   en: {
     "start.greeting_new": "Hello! 🎨\n\nI turn photos into stickers.\nYou've received 1 free credit.\n\nSend a photo to make a sticker.",
@@ -124,6 +130,12 @@ const fallbackTexts: Record<string, Record<string, string>> = {
     "btn.example": "Example",
     "btn.more": "More",
     "btn.back_to_styles": "← Back",
+    // Styles v2
+    "style.select_group": "Choose style category:",
+    "style.select_substyle": "{emoji} {name} — choose style:",
+    "style.custom_prompt_v2": "✍️ Describe the style you want:\n\nExamples:\n• Marvel comics style\n• like a Naruto character\n• Soviet poster style\n• pixel retro style",
+    "btn.custom_style": "✍️ Custom style",
+    "btn.back_to_groups": "⬅️ Back",
   },
 };
 
