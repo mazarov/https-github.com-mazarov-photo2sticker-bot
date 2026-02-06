@@ -183,8 +183,12 @@ async function runJob(job: any) {
       type: "gemini_error",
       message: errorMessage,
       details: { 
+        user: `@${user?.username || telegramId}`,
         sessionId: session.id, 
         generationType,
+        styleGroup: session.selected_style_group || "-",
+        styleId: session.selected_style_id || "-",
+        userInput: (session.user_input || "").slice(0, 100),
         status: errorStatus,
         errorCode: err.code,
         errorData: JSON.stringify(errorData || {}).slice(0, 300),
@@ -204,8 +208,12 @@ async function runJob(job: any) {
       type: "generation_failed",
       message: "Gemini returned no image",
       details: { 
+        user: `@${user?.username || telegramId}`,
         sessionId: session.id, 
         generationType,
+        styleGroup: session.selected_style_group || "-",
+        styleId: session.selected_style_id || "-",
+        userInput: (session.user_input || "").slice(0, 100),
         geminiResponse: geminiText.slice(0, 200),
       },
     });
@@ -334,7 +342,10 @@ async function runJob(job: any) {
         type: "rembg_failed",
         message: `Background removal failed: ${err.response?.status || err.code || "unknown"} ${err.message}`,
         details: { 
+          user: `@${user?.username || telegramId}`,
           sessionId: session.id,
+          generationType,
+          styleId: session.selected_style_id || "-",
           imageSizeKb,
           durationMs: duration,
           errorCode: err.code,
