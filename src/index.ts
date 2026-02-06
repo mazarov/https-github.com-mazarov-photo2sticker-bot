@@ -460,8 +460,9 @@ async function startGeneration(
   await sendProgressStart(ctx, session.id, lang);
 }
 
-// Credit packages: { credits, price_in_stars, label_ru, label_en, price_rub }
+// Credit packages: { credits, price_in_stars, label_ru, label_en, price_rub, adminOnly? }
 const CREDIT_PACKS = [
+  { credits: 1, price: 1, price_rub: 1, label_ru: "🔧 Тест", label_en: "🔧 Test", adminOnly: true },
   { credits: 10, price: 150, price_rub: 150, label_ru: "🧪 Лайт", label_en: "🧪 Light" },
   { credits: 30, price: 300, price_rub: 300, label_ru: "⭐ Бро", label_en: "⭐ Bro" },
 ];
@@ -507,11 +508,15 @@ async function getActiveSession(userId: string) {
 async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
   const lang = user.lang || "en";
   const text = messageText || await getText(lang, "payment.balance", { credits: user.credits });
+  const isAdmin = config.adminIds.includes(user.telegram_id);
+
+  // Filter packs: show adminOnly only for admins
+  const availablePacks = CREDIT_PACKS.filter(p => !p.adminOnly || isAdmin);
 
   const buttons: any[][] = [];
 
   // One button per row with full label
-  for (const pack of CREDIT_PACKS) {
+  for (const pack of availablePacks) {
     const label = lang === "ru" ? pack.label_ru : pack.label_en;
     const unit = lang === "ru" ? "стикеров" : "stickers";
     buttons.push([
