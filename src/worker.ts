@@ -512,6 +512,7 @@ async function runJob(job: any) {
             telegram_id: telegramId,
             generation_type: generationType,
             style_id: session.selected_style_id,
+            style_preset_id: session.selected_style_id || null,  // For analytics
             emotion_id: session.selected_emotion,
             prompt_final: session.prompt_final,
           })

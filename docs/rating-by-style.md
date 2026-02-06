@@ -88,6 +88,7 @@ ORDER BY total DESC;
 - Данные для улучшения prompt_hint
 
 ## Checklist
-- [ ] Миграция `035_rating_style.sql`
-- [ ] Обновить worker.ts — добавить `style_preset_id` при создании рейтинга
+- [x] Миграция `035_rating_style.sql`
+- [x] Обновить worker.ts — добавить `style_preset_id` при создании рейтинга
+- [ ] Выполнить миграцию в Supabase
 - [ ] Тестирование
