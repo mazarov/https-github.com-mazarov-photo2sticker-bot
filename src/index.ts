@@ -1800,58 +1800,24 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
 });
 
 // Pre-checkout query handler
+// OPTIMIZED: No DB queries - instant response to avoid Telegram timeout (10s limit)
+// All validation happens in successful_payment
 bot.on("pre_checkout_query", async (ctx) => {
   const startTime = Date.now();
   console.log("=== PAYMENT: pre_checkout_query START ===");
   console.log("timestamp:", new Date().toISOString());
   
   const query = ctx.preCheckoutQuery;
-  const invoicePayload = query.invoice_payload;
-  const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
-
   console.log("query_id:", query.id);
   console.log("from:", ctx.from?.id, ctx.from?.username);
-  console.log("payload:", invoicePayload);
+  console.log("payload:", query.invoice_payload);
   console.log("amount:", query.total_amount);
   console.log("currency:", query.currency);
 
-  // Extract transaction ID from payload like "[uuid]"
-  const transactionId = invoicePayload.replace(/[\[\]]/g, "");
-  console.log("transactionId:", transactionId);
-
-  // Atomic update: change state from "created" to "processed"
-  const updateStart = Date.now();
-  const { data: updatedTransactions, error: updateError } = await supabase
-    .from("transactions")
-    .update({
-      state: "processed",
-      pre_checkout_query_id: query.id,
-    })
-    .eq("id", transactionId)
-    .eq("state", "created")
-    .select("*");
-  console.log("update transaction took:", Date.now() - updateStart, "ms");
-
-  if (updateError) {
-    console.log("PAYMENT ERROR: update failed:", updateError);
-  }
-
-  if (!updatedTransactions?.length) {
-    console.log("PAYMENT ERROR: transaction not found or already processed");
-    console.log("total time before error response:", Date.now() - startTime, "ms");
-    const errorMsg = await getText(lang, "payment.transaction_not_found");
-    await ctx.answerPreCheckoutQuery(false, errorMsg);
-    console.log("=== PAYMENT: pre_checkout_query FAILED ===");
-    return;
-  }
-
-  console.log("transaction updated to processed:", updatedTransactions[0].id);
-  
-  // Answer OK
-  const answerStart = Date.now();
+  // Instant OK response - no DB queries to avoid timeout
   await ctx.answerPreCheckoutQuery(true);
-  console.log("answerPreCheckoutQuery took:", Date.now() - answerStart, "ms");
-  console.log("=== PAYMENT: pre_checkout_query SUCCESS ===");
+  
+  console.log("=== PAYMENT: pre_checkout_query OK ===");
   console.log("total time:", Date.now() - startTime, "ms");
 });
 
@@ -1891,7 +1857,8 @@ bot.on("successful_payment", async (ctx) => {
     return;
   }
 
-  // Atomic update: only one request can successfully change state from "processed" to "done"
+  // Atomic update: only one request can successfully change state from "created" to "done"
+  // Note: We skip "processed" state now - pre_checkout_query no longer updates DB
   const updateStart = Date.now();
   const { data: updatedTransactions, error: updateError } = await supabase
     .from("transactions")
@@ -1902,7 +1869,7 @@ bot.on("successful_payment", async (ctx) => {
       provider_payment_charge_id: payment.provider_payment_charge_id,
     })
     .eq("id", transactionId)
-    .eq("state", "processed")
+    .eq("state", "created")  // Changed from "processed" - now direct created -> done
     .is("telegram_payment_charge_id", null)
     .select("*");
   console.log("update transaction took:", Date.now() - updateStart, "ms");
