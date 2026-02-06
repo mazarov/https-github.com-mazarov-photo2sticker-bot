@@ -1,0 +1,30 @@
+---
+description: Workflow for feature documentation in docs folder
+globs: docs/**/*.md
+alwaysApply: false
+---
+
+# Docs Workflow
+
+## После реализации фичи
+
+1. Обновить checklist в файле фичи (отметить выполненные пункты)
+2. Переместить файл в `docs/done/`
+
+```bash
+# Пример
+git mv docs/rating-by-style.md docs/done/rating-by-style.md
+```
+
+## Формат названия файлов
+
+Новые файлы фичей называть с датой создания:
+
+```
+ДД-ММ-название-фичи.md
+```
+
+Примеры:
+- `06-02-rating-by-style.md`
+- `15-01-user-blocking.md`
+- `28-12-payment-optimization.md`
