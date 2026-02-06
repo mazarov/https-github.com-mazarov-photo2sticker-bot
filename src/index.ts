@@ -960,18 +960,8 @@ bot.on("photo", async (ctx) => {
 // Persistent menu handlers (Reply Keyboard)
 // ============================================
 
-// Menu: Photo button
-bot.hears(["📷 Фото", "📷 Photo"], async (ctx) => {
-  const telegramId = ctx.from?.id;
-  if (!telegramId) return;
-
-  const user = await getUser(telegramId);
-  const lang = user?.lang || "en";
-  await ctx.reply(await getText(lang, "menu.send_photo"), getMainMenuKeyboard(lang));
-});
-
-// Menu: Balance button
-bot.hears(["💰 Баланс", "💰 Balance"], async (ctx) => {
+// Menu: More stickers (buy credits)
+bot.hears(["✨ Ещё стикеры", "✨ More stickers"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
