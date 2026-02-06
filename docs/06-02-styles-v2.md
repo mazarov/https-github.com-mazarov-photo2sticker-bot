@@ -4,9 +4,20 @@
 Улучшить конверсию выбора стилей через иерархическую структуру: пользователь сначала выбирает категорию (группу), затем конкретный подстиль.
 
 ## Ограничения
-- Feature flag: сначала только для тестового пользователя
+- Feature flag: сначала только для тестового пользователя (telegram_id: 606651067)
 - Обратная совместимость: текущие стили продолжают работать
 - Без влияния на worker: генерация получает финальный `style_id`
+
+## Изоляция (ВАЖНО!)
+
+| Компонент | Старые пользователи | Тестовый пользователь (v2) |
+|-----------|---------------------|---------------------------|
+| Таблица стилей | `style_presets` | `style_presets_v2` (новая!) |
+| Таблица групп | — | `style_groups` (новая!) |
+| UI | Плоский список | Группы → подстили |
+| Код | `sendStyleKeyboard()` | `sendStyleGroupsKeyboard()` |
+
+**`style_presets` НЕ ИЗМЕНЯЕТСЯ!**
 
 ---
 
@@ -144,19 +155,27 @@ CREATE INDEX IF NOT EXISTS style_groups_active_idx
 ON style_groups (is_active, sort_order);
 ```
 
-### 3.2 Изменение `style_presets`
+### 3.2 Новая таблица `style_presets_v2` (полная изоляция)
 
 ```sql
-ALTER TABLE style_presets 
-ADD COLUMN IF NOT EXISTS parent_group_id text REFERENCES style_groups(id);
-
-ALTER TABLE style_presets 
-ADD COLUMN IF NOT EXISTS is_v2 boolean DEFAULT false;
+-- Отдельная таблица для подстилей v2 - НЕ трогаем style_presets!
+CREATE TABLE IF NOT EXISTS style_presets_v2 (
+  id text PRIMARY KEY,
+  group_id text NOT NULL REFERENCES style_groups(id),
+  emoji text NOT NULL,
+  name_ru text NOT NULL,
+  name_en text NOT NULL,
+  prompt_hint text NOT NULL,
+  sort_order int DEFAULT 0,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
 
 CREATE INDEX IF NOT EXISTS style_presets_v2_idx 
-ON style_presets (parent_group_id, is_active, sort_order) 
-WHERE is_v2 = true;
+ON style_presets_v2 (group_id, is_active, sort_order);
 ```
+
+**Важно:** Существующая таблица `style_presets` НЕ изменяется. Старый UI продолжает работать как раньше.
 
 ### 3.3 Аналитика
 
@@ -273,10 +292,26 @@ bot.action("style_custom_v2", async (ctx) => {
 ```typescript
 // В photo handler, после загрузки фото:
 if (useStylesV2(telegramId)) {
+  // Новый UI: группы → подстили из style_presets_v2
   await sendStyleGroupsKeyboard(ctx, user, session);
 } else {
+  // Старый UI: плоский список из style_presets (без изменений!)
   await sendStyleKeyboard(ctx, user, session);
 }
+```
+
+### 6.3 Изоляция данных
+
+```typescript
+// Для v2 пользователей:
+// - Группы из style_groups
+// - Подстили из style_presets_v2
+
+// Для обычных пользователей:
+// - Стили из style_presets (как сейчас, без изменений)
+
+// Worker получает style_id и работает одинаково для обоих случаев
+// prompt_hint берётся из соответствующей таблицы
 ```
 
 ---
@@ -334,9 +369,11 @@ GROUP BY selected_style_group;
 ## 9. Checklist
 
 ### Фаза 1: БД
-- [ ] Миграция `036_style_groups.sql`
-- [ ] Вставить группы
-- [ ] Вставить подстили (is_active=false, is_v2=true)
+- [ ] Миграция `036_style_groups.sql` — создать `style_groups`
+- [ ] Миграция `036_style_groups.sql` — создать `style_presets_v2` (отдельная таблица!)
+- [ ] Вставить группы в `style_groups`
+- [ ] Вставить подстили в `style_presets_v2`
+- [ ] **НЕ трогать** существующую `style_presets`
 
 ### Фаза 2: Код
 - [ ] Feature flag в config
