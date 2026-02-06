@@ -6,7 +6,8 @@ type AlertType =
   | "rembg_failed" 
   | "worker_error" 
   | "api_error"
-  | "not_enough_credits";
+  | "not_enough_credits"
+  | "paywall_shown";
 
 interface AlertOptions {
   type: AlertType;
@@ -22,6 +23,7 @@ const EMOJI: Record<AlertType, string> = {
   worker_error: "🔴",
   api_error: "🔴",
   not_enough_credits: "💸",
+  paywall_shown: "🚪",
 };
 
 export async function sendAlert(options: AlertOptions): Promise<void> {
