@@ -710,6 +710,7 @@ async function handleAssistantConfirm(ctx: any, user: any, sessionId: string, la
     style: params.style || "cartoon",
     emotion: params.emotion || "happy",
     pose: params.pose || "default",
+    text: params.text,
   });
 
   // Re-fetch user for fresh credits
@@ -719,7 +720,7 @@ async function handleAssistantConfirm(ctx: any, user: any, sessionId: string, la
   await startGeneration(ctx, freshUser, session, lang, {
     generationType: "style",
     promptFinal,
-    userInput: `[assistant] style: ${params.style}, emotion: ${params.emotion}, pose: ${params.pose}`,
+    userInput: `[assistant] style: ${params.style}, emotion: ${params.emotion}, pose: ${params.pose}, text: ${params.text || "none"}`,
     selectedStyleId: "assistant",
   });
 }
@@ -727,18 +728,19 @@ async function handleAssistantConfirm(ctx: any, user: any, sessionId: string, la
 /**
  * Build final prompt for Gemini image generation from assistant params.
  */
-function buildAssistantPrompt(params: { style: string; emotion: string; pose: string }): string {
+function buildAssistantPrompt(params: { style: string; emotion: string; pose: string; text?: string | null }): string {
+  const textLine = params.text ? `\nText on sticker: "${params.text}"` : "";
   return `Create a telegram sticker of the person from the photo.
 
 Style: ${params.style}
 Emotion: ${params.emotion}
-Pose/gesture: ${params.pose}
+Pose/gesture: ${params.pose}${textLine}
 
 Requirements:
 - White/transparent background
 - Sticker-like proportions (head slightly larger)
 - Clear outlines
-- Expressive and recognizable`;
+- Expressive and recognizable${params.text ? "\n- Text must be clearly readable and well-placed" : ""}`;
 }
 
 // Helper: get active session
@@ -1165,12 +1167,41 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // === AI Assistant: waiting for photo but got text ===
+  // === AI Assistant: waiting for photo but got text — forward to AI ===
+  // AI will respond naturally (about goal) and remind about photo when appropriate
   if (session.state === "assistant_wait_photo") {
-    const reminder = lang === "ru"
-      ? "Сначала пришли фото — а потом я помогу со стилем 📸"
-      : "Send me a photo first — then I'll help with the style 📸";
-    await ctx.reply(reminder, getMainMenuKeyboard(lang));
+    const userText = ctx.message.text.trim();
+    const messages: AssistantMessage[] = Array.isArray(session.assistant_messages)
+      ? [...session.assistant_messages]
+      : [];
+    messages.push({ role: "user", content: userText });
+
+    const systemPrompt = messages.find(m => m.role === "system")?.content || "";
+
+    try {
+      const result = await callAIChat(messages, systemPrompt);
+      messages.push({ role: "assistant", content: result.rawText });
+
+      await supabase
+        .from("sessions")
+        .update({ assistant_messages: messages })
+        .eq("id", session.id);
+
+      await ctx.reply(result.text, getMainMenuKeyboard(lang));
+    } catch (err: any) {
+      console.error("Assistant wait_photo text AI error:", err.message);
+      const reminder = lang === "ru"
+        ? "Понял! А теперь пришли фото — из которого сделаем стикер 📸"
+        : "Got it! Now send me a photo — I'll turn it into a sticker 📸";
+      messages.push({ role: "assistant", content: reminder });
+
+      await supabase
+        .from("sessions")
+        .update({ assistant_messages: messages })
+        .eq("id", session.id);
+
+      await ctx.reply(reminder, getMainMenuKeyboard(lang));
+    }
     return;
   }
 
@@ -1194,8 +1225,8 @@ bot.on("text", async (ctx) => {
       const result = await callAIChat(messages, systemPrompt);
       messages.push({ role: "assistant", content: result.rawText });
 
-      // Check if we reached step 4 (mirror) — show confirm button
-      if (result.params?.step === 4 && !result.params.confirmed) {
+      // Check if we reached step 6 (mirror) — show confirm button
+      if (result.params?.step === 6 && !result.params.confirmed) {
         await supabase
           .from("sessions")
           .update({
@@ -1305,7 +1336,7 @@ bot.on("text", async (ctx) => {
       messages.push({ role: "assistant", content: result.rawText });
 
       // Check if back to mirroring
-      if (result.params?.step === 4 && !result.params.confirmed) {
+      if (result.params?.step === 6 && !result.params.confirmed) {
         await supabase
           .from("sessions")
           .update({
@@ -3285,6 +3316,7 @@ bot.on("successful_payment", async (ctx) => {
         style: params.style || "cartoon",
         emotion: params.emotion || "happy",
         pose: params.pose || "default",
+        text: params.text,
       });
 
       // Save prompt and start generation
