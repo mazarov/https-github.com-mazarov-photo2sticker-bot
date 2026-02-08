@@ -87,11 +87,12 @@ async function runJob(job: any) {
   }
 
   const photos = Array.isArray(session.photos) ? session.photos : [];
+  // Determine generation type: trust state over generation_type column (state is always correct)
   const generationType =
-    session.generation_type || 
-    (session.state === "processing_emotion" ? "emotion" : 
-     session.state === "processing_motion" ? "motion" :
-     session.state === "processing_text" ? "text" : "style");
+    session.state === "processing_emotion" ? "emotion" : 
+    session.state === "processing_motion" ? "motion" :
+    session.state === "processing_text" ? "text" :
+    session.generation_type || "style";
 
   const sourceFileId =
     generationType === "emotion" || generationType === "motion" || generationType === "text"
