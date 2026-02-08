@@ -15,6 +15,17 @@ import {
   type AssistantContext,
   type AssistantParams,
 } from "./lib/ai-chat";
+import {
+  createAssistantSession,
+  getActiveAssistantSession,
+  updateAssistantSession,
+  closeAssistantSession,
+  closeAllActiveAssistantSessions,
+  mapParamsToSessionFields,
+  getAssistantParams,
+  expireOldAssistantSessions,
+  type AssistantSessionRow,
+} from "./lib/assistant-db";
 
 const bot = new Telegraf(config.telegramBotToken);
 const app = express();
@@ -611,6 +622,9 @@ function isAllowedLanguage(languageCode: string): boolean {
  * Start a new AI assistant dialog: create session, call Gemini for greeting, reply to user.
  */
 async function startAssistantDialog(ctx: any, user: any, lang: string) {
+  // Close any active assistant sessions for this user
+  await closeAllActiveAssistantSessions(user.id);
+
   // Cancel all active sessions
   await supabase
     .from("sessions")
@@ -650,22 +664,30 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
 
   const systemPrompt = buildSystemPrompt(assistantCtx);
 
-  try {
-    // Call Gemini to generate greeting (step 0)
-    console.log("startAssistantDialog: Calling Gemini for greeting...");
-    const result = await callAIChat([], systemPrompt);
-    console.log("startAssistantDialog: Gemini response received, length:", result.text.length);
+  // Create assistant_sessions row
+  const initMessages: AssistantMessage[] = [
+    { role: "system", content: systemPrompt },
+  ];
+  const aSession = await createAssistantSession(user.id, newSession.id, initMessages);
+  if (!aSession) {
+    console.error("startAssistantDialog: Failed to create assistant_session");
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    return;
+  }
 
-    // Save messages to session
+  try {
+    // Call AI to generate greeting (step 0)
+    console.log("startAssistantDialog: Calling AI for greeting...");
+    const result = await callAIChat([], systemPrompt);
+    console.log("startAssistantDialog: AI response received, length:", result.text.length);
+
+    // Save messages to assistant_sessions
     const messages: AssistantMessage[] = [
-      { role: "system", content: systemPrompt },
+      ...initMessages,
       { role: "assistant", content: result.rawText },
     ];
 
-    await supabase
-      .from("sessions")
-      .update({ assistant_messages: messages })
-      .eq("id", newSession.id);
+    await updateAssistantSession(aSession.id, { messages });
 
     await ctx.reply(result.text, getMainMenuKeyboard(lang));
   } catch (err: any) {
@@ -676,14 +698,11 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
       : `Hi, ${ctx.from?.first_name || ""}! 👋\nI'm your sticker creation assistant.\nMy job is to make sure you love the result.\n\nSend me a photo you'd like to turn into a sticker.`;
 
     const messages: AssistantMessage[] = [
-      { role: "system", content: buildSystemPrompt(assistantCtx) },
+      ...initMessages,
       { role: "assistant", content: greeting },
     ];
 
-    await supabase
-      .from("sessions")
-      .update({ assistant_messages: messages })
-      .eq("id", newSession.id);
+    await updateAssistantSession(aSession.id, { messages });
 
     await ctx.reply(greeting, getMainMenuKeyboard(lang));
   }
@@ -693,25 +712,30 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
  * Handle assistant confirmation: start generation or show paywall.
  */
 async function handleAssistantConfirm(ctx: any, user: any, sessionId: string, lang: string) {
-  // Re-fetch session to get latest params
+  // Get assistant session for params
+  const aSession = await getActiveAssistantSession(user.id);
+  if (!aSession) {
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    return;
+  }
+
+  // Re-fetch sessions row for generation
   const { data: session } = await supabase
     .from("sessions")
     .select("*")
     .eq("id", sessionId)
     .maybeSingle();
 
-  if (!session?.assistant_params) {
+  if (!session) {
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
     return;
   }
 
-  const params = session.assistant_params;
-  const promptFinal = buildAssistantPrompt({
-    style: params.style || "cartoon",
-    emotion: params.emotion || "happy",
-    pose: params.pose || "default",
-    text: params.text,
-  });
+  const params = getAssistantParams(aSession);
+  const promptFinal = buildAssistantPrompt(params);
+
+  // Mark assistant session as completed
+  await closeAssistantSession(aSession.id, "completed");
 
   // Re-fetch user for fresh credits
   const freshUser = await getUser(user.telegram_id);
@@ -958,6 +982,9 @@ bot.on("photo", async (ctx) => {
   // === AI Assistant: waiting for photo ===
   if (session.state === "assistant_wait_photo") {
     console.log("Assistant photo: received, session:", session.id);
+    const aSession = await getActiveAssistantSession(user.id);
+    if (!aSession) { console.error("Assistant photo: no assistant_session"); return; }
+
     const photos = Array.isArray(session.photos) ? session.photos : [];
     photos.push(photo.file_id);
 
@@ -978,9 +1005,7 @@ bot.on("photo", async (ctx) => {
     console.log("Assistant photo: state updated to assistant_chat");
 
     // Get existing messages and add photo event
-    const messages: AssistantMessage[] = Array.isArray(session.assistant_messages)
-      ? [...session.assistant_messages]
-      : [];
+    const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
     messages.push({ role: "user", content: "[User sent a photo]" });
 
     // Get system prompt from first message
@@ -992,10 +1017,10 @@ bot.on("photo", async (ctx) => {
       console.log("Assistant photo: AI response received, length:", result.text.length);
       messages.push({ role: "assistant", content: result.rawText });
 
-      await supabase
-        .from("sessions")
-        .update({ assistant_messages: messages })
-        .eq("id", session.id);
+      await updateAssistantSession(aSession.id, {
+        messages,
+        ...mapParamsToSessionFields(result.params),
+      });
 
       await ctx.reply(result.text, getMainMenuKeyboard(lang));
       console.log("Assistant photo: reply sent to user");
@@ -1006,10 +1031,7 @@ bot.on("photo", async (ctx) => {
         : "Great photo! Describe the sticker style in your own words (e.g.: anime, cartoon, minimal, etc.)";
       messages.push({ role: "assistant", content: fallback });
 
-      await supabase
-        .from("sessions")
-        .update({ assistant_messages: messages })
-        .eq("id", session.id);
+      await updateAssistantSession(aSession.id, { messages });
 
       await ctx.reply(fallback, getMainMenuKeyboard(lang));
       console.log("Assistant photo: fallback reply sent");
@@ -1019,11 +1041,11 @@ bot.on("photo", async (ctx) => {
 
   // === AI Assistant: new photo during active dialog ===
   if (session.state === "assistant_chat" || session.state === "wait_assistant_confirm") {
-    // Store new photo file_id in session for later use (callback_data has 64 byte limit)
-    await supabase
-      .from("sessions")
-      .update({ pending_photo_file_id: photo.file_id })
-      .eq("id", session.id);
+    // Store new photo file_id in assistant_sessions for later use
+    const aSession = await getActiveAssistantSession(user.id);
+    if (aSession) {
+      await updateAssistantSession(aSession.id, { pending_photo_file_id: photo.file_id });
+    }
 
     await ctx.reply(
       lang === "ru"
@@ -1104,14 +1126,10 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
   // If user is in assistant mode, cancel it and switch to manual
   if (session?.state?.startsWith("assistant_") || session?.state === "wait_assistant_confirm") {
     console.log("Styles: switching from assistant to manual mode, session:", session.id);
+    await closeAllActiveAssistantSessions(user.id, "abandoned");
     await supabase
       .from("sessions")
-      .update({
-        state: "wait_style",
-        assistant_messages: [],
-        assistant_params: null,
-        assistant_error_count: 0,
-      })
+      .update({ state: "wait_style" })
       .eq("id", session.id);
   }
 
@@ -1170,10 +1188,11 @@ bot.on("text", async (ctx) => {
   // === AI Assistant: waiting for photo but got text — forward to AI ===
   // AI will respond naturally (about goal) and remind about photo when appropriate
   if (session.state === "assistant_wait_photo") {
+    const aSession = await getActiveAssistantSession(user.id);
+    if (!aSession) { console.error("assistant_wait_photo: no assistant_session"); return; }
+
     const userText = ctx.message.text.trim();
-    const messages: AssistantMessage[] = Array.isArray(session.assistant_messages)
-      ? [...session.assistant_messages]
-      : [];
+    const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
     messages.push({ role: "user", content: userText });
 
     const systemPrompt = messages.find(m => m.role === "system")?.content || "";
@@ -1182,10 +1201,17 @@ bot.on("text", async (ctx) => {
       const result = await callAIChat(messages, systemPrompt);
       messages.push({ role: "assistant", content: result.rawText });
 
-      await supabase
-        .from("sessions")
-        .update({ assistant_messages: messages })
-        .eq("id", session.id);
+      // Extract goal from early conversation
+      const goalUpdate: Partial<AssistantSessionRow> = {};
+      if (!aSession.goal && result.params?.step && result.params.step <= 1) {
+        goalUpdate.goal = userText; // User's first text is likely the goal
+      }
+
+      await updateAssistantSession(aSession.id, {
+        messages,
+        ...mapParamsToSessionFields(result.params),
+        ...goalUpdate,
+      });
 
       await ctx.reply(result.text, getMainMenuKeyboard(lang));
     } catch (err: any) {
@@ -1195,10 +1221,7 @@ bot.on("text", async (ctx) => {
         : "Got it! Now send me a photo — I'll turn it into a sticker 📸";
       messages.push({ role: "assistant", content: reminder });
 
-      await supabase
-        .from("sessions")
-        .update({ assistant_messages: messages })
-        .eq("id", session.id);
+      await updateAssistantSession(aSession.id, { messages });
 
       await ctx.reply(reminder, getMainMenuKeyboard(lang));
     }
@@ -1207,34 +1230,33 @@ bot.on("text", async (ctx) => {
 
   // === AI Assistant: active dialog ===
   if (session.state === "assistant_chat") {
+    const aSession = await getActiveAssistantSession(user.id);
+    if (!aSession) { console.error("assistant_chat: no assistant_session"); return; }
+
     const userText = ctx.message.text.trim();
 
     // Get existing messages
-    const messages: AssistantMessage[] = Array.isArray(session.assistant_messages)
-      ? [...session.assistant_messages]
-      : [];
+    const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
     messages.push({ role: "user", content: userText });
 
     // Get system prompt from first message
     const systemPrompt = messages.find(m => m.role === "system")?.content || "";
 
-    // Track error count for this session
-    const errorCount = session.assistant_error_count || 0;
+    // Track error count
+    const errorCount = aSession.error_count || 0;
 
     try {
       const result = await callAIChat(messages, systemPrompt);
       messages.push({ role: "assistant", content: result.rawText });
 
+      const paramFields = mapParamsToSessionFields(result.params);
+
       // Check if we reached step 6 (mirror) — show confirm button
       if (result.params?.step === 6 && !result.params.confirmed) {
+        await updateAssistantSession(aSession.id, { messages, ...paramFields });
         await supabase
           .from("sessions")
-          .update({
-            assistant_messages: messages,
-            assistant_params: result.params,
-            state: "wait_assistant_confirm",
-            is_active: true,
-          })
+          .update({ state: "wait_assistant_confirm", is_active: true })
           .eq("id", session.id);
 
         await ctx.reply(result.text);
@@ -1248,16 +1270,11 @@ bot.on("text", async (ctx) => {
           ])
         );
       } else if (result.params?.confirmed) {
-        // Step 5: user confirmed via text
-        const params = result.params;
+        // User confirmed via text
+        await updateAssistantSession(aSession.id, { messages, ...paramFields });
         await supabase
           .from("sessions")
-          .update({
-            assistant_messages: messages,
-            assistant_params: { style: params.style, emotion: params.emotion, pose: params.pose },
-            state: "wait_assistant_confirm", // will proceed in confirm handler
-            is_active: true,
-          })
+          .update({ state: "wait_assistant_confirm", is_active: true })
           .eq("id", session.id);
 
         await ctx.reply(result.text);
@@ -1265,15 +1282,11 @@ bot.on("text", async (ctx) => {
         await handleAssistantConfirm(ctx, user, session.id, lang);
       } else {
         // Normal dialog step
-        await supabase
-          .from("sessions")
-          .update({
-            assistant_messages: messages,
-            assistant_params: result.params,
-            assistant_error_count: 0, // reset on success
-            is_active: true,
-          })
-          .eq("id", session.id);
+        await updateAssistantSession(aSession.id, {
+          messages,
+          ...paramFields,
+          error_count: 0, // reset on success
+        });
 
         await ctx.reply(result.text, getMainMenuKeyboard(lang));
       }
@@ -1281,13 +1294,11 @@ bot.on("text", async (ctx) => {
       console.error("Assistant chat AI error:", err.message);
       const newErrorCount = errorCount + 1;
 
-      await supabase
-        .from("sessions")
-        .update({ assistant_error_count: newErrorCount })
-        .eq("id", session.id);
+      await updateAssistantSession(aSession.id, { error_count: newErrorCount });
 
       if (newErrorCount >= 3) {
         // Level 3: escape to manual mode
+        await closeAssistantSession(aSession.id, "error");
         const escapeMsg = lang === "ru"
           ? "К сожалению, помощник временно недоступен 😔\nНажми 🎨 Стили, чтобы выбрать стиль вручную."
           : "Unfortunately, the assistant is temporarily unavailable 😔\nTap 🎨 Styles to choose a style manually.";
@@ -1323,10 +1334,11 @@ bot.on("text", async (ctx) => {
       return;
     }
 
+    const aSession = await getActiveAssistantSession(user.id);
+    if (!aSession) { console.error("wait_assistant_confirm: no assistant_session"); return; }
+
     // User wants to change something — go back to assistant_chat
-    const messages: AssistantMessage[] = Array.isArray(session.assistant_messages)
-      ? [...session.assistant_messages]
-      : [];
+    const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
     messages.push({ role: "user", content: ctx.message.text.trim() });
 
     const systemPrompt = messages.find(m => m.role === "system")?.content || "";
@@ -1335,16 +1347,14 @@ bot.on("text", async (ctx) => {
       const result = await callAIChat(messages, systemPrompt);
       messages.push({ role: "assistant", content: result.rawText });
 
+      const paramFields = mapParamsToSessionFields(result.params);
+
       // Check if back to mirroring
       if (result.params?.step === 6 && !result.params.confirmed) {
+        await updateAssistantSession(aSession.id, { messages, ...paramFields });
         await supabase
           .from("sessions")
-          .update({
-            assistant_messages: messages,
-            assistant_params: result.params,
-            state: "wait_assistant_confirm",
-            is_active: true,
-          })
+          .update({ state: "wait_assistant_confirm", is_active: true })
           .eq("id", session.id);
 
         await ctx.reply(result.text);
@@ -1358,14 +1368,10 @@ bot.on("text", async (ctx) => {
           ])
         );
       } else {
+        await updateAssistantSession(aSession.id, { messages, ...paramFields });
         await supabase
           .from("sessions")
-          .update({
-            assistant_messages: messages,
-            assistant_params: result.params,
-            state: "assistant_chat",
-            is_active: true,
-          })
+          .update({ state: "assistant_chat", is_active: true })
           .eq("id", session.id);
 
         await ctx.reply(result.text, getMainMenuKeyboard(lang));
@@ -2579,7 +2585,8 @@ bot.action("assistant_new_photo", async (ctx) => {
   const session = await getActiveSession(user.id);
   if (!session?.id) return;
 
-  const newPhotoFileId = session.pending_photo_file_id;
+  const aSession = await getActiveAssistantSession(user.id);
+  const newPhotoFileId = aSession?.pending_photo_file_id;
   if (!newPhotoFileId) {
     await ctx.reply(lang === "ru" ? "Фото не найдено, пришли ещё раз." : "Photo not found, please send again.");
     return;
@@ -2588,9 +2595,7 @@ bot.action("assistant_new_photo", async (ctx) => {
   photos.push(newPhotoFileId);
 
   // Update photo and notify assistant
-  const messages: AssistantMessage[] = Array.isArray(session.assistant_messages)
-    ? [...session.assistant_messages]
-    : [];
+  const messages: AssistantMessage[] = Array.isArray(aSession!.messages) ? [...aSession!.messages] : [];
   messages.push({ role: "user", content: "[User sent a new photo and chose to use it]" });
 
   const systemPrompt = messages.find(m => m.role === "system")?.content || "";
@@ -2599,12 +2604,17 @@ bot.action("assistant_new_photo", async (ctx) => {
     const result = await callAIChat(messages, systemPrompt);
     messages.push({ role: "assistant", content: result.rawText });
 
+    await updateAssistantSession(aSession!.id, {
+      messages,
+      pending_photo_file_id: null,
+      ...mapParamsToSessionFields(result.params),
+    });
+
     await supabase
       .from("sessions")
       .update({
         photos,
         current_photo_file_id: newPhotoFileId,
-        assistant_messages: messages,
         state: "assistant_chat",
         is_active: true,
       })
@@ -3323,23 +3333,35 @@ bot.on("successful_payment", async (ctx) => {
     const isWaitingForCredits = session?.state === "wait_buy_credit" || session?.state === "wait_first_purchase";
     
     // === AI Assistant: paid after paywall — trigger generation with assistant params ===
-    if (isWaitingForCredits && session.assistant_params && !session.prompt_final) {
-      const params = session.assistant_params;
-      const promptFinal = buildAssistantPrompt({
-        style: params.style || "cartoon",
-        emotion: params.emotion || "happy",
-        pose: params.pose || "default",
-        text: params.text,
-      });
+    if (isWaitingForCredits && !session.prompt_final) {
+      // Check if there's a completed/active assistant session with params
+      const { data: aSessionForPayment } = await supabase
+        .from("assistant_sessions")
+        .select("*")
+        .eq("session_id", session.id)
+        .in("status", ["active", "completed"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      // Save prompt and start generation
-      await supabase
-        .from("sessions")
-        .update({ prompt_final: promptFinal, user_input: `[assistant] ${params.style}, ${params.emotion}, ${params.pose}` })
-        .eq("id", session.id);
+      if (aSessionForPayment?.style) {
+        const params = getAssistantParams(aSessionForPayment);
+        const promptFinal = buildAssistantPrompt(params);
 
-      // Now fall through to the normal auto-continue logic below
-      session.prompt_final = promptFinal;
+        // Save prompt and start generation
+        await supabase
+          .from("sessions")
+          .update({ prompt_final: promptFinal, user_input: `[assistant] ${params.style}, ${params.emotion}, ${params.pose}` })
+          .eq("id", session.id);
+
+        // Mark assistant session as completed
+        if (aSessionForPayment.status === "active") {
+          await closeAssistantSession(aSessionForPayment.id, "completed");
+        }
+
+        // Now fall through to the normal auto-continue logic below
+        session.prompt_final = promptFinal;
+      }
     }
 
     if (isWaitingForCredits && session.prompt_final) {
@@ -3580,24 +3602,20 @@ const ASSISTANT_SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 async function processExpiredAssistantSessions() {
   try {
-    const cutoff = new Date(Date.now() - ASSISTANT_SESSION_TTL_MS).toISOString();
+    // Expire old assistant_sessions rows
+    const expiredCount = await expireOldAssistantSessions(ASSISTANT_SESSION_TTL_MS);
+    if (expiredCount > 0) {
+      console.log(`Expired ${expiredCount} assistant sessions (30 min timeout)`);
+    }
 
-    const { data: expired, error } = await supabase
+    // Also expire the corresponding sessions rows
+    const cutoff = new Date(Date.now() - ASSISTANT_SESSION_TTL_MS).toISOString();
+    await supabase
       .from("sessions")
       .update({ state: "expired", is_active: false })
       .in("state", ["assistant_wait_photo", "assistant_chat", "wait_assistant_confirm"])
       .eq("is_active", true)
-      .lt("updated_at", cutoff)
-      .select("id");
-
-    if (error) {
-      console.error("processExpiredAssistantSessions error:", error);
-      return;
-    }
-
-    if (expired?.length) {
-      console.log(`Expired ${expired.length} assistant sessions (30 min timeout)`);
-    }
+      .lt("updated_at", cutoff);
   } catch (err) {
     console.error("processExpiredAssistantSessions error:", err);
   }
