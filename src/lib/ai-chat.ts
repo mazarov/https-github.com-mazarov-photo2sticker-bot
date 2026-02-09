@@ -442,7 +442,7 @@ async function callOpenAI(
       tools: openaiTools,
       tool_choice: "auto",
       temperature: 0.7,
-      max_tokens: 1024,
+      max_completion_tokens: 1024,
     },
     {
       headers: {
