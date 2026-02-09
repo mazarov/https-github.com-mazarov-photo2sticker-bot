@@ -23,6 +23,8 @@ import {
   getAssistantParams,
   expireOldAssistantSessions,
   getLastGoalForUser,
+  getRecentAssistantSession,
+  reactivateAssistantSession,
   type AssistantSessionRow,
 } from "./lib/assistant-db";
 
@@ -1502,8 +1504,21 @@ bot.on("text", async (ctx) => {
   // confirm_sticker/wait_style/etc. but assistant_session is still active.
   // Route text back to assistant so user can request changes or continue dialog.
   if (!session.state?.startsWith("assistant_") && !["processing", "processing_emotion", "processing_motion", "processing_text"].includes(session.state)) {
-    const activeAssistant = await getActiveAssistantSession(user.id);
-    if (activeAssistant && activeAssistant.status === "active") {
+    let activeAssistant = await getActiveAssistantSession(user.id);
+    console.log("Re-route check: state=", session.state, "activeAssistant=", activeAssistant?.id || "null", "status=", activeAssistant?.status || "n/a");
+
+    // Fallback: if no active session found, check for recently-updated session (may have been unexpectedly closed)
+    if (!activeAssistant) {
+      const recent = await getRecentAssistantSession(user.id);
+      if (recent) {
+        console.log("Re-route fallback: found recent session", recent.id, "status:", recent.status, "updated:", recent.updated_at);
+        // Reactivate it so the user can continue dialog
+        await reactivateAssistantSession(recent.id);
+        activeAssistant = { ...recent, status: "active" };
+      }
+    }
+
+    if (activeAssistant) {
       console.log("Assistant re-route: state was", session.state, "→ switching to assistant_chat, aSession:", activeAssistant.id);
       await supabase.from("sessions")
         .update({ state: "assistant_chat", is_active: true })
@@ -1817,6 +1832,14 @@ bot.on("text", async (ctx) => {
       await ctx.reply(await getText(lang, "photo.need_photo"));
     } else if (session.state === "wait_emotion") {
       await ctx.reply(await getText(lang, "emotion.choose"));
+    } else if (session.state === "confirm_sticker") {
+      // User sent text after sticker generation but re-route didn't find an assistant session
+      // Suggest they start a new assistant dialog or use manual mode
+      console.log("confirm_sticker text fallback: user sent text but no active assistant. Text:", ctx.message.text?.slice(0, 50));
+      const msg = lang === "ru"
+        ? "Нажми 🤖 Помощник, чтобы создать новый стикер, или 🎨 Стили для ручного режима."
+        : "Tap 🤖 Assistant to create a new sticker, or 🎨 Styles for manual mode.";
+      await ctx.reply(msg, getMainMenuKeyboard(lang));
     }
     return;
   }

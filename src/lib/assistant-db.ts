@@ -269,6 +269,52 @@ export function getAssistantParams(session: AssistantSessionRow): {
 }
 
 /**
+ * Get the most recent assistant session for a user regardless of status.
+ * Used as a fallback when getActiveAssistantSession returns null (session was unexpectedly closed).
+ * Only returns sessions updated within the last `maxAgeMs` milliseconds.
+ */
+export async function getRecentAssistantSession(
+  userId: string,
+  maxAgeMs: number = 5 * 60 * 1000
+): Promise<AssistantSessionRow | null> {
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+
+  const { data, error } = await supabase
+    .from("assistant_sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .gte("updated_at", cutoff)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("getRecentAssistantSession error:", error.message);
+    return null;
+  }
+  return data;
+}
+
+/**
+ * Reactivate a previously closed assistant session.
+ */
+export async function reactivateAssistantSession(id: string): Promise<void> {
+  const { error } = await supabase
+    .from("assistant_sessions")
+    .update({
+      status: "active",
+      completed_at: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+
+  if (error) {
+    console.error("reactivateAssistantSession error:", error.message);
+  }
+}
+
+/**
  * Get the last known goal for a user from any assistant session (active, completed, abandoned).
  * Used when starting a new dialog to avoid re-asking the goal.
  */
