@@ -51,6 +51,86 @@ function dilateAlpha(alpha: Buffer, w: number, h: number, radius: number): Buffe
  * 5. Composite: white border (bottom) + original (top)
  * 6. Resize to 512x512 + convert to WebP
  */
+/**
+ * Escape XML special characters for safe SVG embedding.
+ */
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+/**
+ * Add text overlay to a sticker using SVG compositing.
+ * Text is rendered with white fill and black stroke for maximum readability.
+ * Returns a 512x512 WebP buffer ready for Telegram.
+ *
+ * @param inputBuffer - WebP/PNG sticker buffer
+ * @param text - Text to overlay (truncated to 30 chars)
+ * @param position - "top" or "bottom" (default: "bottom")
+ */
+export async function addTextToSticker(
+  inputBuffer: Buffer,
+  text: string,
+  position: "top" | "bottom" = "bottom"
+): Promise<Buffer> {
+  // Truncate long text
+  let displayText = text.trim();
+  if (displayText.length > 30) {
+    displayText = displayText.substring(0, 27) + "...";
+  }
+
+  // Auto-scale font size based on text length
+  let fontSize: number;
+  if (displayText.length <= 8) {
+    fontSize = 64;
+  } else if (displayText.length <= 15) {
+    fontSize = 52;
+  } else if (displayText.length <= 22) {
+    fontSize = 42;
+  } else {
+    fontSize = 34;
+  }
+
+  const strokeWidth = Math.max(3, Math.round(fontSize / 12));
+  const yPos = position === "top" ? `${fontSize + 10}` : `${512 - 15}`;
+
+  // Build SVG text overlay (512x512 to match sticker dimensions)
+  const svg = `<svg width="512" height="512" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .sticker-text {
+      font-family: "Arial Black", "Noto Sans", "DejaVu Sans", Arial, sans-serif;
+      font-size: ${fontSize}px;
+      font-weight: 900;
+      paint-order: stroke fill;
+      fill: white;
+      stroke: black;
+      stroke-width: ${strokeWidth}px;
+      stroke-linejoin: round;
+    }
+  </style>
+  <text x="256" y="${yPos}" text-anchor="middle" class="sticker-text">${escapeXml(displayText)}</text>
+</svg>`;
+
+  const svgBuffer = Buffer.from(svg);
+
+  // Composite SVG text over the sticker
+  const result = await sharp(inputBuffer)
+    .ensureAlpha()
+    .resize(512, 512, {
+      fit: "contain",
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    })
+    .composite([{ input: svgBuffer, blend: "over" }])
+    .webp()
+    .toBuffer();
+
+  return result;
+}
+
 export async function addWhiteBorder(inputBuffer: Buffer, borderWidth: number = 8): Promise<Buffer> {
   // Decode to raw RGBA
   const image = sharp(inputBuffer).ensureAlpha();

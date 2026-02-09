@@ -6,7 +6,7 @@ import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
 import { getFilePath, downloadFile, sendSticker } from "./lib/telegram";
-import { addWhiteBorder } from "./lib/image-utils";
+import { addWhiteBorder, addTextToSticker } from "./lib/image-utils";
 import {
   buildSystemPrompt,
   callAIChat,
@@ -1687,7 +1687,7 @@ bot.on("text", async (ctx) => {
   // If user was in assistant flow and sticker was generated, session.state moved to
   // confirm_sticker/wait_style/etc. but assistant_session is still active.
   // Route text back to assistant so user can request changes or continue dialog.
-  if (!session.state?.startsWith("assistant_") && !["processing", "processing_emotion", "processing_motion", "processing_text"].includes(session.state)) {
+  if (!session.state?.startsWith("assistant_") && !["processing", "processing_emotion", "processing_motion", "processing_text", "wait_text_overlay"].includes(session.state)) {
     let activeAssistant = await getActiveAssistantSession(user.id);
     console.log("Re-route check: state=", session.state, "activeAssistant=", activeAssistant?.id || "null", "status=", activeAssistant?.status || "n/a");
 
@@ -2007,6 +2007,88 @@ bot.on("text", async (ctx) => {
     return;
   }
 
+  // Programmatic text overlay (no AI, no credits)
+  if (session.state === "wait_text_overlay") {
+    const textInput = ctx.message.text.trim();
+    if (!session.last_sticker_file_id) {
+      await ctx.reply(await getText(lang, "error.no_stickers_added"));
+      return;
+    }
+
+    if (!textInput) {
+      await ctx.reply(lang === "ru"
+        ? "✏️ Напиши текст для стикера:"
+        : "✏️ Type the text for the sticker:");
+      return;
+    }
+
+    const stickerId = session.user_input; // sticker UUID stored when button was clicked
+    const processingMsg = await ctx.reply(lang === "ru" ? "✏️ Добавляю текст..." : "✏️ Adding text...");
+
+    try {
+      // Download current sticker via Telegram API
+      const filePath = await getFilePath(session.last_sticker_file_id);
+      const stickerBuffer = await downloadFile(filePath);
+      console.log("text_overlay: downloaded sticker, size:", stickerBuffer.length);
+
+      // Add text overlay via Sharp + SVG
+      const textBuffer = await addTextToSticker(stickerBuffer, textInput, "bottom");
+      console.log("text_overlay: result buffer size:", textBuffer.length);
+
+      // Build buttons (same as post-generation)
+      const addToPackText = await getText(lang, "btn.add_to_pack");
+      const assistantText = lang === "ru" ? "🤖 Ассистент" : "🤖 Assistant";
+      const changeEmotionText = await getText(lang, "btn.change_emotion");
+      const changeMotionText = await getText(lang, "btn.change_motion");
+      const addTextText = await getText(lang, "btn.add_text");
+      const toggleBorderText = await getText(lang, "btn.toggle_border");
+
+      const btnStickerId = stickerId || "unknown";
+      const replyMarkup = {
+        inline_keyboard: [
+          [{ text: addToPackText, callback_data: `add_to_pack:${btnStickerId}` }],
+          [
+            { text: assistantText, callback_data: "assistant_restart" },
+            { text: changeEmotionText, callback_data: `change_emotion:${btnStickerId}` },
+          ],
+          [
+            { text: changeMotionText, callback_data: `change_motion:${btnStickerId}` },
+            { text: toggleBorderText, callback_data: `toggle_border:${btnStickerId}` },
+          ],
+          [
+            { text: addTextText, callback_data: `add_text:${btnStickerId}` },
+          ],
+        ],
+      };
+
+      // Send sticker with text overlay
+      const newFileId = await sendSticker(user.telegram_id, textBuffer, replyMarkup);
+      console.log("text_overlay: sent sticker, new file_id:", newFileId?.substring(0, 30) + "...");
+
+      // Update telegram_file_id in DB
+      if (newFileId && stickerId) {
+        await supabase
+          .from("stickers")
+          .update({ telegram_file_id: newFileId })
+          .eq("id", stickerId);
+        console.log("text_overlay: updated sticker telegram_file_id");
+      }
+
+      // Delete processing message
+      try {
+        await ctx.deleteMessage(processingMsg.message_id);
+      } catch (_) {}
+    } catch (err: any) {
+      console.error("text_overlay error:", err.message);
+      try { await ctx.deleteMessage(processingMsg.message_id); } catch (_) {}
+      await ctx.reply(lang === "ru"
+        ? "❌ Не удалось добавить текст. Попробуйте ещё раз."
+        : "❌ Failed to add text. Please try again.");
+    }
+    return;
+  }
+
+  // Legacy AI text generation (fallback for old sessions)
   if (session.state === "wait_text") {
     const textInput = ctx.message.text.trim();
     if (!session.last_sticker_file_id) {
@@ -3109,7 +3191,7 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
   if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
-      .insert({ user_id: user.id, state: "wait_text", is_active: true, env: config.appEnv })
+      .insert({ user_id: user.id, state: "wait_text_overlay", is_active: true, env: config.appEnv })
       .select()
       .single();
     session = newSession;
@@ -3120,15 +3202,17 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
   await supabase
     .from("sessions")
     .update({
-      state: "wait_text",
+      state: "wait_text_overlay",
       is_active: true,
       last_sticker_file_id: sticker.telegram_file_id,
-      current_photo_file_id: sticker.source_photo_file_id,
+      user_input: stickerId, // store sticker UUID for DB update after overlay
       pending_generation_type: null,
     })
     .eq("id", session.id);
 
-  await ctx.reply(await getText(lang, "text.prompt"));
+  await ctx.reply(lang === "ru"
+    ? "✏️ Напиши текст для стикера (до 30 символов):"
+    : "✏️ Type the text for the sticker (up to 30 characters):");
 });
 
 // Callback: toggle white border on sticker (post-processing, no credits)

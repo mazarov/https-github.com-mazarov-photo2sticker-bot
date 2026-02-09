@@ -1,5 +1,8 @@
 FROM node:20-alpine
 
+# Install fonts for SVG text rendering (Cyrillic + Latin)
+RUN apk add --no-cache fontconfig font-noto
+
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
