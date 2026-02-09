@@ -904,12 +904,12 @@ async function getAssistantSystemPrompt(
   const presets = await getStylePresets();
   const availableStyles = presets.map(s => ({ id: s.id, name_en: s.name_en }));
 
-  // Inject trial budget only when user qualifies
+  // Inject trial budget only when user qualifies (new users with <= 2 generations)
   let trialBudgetRemaining: number | undefined;
   if (userContext
     && userContext.credits === 0
     && !userContext.hasPurchased
-    && userContext.totalGenerations === 0) {
+    && userContext.totalGenerations <= 2) {
     const todayCount = await getTodayTrialCreditsCount();
     trialBudgetRemaining = Math.max(0, 20 - todayCount);
   }
@@ -1145,10 +1145,21 @@ async function handleTrialCreditAction(
   if (action === "grant_credit") {
     // Code ALWAYS verifies limits — even if AI said "grant"
     const todayCount = await getTodayTrialCreditsCount();
+
+    // Check if this user already received a trial credit (prevent duplicates)
+    const { count: userTrialCount } = await supabase
+      .from("assistant_sessions")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .like("goal", "%[trial: grant%");
+    const alreadyGranted = (userTrialCount || 0) > 0;
+
     const canGrant = todayCount < 20
       && (user.credits || 0) === 0
       && !user.has_purchased
-      && (user.total_generations || 0) === 0;
+      && (user.total_generations || 0) <= 2
+      && !alreadyGranted;
 
     if (canGrant) {
       await supabase

@@ -23,8 +23,9 @@ AI вызывает `grant_trial_credit` **ВМЕСТО** `confirm_and_generate`
 - Пользователь подтвердил все параметры (стиль, эмоция, поза)
 - `credits === 0` — нет кредитов
 - `has_purchased === false` — никогда не покупал
-- `total_generations === 0` — никогда не генерировал (доп. защита)
+- `total_generations <= 2` — не более 2 генераций (новые пользователи)
 - `remaining > 0` — бюджет не исчерпан
+- Пользователь ещё **не получал** trial credit ранее (проверка тега `[trial: grant` в `assistant_sessions.goal`)
 
 Если хоть одно условие не выполнено — AI вызывает `confirm_and_generate` как обычно.
 
@@ -134,7 +135,7 @@ The user should feel this is a natural gift, not a calculated decision.
 
 ## Данные для [SYSTEM STATE]
 
-В `buildStateInjection()` добавить (только если `credits === 0` и `has_purchased === false`):
+В `buildStateInjection()` добавить (только если `credits === 0`, `has_purchased === false` и `total_generations <= 2`):
 
 ```typescript
 const todayGranted = await getTodayTrialCreditsCount();
@@ -201,7 +202,8 @@ if (action === "grant_credit") {
   const canGrant = todayCount < 20
     && user.credits === 0
     && !user.has_purchased
-    && user.total_generations === 0;
+    && user.total_generations <= 2
+    && !alreadyGranted;  // проверка: пользователь ещё не получал trial
 
   if (canGrant) {
     await supabase
@@ -273,7 +275,7 @@ if (action === "deny_credit") {
 User confirms all params → AI checks [SYSTEM STATE]:
   ├── credits > 0 → confirm_and_generate() (как сейчас)
   ├── credits = 0, has_purchased = true → confirm_and_generate() → paywall в коде
-  └── credits = 0, has_purchased = false, total_generations = 0:
+  └── credits = 0, has_purchased = false, total_generations ≤ 2, no prior grant:
       ├── budget > 0 → AI вызывает grant_trial_credit(grant/deny)
       │   ├── grant → код проверяет лимит → +1 credit → generate
       │   └── deny → тёплый текст от AI + sendBuyCreditsMenu
@@ -339,8 +341,8 @@ LIMIT 14;
 ## Защита от злоупотреблений
 
 1. **Код всегда проверяет лимит** — даже если AI сказал grant
-2. **`total_generations === 0`** — только полностью новые пользователи
-3. **Максимум 1 trial на пользователя** — через тег в goal (повторный grant невозможен, т.к. после первого `total_generations > 0`)
+2. **`total_generations <= 2`** — только новые пользователи (до 2 генераций включительно)
+3. **Максимум 1 trial на пользователя** — явная проверка тега `[trial: grant` в `assistant_sessions.goal` (повторный grant блокируется даже если `total_generations <= 2`)
 4. **Глобальный лимит 20/день** — через `getTodayTrialCreditsCount()`
 5. **AI не знает слово "trial"** — в промпте запрещено упоминать бесплатные кредиты и бюджет
 
