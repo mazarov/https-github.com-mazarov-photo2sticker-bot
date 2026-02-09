@@ -839,7 +839,13 @@ async function processAssistantResult(
     sessionUpdates = { ...toolResult.updates };
 
     if (toolResult.action === "confirm") {
-      action = "confirm";
+      // Guard: don't confirm if params are missing — LLM jumped ahead
+      if (!allParamsCollected({ ...aSession, ...sessionUpdates } as AssistantSessionRow)) {
+        console.warn("[Assistant] confirm_and_generate called but params incomplete! style:", aSession.style, "emotion:", aSession.emotion, "pose:", aSession.pose, "— falling back to normal");
+        // Don't set action to confirm — will fall through to "normal" and ask for missing param
+      } else {
+        action = "confirm";
+      }
     } else if (toolResult.action === "photo") {
       action = "photo";
     } else if (toolResult.action === "params") {
@@ -1152,6 +1158,19 @@ bot.on("photo", async (ctx) => {
   const photo = ctx.message.photo?.[ctx.message.photo.length - 1];
   if (!photo) return;
 
+  // === AI Assistant: re-route to assistant_wait_photo if assistant is active after generation ===
+  if (!session.state?.startsWith("assistant_") && !["processing", "processing_emotion", "processing_motion", "processing_text"].includes(session.state)) {
+    const activeAssistant = await getActiveAssistantSession(user.id);
+    if (activeAssistant && activeAssistant.status === "active") {
+      console.log("Assistant photo re-route: state was", session.state, "→ switching to assistant_wait_photo");
+      await supabase.from("sessions")
+        .update({ state: "assistant_wait_photo", is_active: true })
+        .eq("id", session.id);
+      session.state = "assistant_wait_photo";
+      session.is_active = true;
+    }
+  }
+
   // === AI Assistant: waiting for photo ===
   if (session.state === "assistant_wait_photo") {
     console.log("Assistant photo: received, session:", session.id);
@@ -1375,6 +1394,23 @@ bot.on("text", async (ctx) => {
   if (!session?.id) {
     await ctx.reply(await getText(lang, "start.need_start"));
     return;
+  }
+
+  // === AI Assistant: re-route to assistant after sticker generation ===
+  // If user was in assistant flow and sticker was generated, session.state moved to
+  // confirm_sticker/wait_style/etc. but assistant_session is still active.
+  // Route text back to assistant so user can request changes or continue dialog.
+  if (!session.state?.startsWith("assistant_") && !["processing", "processing_emotion", "processing_motion", "processing_text"].includes(session.state)) {
+    const activeAssistant = await getActiveAssistantSession(user.id);
+    if (activeAssistant && activeAssistant.status === "active") {
+      console.log("Assistant re-route: state was", session.state, "→ switching to assistant_chat, aSession:", activeAssistant.id);
+      await supabase.from("sessions")
+        .update({ state: "assistant_chat", is_active: true })
+        .eq("id", session.id);
+      // Update local session object for downstream handlers
+      session.state = "assistant_chat";
+      session.is_active = true;
+    }
   }
 
   // === AI Assistant: waiting for photo but got text — forward to AI ===
