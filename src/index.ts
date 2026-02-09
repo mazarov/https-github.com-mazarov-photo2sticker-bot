@@ -3199,16 +3199,46 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
 
   if (!session?.id) return;
 
-  await supabase
+  console.log("add_text: updating session", session.id, "from state:", session.state, "to wait_text_overlay");
+  const { error: updateErr } = await supabase
     .from("sessions")
     .update({
       state: "wait_text_overlay",
       is_active: true,
       last_sticker_file_id: sticker.telegram_file_id,
-      user_input: stickerId, // store sticker UUID for DB update after overlay
+      user_input: stickerId,
       pending_generation_type: null,
     })
     .eq("id", session.id);
+
+  if (updateErr) {
+    console.error("add_text: session update FAILED:", updateErr.message, updateErr.code);
+    // Fallback: try without user_input in case column doesn't accept this value
+    const { error: retryErr } = await supabase
+      .from("sessions")
+      .update({
+        state: "wait_text_overlay",
+        is_active: true,
+        last_sticker_file_id: sticker.telegram_file_id,
+        pending_generation_type: null,
+      })
+      .eq("id", session.id);
+    if (retryErr) {
+      console.error("add_text: retry update also FAILED:", retryErr.message);
+    } else {
+      console.log("add_text: retry succeeded (without user_input)");
+    }
+  } else {
+    console.log("add_text: session updated to wait_text_overlay OK");
+  }
+
+  // Verify the update persisted
+  const { data: verify } = await supabase
+    .from("sessions")
+    .select("state, is_active")
+    .eq("id", session.id)
+    .maybeSingle();
+  console.log("add_text: verify after update — state:", verify?.state, "is_active:", verify?.is_active);
 
   await ctx.reply(lang === "ru"
     ? "✏️ Напиши текст для стикера (до 30 символов):"
