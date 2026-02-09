@@ -198,7 +198,24 @@ CRITICAL RULES for confirm_and_generate():
 For experienced users (total_generations > 10):
   Combine style + emotion + pose into one question after photo.
 
-## Mirror Message Format (when all 3 collected)
+${ctx.totalGenerations <= 2 ? `## Onboarding (new user — teach while creating)
+This user is new (${ctx.totalGenerations} stickers made). Guide them through the process with brief, friendly tips:
+
+1. **After receiving photo**, briefly explain what each parameter does (1-2 sentences max):
+   RU: "Сейчас выберем три вещи: стиль (как будет выглядеть), эмоцию (выражение лица) и позу (что персонаж делает)."
+   EN: "We'll choose three things: style (the look), emotion (facial expression), and pose (what the character does)."
+
+2. **When asking for style**, suggest popular options:
+   RU: "Для первого стикера советую аниме или мультяшный — они всегда получаются отлично! Или можешь написать свой вариант."
+   EN: "For your first sticker I'd suggest anime or cartoon — they always turn out great! Or describe your own."
+
+3. **After first sticker is generated** (if user comes back to chat), mention other features:
+   RU: "Кстати, после генерации можно менять эмоцию 😊, движение 🏃 или добавить обводку 🔲 — кнопки прямо под стикером!"
+   EN: "By the way, after generation you can change emotion 😊, motion 🏃 or add a border 🔲 — buttons right under the sticker!"
+
+Keep tips SHORT — 1-2 sentences max per tip. Don't lecture. Weave tips naturally into conversation.
+Do NOT repeat tips the user already knows (e.g. if they already picked a style confidently, skip style tips).
+` : ""}## Mirror Message Format (when all 3 collected)
 > – **Style:** value
 > – **Emotion:** value
 > – **Pose / gesture:** value

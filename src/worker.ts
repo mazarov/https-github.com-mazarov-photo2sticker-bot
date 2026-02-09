@@ -428,9 +428,11 @@ async function runJob(job: any) {
   console.log("stickerId after insert:", stickerId);
 
   // Onboarding logic - determine UI based on onboarding_step
+  // Skip hardcoded onboarding for assistant mode — AI handles the guidance
+  const isAssistantMode = session.selected_style_id === "assistant";
   const onboardingStep = user.onboarding_step ?? 99;
-  const isOnboardingFirstSticker = onboardingStep === 0 && generationType === "style";
-  const isOnboardingEmotion = onboardingStep === 1 && generationType === "emotion";
+  const isOnboardingFirstSticker = !isAssistantMode && onboardingStep === 0 && generationType === "style";
+  const isOnboardingEmotion = !isAssistantMode && onboardingStep === 1 && generationType === "emotion";
   
   console.log("onboarding_step:", onboardingStep, "isOnboardingFirstSticker:", isOnboardingFirstSticker, "isOnboardingEmotion:", isOnboardingEmotion);
 
@@ -482,7 +484,17 @@ async function runJob(job: any) {
     console.log(">>> WARNING: skipped telegram_file_id update, stickerId:", stickerId, "stickerFileId:", !!stickerFileId);
   }
 
-  // Onboarding messages and step updates
+  // For assistant mode: silently advance onboarding_step (no hardcoded messages, AI handles guidance)
+  if (isAssistantMode && onboardingStep < 2) {
+    const newStep = Math.min(onboardingStep + 1, 2);
+    await supabase
+      .from("users")
+      .update({ onboarding_step: newStep })
+      .eq("id", session.user_id);
+    console.log("assistant mode: onboarding_step updated to", newStep);
+  }
+
+  // Onboarding messages and step updates (manual mode only)
   if (isOnboardingFirstSticker && stickerId) {
     // First sticker: show emotion selection, update step to 1
     const onboardingText = lang === "ru"
