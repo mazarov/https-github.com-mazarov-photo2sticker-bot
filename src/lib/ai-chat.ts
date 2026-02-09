@@ -76,13 +76,13 @@ const ASSISTANT_TOOLS = [
   },
   {
     name: "show_style_examples",
-    description: "Call to show the user example stickers in different styles. Use when user asks to see examples, can't decide on a style, or when showing an example would help them choose. Pass style_id to show a specific style example, or omit to show a list of all available styles.",
+    description: "Call to show the user example stickers in different styles. Always call WITHOUT style_id — code will show buttons for ALL styles, user picks one. Only pass style_id if user explicitly named a specific style. Use when user asks to see examples, can't decide on a style, or when showing examples would help.",
     parameters: {
       type: "object",
       properties: {
         style_id: {
           type: "string",
-          description: "Style preset ID to show example for. If not provided, shows list of all available styles with examples.",
+          description: "Style preset ID. Usually omit — let user pick from buttons. Only pass if user explicitly named a style.",
         },
       },
     },
@@ -156,10 +156,9 @@ NEVER use quotes around values. Plain text only.
 
 ## Style Examples
 You can show style examples to help users choose.
-- Call show_style_examples(style_id) to show a specific style example sticker
-- Call show_style_examples() without style_id to show list of all available styles
+- Call show_style_examples() WITHOUT style_id — code shows buttons for ALL styles, user picks one
+- Only pass style_id if user explicitly named a specific style
 - Use when user is unsure about style, asks to see options, or can't decide
-- Available style IDs are listed in [SYSTEM STATE]
 - After showing examples, continue collecting parameters normally
 
 ## Tone

@@ -1,4 +1,4 @@
-# Tool: show_style_examples
+# Tool: show_style_examples (v2)
 
 ## Цель
 
@@ -6,6 +6,34 @@
 - Снижает неопределённость ("как будет выглядеть?")
 - Ускоряет выбор стиля
 - Повышает конверсию (пользователь видит качество до покупки)
+
+---
+
+## UX-флоу
+
+### Шаг 1: LLM вызывает tool (без style_id)
+LLM спрашивает "Для какого стиля показать пример?" и вызывает `show_style_examples()` без `style_id`.
+
+Код показывает **inline-кнопки для ВСЕХ активных стилей** + кнопку "🤖 Ассистент":
+
+```
+🤖 Ассистент: Для какого стиля показать пример?
+
+[🎨 Аниме]       [🖍 Мультяшный]
+[✏️ Минимализм]   [📸 Реалистичный]
+[💫 Line art]     [🎭 Поп-арт]
+[🤖 Ассистент]
+```
+
+Кнопки выводятся **по 2 в ряд**, кнопка "Ассистент" — отдельный ряд снизу.
+
+### Шаг 2: Пользователь нажимает кнопку стиля
+Код ищет пример (`is_example = true`) для выбранного стиля:
+- **Есть пример** → отправляет стикер
+- **Нет примера** → текст "Примера для этого стиля пока нет. Опиши стиль словами — я пойму!"
+
+### Шаг 3: Продолжение диалога
+После показа примера ассистент продолжает собирать параметры.
 
 ---
 
@@ -27,19 +55,20 @@ LLM **не вызывает** если:
 ```typescript
 {
   name: "show_style_examples",
-  description: "Call to show the user example stickers. Use when user asks to see examples, can't decide on a style, or when showing an example would help. Pass style_id to show specific style, or null to show list of all available styles with examples.",
+  description: "Call to show the user example stickers in different styles. Always call WITHOUT style_id — the code will show buttons for all available styles. User will tap a button to see a specific example. Use when user asks to see examples, can't decide on a style, or when showing examples would help.",
   parameters: {
     type: "object",
     properties: {
       style_id: {
         type: "string",
-        nullable: true,
-        description: "Style preset ID to show example for (e.g. 'anime', 'cartoon'). If null, show list of available styles."
+        description: "Style preset ID to show example for. Usually omit this — let the user pick from buttons. Only pass if user explicitly named a style."
       },
     },
   },
 }
 ```
+
+**Ключевое изменение vs v1:** LLM почти всегда вызывает без `style_id`. Код показывает кнопки, пользователь выбирает сам.
 
 ---
 
@@ -56,92 +85,137 @@ if (toolCall.name === "show_style_examples") {
 }
 ```
 
-Action `"show_examples"` — не меняет данные сессии, только триггерит отправку стикера.
+Без изменений — action `"show_examples"` не меняет данные сессии.
 
-### Обработка action в `index.ts`
+### Обработка action в `index.ts` — `handleShowStyleExamples()`
 
 ```typescript
-if (action === "show_examples") {
-  const styleId = result.toolCall?.args?.style_id;
-  
+async function handleShowStyleExamples(
+  ctx: any,
+  styleId: string | undefined | null,
+  lang: string
+): Promise<void> {
+  const isRu = lang === "ru";
+
   if (styleId) {
-    // Показать пример конкретного стиля
+    // === Конкретный стиль ===
+    if (styleId === "assistant") {
+      // Стиль "Ассистент" — примеры из assistant-генераций
+      const example = await getAssistantStyleExample();
+      if (example?.telegram_file_id) {
+        await ctx.replyWithSticker(example.telegram_file_id);
+      } else {
+        await ctx.reply(isRu
+          ? "Примеров от ассистента пока нет."
+          : "No assistant examples yet.");
+      }
+      return;
+    }
+
     const example = await getStyleExample(styleId);
     if (example?.telegram_file_id) {
       await ctx.replyWithSticker(example.telegram_file_id);
     } else {
-      // Нет примера для этого стиля
-      const noExample = lang === "ru"
-        ? `К сожалению, примера для стиля "${styleId}" пока нет.`
-        : `Sorry, no example available for "${styleId}" style yet.`;
-      await ctx.reply(noExample);
+      await ctx.reply(isRu
+        ? "Примера для этого стиля пока нет. Опиши стиль словами — я пойму!"
+        : "No example for this style yet. Describe it in words — I'll understand!");
     }
   } else {
-    // Показать список доступных стилей с примерами
-    const stylesWithExamples = await getStylesWithExamples();
-    if (stylesWithExamples.length > 0) {
-      const list = stylesWithExamples.map(s => {
-        const name = lang === "ru" ? s.name_ru : s.name_en;
-        return `${s.emoji} ${name}`;
-      }).join("\n");
-      
-      const header = lang === "ru"
-        ? "Вот стили, для которых есть примеры:\n\n"
-        : "Here are styles with examples available:\n\n";
-      
-      // Inline buttons для каждого стиля
-      const buttons = stylesWithExamples.map(s => [
+    // === Показать кнопки для ВСЕХ стилей ===
+    const allStyles = await getStylePresets(); // Все активные стили
+    
+    // Кнопки по 2 в ряд
+    const rows: any[][] = [];
+    for (let i = 0; i < allStyles.length; i += 2) {
+      const row = [
         Markup.button.callback(
-          `${s.emoji} ${lang === "ru" ? s.name_ru : s.name_en}`,
-          `assistant_example_${s.id}`
-        )
-      ]);
-      
-      await ctx.reply(header + list, Markup.inlineKeyboard(buttons));
-    } else {
-      const noExamples = lang === "ru"
-        ? "Пока примеров нет, но опиши стиль словами — я пойму!"
-        : "No examples yet, but describe the style in words — I'll understand!";
-      await ctx.reply(noExamples);
+          `${allStyles[i].emoji} ${isRu ? allStyles[i].name_ru : allStyles[i].name_en}`,
+          `assistant_example_${allStyles[i].id}`
+        ),
+      ];
+      if (allStyles[i + 1]) {
+        row.push(
+          Markup.button.callback(
+            `${allStyles[i + 1].emoji} ${isRu ? allStyles[i + 1].name_ru : allStyles[i + 1].name_en}`,
+            `assistant_example_${allStyles[i + 1].id}`
+          )
+        );
+      }
+      rows.push(row);
     }
+
+    // Последний ряд — кнопка "Ассистент"
+    rows.push([
+      Markup.button.callback(
+        `🤖 ${isRu ? "Ассистент" : "Assistant"}`,
+        "assistant_example_assistant"
+      ),
+    ]);
+
+    const header = isRu
+      ? "Нажми на стиль, чтобы увидеть пример:"
+      : "Tap a style to see an example:";
+
+    await ctx.reply(header, Markup.inlineKeyboard(rows));
   }
-  
-  // Отправить текст LLM (если есть)
-  if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
 }
 ```
 
-### Новая функция `getStylesWithExamples()`
+### Новая функция `getAssistantStyleExample()`
 
 ```typescript
-async function getStylesWithExamples(): Promise<StylePreset[]> {
-  // Получить style_preset_id которые имеют примеры
-  const { data: exampleStyleIds } = await supabase
+async function getAssistantStyleExample(): Promise<StyleExample | null> {
+  const { data } = await supabase
     .from("stickers")
-    .select("style_preset_id")
+    .select("telegram_file_id, style_preset_id")
+    .eq("selected_style_id", "assistant")
     .eq("is_example", true)
     .not("telegram_file_id", "is", null)
-    .not("style_preset_id", "is", null);
-
-  if (!exampleStyleIds?.length) return [];
-
-  const uniqueIds = [...new Set(exampleStyleIds.map(e => e.style_preset_id))];
-
-  const presets = await getStylePresets();
-  return presets.filter(p => uniqueIds.includes(p.id));
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  
+  return data;
 }
 ```
 
-### Callback для inline-кнопок примеров
+### Callback для inline-кнопок
 
 ```typescript
 bot.action(/^assistant_example_(.+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const styleId = ctx.match[1];
-  
-  const example = await getStyleExample(styleId);
-  if (example?.telegram_file_id) {
-    await ctx.replyWithSticker(example.telegram_file_id);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !styleId) return;
+
+  try {
+    if (styleId === "assistant") {
+      // Пример от ассистента
+      const example = await getAssistantStyleExample();
+      if (example?.telegram_file_id) {
+        await ctx.replyWithSticker(example.telegram_file_id);
+      } else {
+        const user = await getUser(telegramId);
+        const lang = user?.lang || "en";
+        await ctx.reply(lang === "ru"
+          ? "Примеров от ассистента пока нет."
+          : "No assistant examples yet.");
+      }
+      return;
+    }
+
+    const example = await getStyleExample(styleId);
+    if (example?.telegram_file_id) {
+      await ctx.replyWithSticker(example.telegram_file_id);
+    } else {
+      const user = await getUser(telegramId);
+      const lang = user?.lang || "en";
+      await ctx.reply(lang === "ru"
+        ? "Примера для этого стиля пока нет."
+        : "No example available for this style yet.");
+    }
+  } catch (err: any) {
+    console.error("assistant_example callback error:", err.message);
   }
 });
 ```
@@ -150,15 +224,9 @@ bot.action(/^assistant_example_(.+)$/, async (ctx) => {
 
 ```typescript
 if (action === "show_examples") {
-  const styleId = result.toolCall?.args?.style_id;
-  if (styleId) {
-    return isRu
-      ? `Вот пример стиля ${styleId}:`
-      : `Here's an example of ${styleId} style:`;
-  }
   return isRu
-    ? "Вот доступные стили — нажми чтобы увидеть пример:"
-    : "Here are the available styles — tap to see an example:";
+    ? "Нажми на стиль, чтобы увидеть пример:"
+    : "Tap a style to see an example:";
 }
 ```
 
@@ -166,48 +234,71 @@ if (action === "show_examples") {
 
 ## System Prompt
 
-Добавить в промпт:
-
 ```
 ## Style Examples
 You can show style examples to help users choose.
-- Call show_style_examples(style_id) to show a specific style example
-- Call show_style_examples(null) to show list of all available styles
-- Use this when user is unsure about style or asks to see options
-- Available style IDs will be provided in [SYSTEM STATE]
+- Call show_style_examples() WITHOUT style_id — code will show buttons for ALL styles
+- User taps a button to see a specific example sticker
+- Only pass style_id if user explicitly named a specific style
+- Use when user is unsure about style, asks to see options, or can't decide
+- After showing examples, continue collecting parameters normally
 ```
 
 ---
 
 ## Данные для [SYSTEM STATE]
 
-В `buildStateInjection()` добавить список доступных стилей:
+В `buildStateInjection()` — список доступных стилей:
 
 ```typescript
-// Inject available styles (for LLM to reference)
-if (availableStyles.length > 0) {
-  const styleList = availableStyles.map(s => `${s.id}: ${s.name_en}`).join(", ");
-  lines.push(`Available styles with examples: ${styleList}`);
+if (options?.availableStyles && options.availableStyles.length > 0) {
+  const styleList = options.availableStyles.map(s => s.id).join(", ");
+  lines.push(`Available style IDs for examples: ${styleList}`);
 }
 ```
 
-Это позволит LLM знать какие `style_id` можно использовать в tool call.
+---
+
+## Стиль "Ассистент"
+
+### Что это
+Псевдо-стиль, показывающий примеры стикеров которые были сгенерированы через AI-ассистента (где `selected_style_id = 'assistant'` в таблице `stickers`).
+
+### Как пометить стикер как пример ассистента
+В Supabase вручную:
+```sql
+UPDATE stickers SET is_example = true WHERE id = '<sticker_uuid>';
+```
+
+### Отличие от обычных стилей
+- Не существует в таблице `style_presets` — это виртуальная кнопка
+- Поиск примеров: `selected_style_id = 'assistant'` + `is_example = true`
+- Кнопка всегда последняя в списке
 
 ---
 
 ## Существующая инфраструктура
 
-Уже реализовано и готово к использованию:
+Уже реализовано:
 
 | Функция | Файл | Что делает |
 |---|---|---|
-| `getStylePresets()` | `index.ts:89` | Список стилей из `style_presets` (с кешем 5 мин) |
-| `getStyleExample(styleId, offset)` | `index.ts:113` | Получить пример стикера по `style_preset_id` |
-| `countStyleExamples(styleId)` | `index.ts:127` | Количество примеров для стиля |
+| `getStylePresets()` | `index.ts` | Все активные стили из `style_presets` (кеш 5 мин) |
+| `getStyleExample(styleId, offset)` | `index.ts` | Пример стикера по `style_preset_id` |
+| `countStyleExamples(styleId)` | `index.ts` | Количество примеров для стиля |
+| `handleShowStyleExamples()` | `index.ts` | **Обновить** — новая логика с кнопками для всех стилей |
+| `getStylesWithExamples()` | `index.ts` | **Удалить** — больше не нужна, показываем ВСЕ стили |
+
+Новое:
+
+| Функция | Файл | Что делает |
+|---|---|---|
+| `getAssistantStyleExample()` | `index.ts` | Пример стикера от ассистента |
 
 Таблица `stickers`:
 - `is_example: boolean` — помечен ли стикер как пример
-- `style_preset_id: text` — привязка к стилю
+- `style_preset_id: text` — привязка к стилю (для обычных стилей)
+- `selected_style_id: text` — `"assistant"` для ассистент-генераций
 - `telegram_file_id: text` — file_id для отправки через Telegram API
 
 ---
@@ -216,18 +307,21 @@ if (availableStyles.length > 0) {
 
 | Файл | Что менять |
 |---|---|
-| `src/lib/ai-chat.ts` | Добавить tool в `ASSISTANT_TOOLS`, обновить system prompt |
-| `src/lib/assistant-db.ts` | Добавить `"show_examples"` в `handleToolCall()`, обновить `buildStateInjection()` со списком стилей |
-| `src/index.ts` | Добавить `getStylesWithExamples()`, обработку `action === "show_examples"`, callback `assistant_example_*`, fallback |
+| `src/lib/ai-chat.ts` | Обновить описание tool — LLM вызывает без style_id, код покажет кнопки |
+| `src/index.ts` | `handleShowStyleExamples()` — показывать ВСЕ стили + "Ассистент", кнопки по 2 в ряд |
+| `src/index.ts` | Добавить `getAssistantStyleExample()` |
+| `src/index.ts` | Обновить callback `assistant_example_*` — обработка `"assistant"` id |
+| `src/index.ts` | Удалить `getStylesWithExamples()` (больше не нужна) |
+| `src/index.ts` | Обновить fallback для `show_examples` |
 
-**Оценка: ~1.5 часа**
+**Оценка: ~1 час**
 
 ---
 
 ## Ограничения
 
-- Показываем только 1 пример за раз (по одному стикеру на стиль)
-- Используем UI примеров стикеров который уже есть в коде 
-- Если для стиля нет `is_example = true` стикеров — не показываем его в списке
+- Показываем 1 пример за раз (один стикер на нажатие кнопки)
+- Кнопки показываются для ВСЕХ активных стилей, даже если примера нет (при нажатии — сообщение "нет примера")
+- Стиль "Ассистент" — виртуальный, не из `style_presets`
 - LLM не видит сам стикер — только знает что код его отправил
-- `telegram_file_id` привязан к боту: примеры из прод-бота не работают в тест-боте (нужны отдельные примеры для тестовой среды)
+- `telegram_file_id` привязан к боту: примеры из прод-бота не работают в тест-боте
