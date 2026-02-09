@@ -470,6 +470,7 @@ async function startGeneration(
     selectedStyleId?: string | null;
     selectedEmotion?: string | null;
     textPrompt?: string | null;
+    assistantParams?: { style: string; emotion: string; pose: string } | null;
   }
 ) {
   const creditsNeeded = 1;
@@ -571,8 +572,13 @@ async function startGeneration(
   await enqueueJob(session.id, user.id, false);
 
   // Alert: generation started with all parameters
-  const mode = options.userInput?.startsWith("[assistant]") ? "🤖 assistant" : "✋ manual";
+  const isAssistant = !!options.assistantParams;
+  const mode = isAssistant ? "🤖 assistant" : "✋ manual";
   const goal = (() => {
+    if (isAssistant) {
+      const ap = options.assistantParams!;
+      return `${ap.style} / ${ap.emotion} / ${ap.pose}`;
+    }
     switch (options.generationType) {
       case "style": return `Стикер в стиле: ${options.selectedStyleId || options.userInput || "custom"}`;
       case "emotion": return `Эмоция: ${options.emotionPrompt || "?"}`;
@@ -582,19 +588,29 @@ async function startGeneration(
     }
   })();
 
+  const alertDetails: Record<string, any> = {
+    mode,
+    user: `@${user.username || user.telegram_id}`,
+    goal,
+  };
+
+  if (isAssistant) {
+    const ap = options.assistantParams!;
+    alertDetails.style = ap.style;
+    alertDetails.emotion = ap.emotion;
+    alertDetails.pose = ap.pose;
+  } else {
+    alertDetails.style = options.selectedStyleId || "-";
+    alertDetails.input = options.userInput || "-";
+    alertDetails.emotion = options.emotionPrompt || "-";
+    alertDetails.text = options.textPrompt || "-";
+  }
+  alertDetails.prompt = options.promptFinal.slice(0, 200);
+
   sendAlert({
     type: "generation_started",
     message: "New generation",
-    details: {
-      mode,
-      user: `@${user.username || user.telegram_id}`,
-      goal,
-      style: options.selectedStyleId || "-",
-      input: options.userInput || "-",
-      emotion: options.emotionPrompt || "-",
-      text: options.textPrompt || "-",
-      prompt: options.promptFinal.slice(0, 200),
-    },
+    details: alertDetails,
   }).catch(console.error);
 
   await sendProgressStart(ctx, session.id, lang);
@@ -773,6 +789,7 @@ async function handleAssistantConfirm(ctx: any, user: any, sessionId: string, la
     promptFinal,
     userInput: `[assistant] style: ${params.style}, emotion: ${params.emotion}, pose: ${params.pose}`,
     selectedStyleId: "assistant",
+    assistantParams: params,
   });
 }
 
@@ -3409,6 +3426,20 @@ bot.on("successful_payment", async (ctx) => {
             .eq("id", session.id);
 
           await enqueueJob(session.id, finalUser.id);
+
+          // Alert: generation after payment
+          const isAssistantPayment = session.user_input?.startsWith("[assistant]");
+          sendAlert({
+            type: "generation_started",
+            message: "Generation after payment",
+            details: {
+              mode: isAssistantPayment ? "🤖 assistant" : "✋ manual",
+              user: `@${finalUser.username || finalUser.telegram_id}`,
+              style: session.selected_style_id || "-",
+              emotion: session.selected_emotion || session.emotion_prompt || "-",
+              prompt: (session.prompt_final || "").slice(0, 200),
+            },
+          }).catch(console.error);
 
           await sendProgressStart(ctx, session.id, lang);
         } else {
