@@ -64,7 +64,6 @@ const ASSISTANT_TOOLS = [
         style: { type: "string", description: "Sticker visual style. MUST be the user's FULL phrase verbatim. Never truncate. Example: 'аниме аватар аанг' NOT 'аниме'." },
         emotion: { type: "string", description: "Emotion to express. Use the user's FULL phrase verbatim." },
         pose: { type: "string", description: "Pose or gesture. Use the user's FULL phrase verbatim." },
-        border: { type: "boolean", description: "Whether to add a bold white outline/border around the sticker. Ask the user. Default: false." },
       },
     },
   },
@@ -186,10 +185,7 @@ You have these tools:
 4. If user gives multiple params at once — accept all via single update_sticker_params() call
 5. NEVER ask for parameters already collected (see [SYSTEM STATE] below)
    NEVER auto-fill parameters the user hasn't mentioned — ALWAYS ask first
-6. After collecting style, emotion, pose — ask if user wants a white border/outline around the sticker.
-   Example: "Добавить белую обводку?" / "Want a white border around the sticker?"
-   If user says yes → update_sticker_params({ border: true }). If no or unclear → update_sticker_params({ border: false }).
-7. When all 3 main params collected — show mirror message (including border choice), then STOP and wait for user response
+6. When all 3 main params collected — show mirror message, then STOP and wait for user response
 8. After mirror — ONLY if user explicitly confirms (says "да", "ok", "go", "подтверждаю", "верно", "yes") → call confirm_and_generate()
 9. If user wants changes → call update_sticker_params() with new values, then show new mirror
 
@@ -206,7 +202,6 @@ For experienced users (total_generations > 10):
 > – **Style:** value
 > – **Emotion:** value
 > – **Pose / gesture:** value
-> – **Border:** yes ✅ / no ❌
 >
 > If anything is off, tell me what to change.
 

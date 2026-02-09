@@ -439,6 +439,7 @@ async function runJob(job: any) {
   const changeEmotionText = await getText(lang, "btn.change_emotion");
   const changeMotionText = await getText(lang, "btn.change_motion");
   const addTextText = await getText(lang, "btn.add_text");
+  const toggleBorderText = await getText(lang, "btn.toggle_border");
 
   // Use sticker ID in callback_data for message binding
   const replyMarkup = {
@@ -450,6 +451,9 @@ async function runJob(job: any) {
       ],
       [
         { text: changeMotionText, callback_data: stickerId ? `change_motion:${stickerId}` : "change_motion" },
+        { text: toggleBorderText, callback_data: stickerId ? `toggle_border:${stickerId}` : "toggle_border" },
+      ],
+      [
         { text: addTextText, callback_data: stickerId ? `add_text:${stickerId}` : "add_text" },
       ],
     ],

@@ -5,6 +5,8 @@ import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
+import { getFilePath, downloadFile, sendSticker } from "./lib/telegram";
+import { addWhiteBorder } from "./lib/image-utils";
 import {
   buildSystemPrompt,
   callAIChat,
@@ -1082,15 +1084,11 @@ function generateFallbackReply(action: string, session: AssistantSessionRow, lan
  */
 function buildMirrorMessage(session: AssistantSessionRow, lang: string): string {
   const isRu = lang === "ru";
-  const borderText = session.border
-    ? (isRu ? "да ✅" : "yes ✅")
-    : (isRu ? "нет ❌" : "no ❌");
   const lines = [
     isRu ? "Проверь, правильно ли я понял:" : "Please check if I understood you correctly:",
     `– **${isRu ? "Стиль" : "Style"}:** ${session.style || "?"}`,
     `– **${isRu ? "Эмоция" : "Emotion"}:** ${session.emotion || "?"}`,
     `– **${isRu ? "Поза / жест" : "Pose / gesture"}:** ${session.pose || "?"}`,
-    `– **${isRu ? "Обводка" : "Border"}:** ${borderText}`,
     "",
     isRu ? "Если что-то не так — скажи, что изменить." : "If anything is off, tell me what to change.",
   ];
@@ -1124,11 +1122,7 @@ async function handleShowStyleExamples(ctx: any, styleId: string | undefined | n
 /**
  * Build final prompt for Gemini image generation from assistant params.
  */
-function buildAssistantPrompt(params: { style: string; emotion: string; pose: string; border: boolean }): string {
-  const borderLine = params.border
-    ? "- Bold white outline/border around the character (thick, clearly visible, uniform width)"
-    : "- No outline/border around the character";
-
+function buildAssistantPrompt(params: { style: string; emotion: string; pose: string }): string {
   return `Create a telegram sticker of the person from the photo.
 
 Style: ${params.style}
@@ -1138,7 +1132,7 @@ Pose/gesture: ${params.pose}
 Requirements:
 - Solid black background (NOT white, NOT transparent) — critical for clean cutout
 - Sticker-like proportions (head slightly larger)
-${borderLine}
+- No outline/border around the character
 - Expressive and recognizable
 - High contrast between character and background`;
 }
@@ -3169,6 +3163,113 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
     .eq("id", session.id);
 
   await ctx.reply(await getText(lang, "text.prompt"));
+});
+
+// Callback: toggle white border on sticker (post-processing, no credits)
+bot.action(/^toggle_border:(.+)$/, async (ctx) => {
+  console.log("=== toggle_border:ID callback ===");
+  console.log("callback_data:", ctx.match?.[0]);
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+  const stickerId = ctx.match[1];
+  console.log("stickerId:", stickerId);
+
+  // Get sticker from DB by ID
+  const { data: sticker } = await supabase
+    .from("stickers")
+    .select("telegram_file_id, user_id")
+    .eq("id", stickerId)
+    .maybeSingle();
+
+  console.log("toggle_border sticker from DB:", sticker?.user_id, "telegram_file_id:", !!sticker?.telegram_file_id);
+
+  if (!sticker?.telegram_file_id) {
+    console.log(">>> ERROR: no telegram_file_id for sticker", stickerId);
+    await ctx.reply(await getText(lang, "error.no_stickers_added"));
+    return;
+  }
+
+  // Verify sticker belongs to user
+  if (sticker.user_id !== user.id) {
+    return;
+  }
+
+  try {
+    // Show processing indicator
+    const processingMsg = await ctx.reply(lang === "ru" ? "🔲 Добавляю обводку..." : "🔲 Adding border...");
+
+    // Download current sticker via Telegram API
+    const filePath = await getFilePath(sticker.telegram_file_id);
+    const stickerBuffer = await downloadFile(filePath);
+    console.log("toggle_border: downloaded sticker, size:", stickerBuffer.length);
+
+    // Add white border via image processing
+    const borderedBuffer = await addWhiteBorder(stickerBuffer);
+    console.log("toggle_border: bordered buffer size:", borderedBuffer.length);
+
+    // Build buttons (same as post-generation)
+    const addToPackText = await getText(lang, "btn.add_to_pack");
+    const assistantText = lang === "ru" ? "🤖 Ассистент" : "🤖 Assistant";
+    const changeEmotionText = await getText(lang, "btn.change_emotion");
+    const changeMotionText = await getText(lang, "btn.change_motion");
+    const addTextText = await getText(lang, "btn.add_text");
+    const toggleBorderText = await getText(lang, "btn.toggle_border");
+
+    const replyMarkup = {
+      inline_keyboard: [
+        [{ text: addToPackText, callback_data: `add_to_pack:${stickerId}` }],
+        [
+          { text: assistantText, callback_data: "assistant_restart" },
+          { text: changeEmotionText, callback_data: `change_emotion:${stickerId}` },
+        ],
+        [
+          { text: changeMotionText, callback_data: `change_motion:${stickerId}` },
+          { text: toggleBorderText, callback_data: `toggle_border:${stickerId}` },
+        ],
+        [
+          { text: addTextText, callback_data: `add_text:${stickerId}` },
+        ],
+      ],
+    };
+
+    // Send bordered sticker
+    const newFileId = await sendSticker(telegramId, borderedBuffer, replyMarkup);
+    console.log("toggle_border: sent bordered sticker, new file_id:", newFileId?.substring(0, 30) + "...");
+
+    // Update telegram_file_id in DB
+    if (newFileId) {
+      await supabase
+        .from("stickers")
+        .update({ telegram_file_id: newFileId })
+        .eq("id", stickerId);
+      console.log("toggle_border: updated sticker telegram_file_id");
+    }
+
+    // Delete processing message
+    try {
+      await ctx.deleteMessage(processingMsg.message_id);
+    } catch (e) {
+      // ignore
+    }
+
+    // Upload bordered version to storage (background, non-critical)
+    const storagePath = `stickers/${user.id}/bordered_${Date.now()}.webp`;
+    supabase.storage
+      .from(config.supabaseStorageBucket)
+      .upload(storagePath, borderedBuffer, { contentType: "image/webp", upsert: true })
+      .then(() => console.log("toggle_border: storage upload done"))
+      .catch((err: any) => console.error("toggle_border: storage upload failed:", err));
+
+  } catch (err: any) {
+    console.error("toggle_border error:", err);
+    await ctx.reply(await getText(lang, "error.technical"));
+  }
 });
 
 // ============================================

@@ -312,13 +312,11 @@ export function getAssistantParams(session: AssistantSessionRow): {
   style: string;
   emotion: string;
   pose: string;
-  border: boolean;
 } {
   return {
     style: session.style || "cartoon",
     emotion: session.emotion || "happy",
     pose: session.pose || "default",
-    border: session.border ?? false,
   };
 }
 
