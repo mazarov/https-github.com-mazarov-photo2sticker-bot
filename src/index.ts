@@ -22,6 +22,7 @@ import {
   allParamsCollected,
   getAssistantParams,
   expireOldAssistantSessions,
+  getLastGoalForUser,
   type AssistantSessionRow,
 } from "./lib/assistant-db";
 
@@ -673,6 +674,21 @@ function isAllowedLanguage(languageCode: string): boolean {
  * Start a new AI assistant dialog: create session, call Gemini for greeting, reply to user.
  */
 async function startAssistantDialog(ctx: any, user: any, lang: string) {
+  // Fetch previous goal before closing sessions (for returning users)
+  const prevAssistantSession = await getActiveAssistantSession(user.id);
+  let previousGoal = prevAssistantSession?.goal || null;
+  // Fallback: check completed/abandoned sessions if no active one
+  if (!previousGoal) {
+    previousGoal = await getLastGoalForUser(user.id);
+  }
+  if (previousGoal) {
+    // Strip analytics tags like [trial: ...] from the goal
+    previousGoal = previousGoal.replace(/\s*\[trial:.*?\]/g, "").replace(/\s*\[intent:.*?\]/g, "").trim() || null;
+  }
+  if (previousGoal) {
+    console.log("startAssistantDialog: previous goal found:", previousGoal.slice(0, 80));
+  }
+
   // Close any active assistant sessions for this user
   await closeAllActiveAssistantSessions(user.id);
 
@@ -711,6 +727,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     totalGenerations: user.total_generations || 0,
     credits: user.credits || 0,
     hasPhoto: false,
+    previousGoal,
   };
 
   const systemPrompt = buildSystemPrompt(assistantCtx);

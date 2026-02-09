@@ -253,6 +253,24 @@ export function getAssistantParams(session: AssistantSessionRow): {
 }
 
 /**
+ * Get the last known goal for a user from any assistant session (active, completed, abandoned).
+ * Used when starting a new dialog to avoid re-asking the goal.
+ */
+export async function getLastGoalForUser(userId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from("assistant_sessions")
+    .select("goal")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .not("goal", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return data?.goal || null;
+}
+
+/**
  * Expire old active assistant sessions (called by background processor).
  */
 export async function expireOldAssistantSessions(ttlMs: number): Promise<number> {

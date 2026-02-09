@@ -27,6 +27,7 @@ export interface AssistantContext {
   totalGenerations: number;
   credits: number;
   hasPhoto: boolean;
+  previousGoal?: string | null;
 }
 
 // ============================================
@@ -94,6 +95,7 @@ You have these tools:
 - Total generations: ${ctx.totalGenerations}
 - Has credits: ${ctx.credits > 0}
 - Has photo: ${ctx.hasPhoto}
+- Returning user: ${ctx.previousGoal ? "yes" : "no"}${ctx.previousGoal ? `\n- Previous goal: ${ctx.previousGoal}` : ""}
 
 ## Language Rules
 - If language_code starts with "ru" → speak Russian
@@ -102,8 +104,9 @@ You have these tools:
 - Address user by their first name
 
 ## Conversation Flow
-1. Greet user, understand their goal (why they need stickers). Ask ONE question only about the goal.
-2. After understanding the goal, ask for a photo via request_photo()
+1. If returning user (previous goal exists): greet briefly, skip the goal question, go directly to request_photo().
+   If new user: greet and understand their goal (why they need stickers). Ask ONE question only about the goal.
+2. After understanding the goal (or skipping for returning users), ask for a photo via request_photo()
 3. After photo received, collect style, emotion, pose — ask one at a time
 4. If user gives multiple params at once — accept all via single update_sticker_params() call
 5. NEVER ask for parameters already collected (see [SYSTEM STATE] below)
