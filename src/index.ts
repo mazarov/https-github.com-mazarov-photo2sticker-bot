@@ -3094,6 +3094,77 @@ bot.action("assistant_confirm", async (ctx) => {
 
   if (!session?.id || !session.state?.startsWith("assistant_")) return;
 
+  // Check if user qualifies for trial credit — route through AI for grant/deny decision
+  const qualifiesForTrial = (user.credits || 0) === 0
+    && !user.has_purchased
+    && (user.total_generations || 0) <= 2;
+
+  if (qualifiesForTrial) {
+    const aSession = await getActiveAssistantSession(user.id);
+    if (!aSession) {
+      await handleAssistantConfirm(ctx, user, session.id, lang);
+      return;
+    }
+
+    // Check duplicate: already received trial credit
+    const { count: userTrialCount } = await supabase
+      .from("assistant_sessions")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .like("goal", "%[trial: grant%");
+    const alreadyGranted = (userTrialCount || 0) > 0;
+
+    if (alreadyGranted) {
+      // Already got trial — go straight to generation (will show paywall if no credits)
+      await handleAssistantConfirm(ctx, user, session.id, lang);
+      return;
+    }
+
+    // Inject "user confirmed" into AI conversation so it can call grant_trial_credit
+    const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
+    messages.push({ role: "user", content: lang === "ru" ? "Подтверждаю" : "Confirm" });
+
+    const systemPrompt = await getAssistantSystemPrompt(messages, aSession, {
+      credits: user.credits || 0,
+      hasPurchased: !!user.has_purchased,
+      totalGenerations: user.total_generations || 0,
+    });
+
+    try {
+      console.log("[assistant_confirm] Trial-eligible user, routing through AI...");
+      const result = await callAIChat(messages, systemPrompt);
+      console.log("[assistant_confirm] AI response:", result.toolCall?.name || "no tool", "text:", result.text?.length || 0);
+      messages.push({ role: "assistant", content: result.text || "" });
+
+      const { action, updatedSession } = await processAssistantResult(result, aSession, messages);
+      console.log("[assistant_confirm] action:", action);
+
+      let replyText = result.text;
+      if (!replyText && result.toolCall) {
+        replyText = generateFallbackReply(action, updatedSession, lang);
+        messages[messages.length - 1] = { role: "assistant", content: replyText };
+        await updateAssistantSession(aSession.id, { messages });
+      }
+
+      if (action === "grant_credit" || action === "deny_credit") {
+        await handleTrialCreditAction(ctx, action, result, user, session, replyText, lang);
+      } else if (action === "confirm") {
+        // AI decided to confirm directly (shouldn't happen but safe fallback)
+        if (replyText) await ctx.reply(replyText);
+        await handleAssistantConfirm(ctx, user, session.id, lang);
+      } else {
+        // AI returned something else — show text + paywall as fallback
+        if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+      }
+    } catch (err: any) {
+      console.error("[assistant_confirm] AI error for trial user:", err.message);
+      // Fallback: go to normal confirm (will show paywall)
+      await handleAssistantConfirm(ctx, user, session.id, lang);
+    }
+    return;
+  }
+
   await handleAssistantConfirm(ctx, user, session.id, lang);
 });
 
