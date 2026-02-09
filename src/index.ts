@@ -964,8 +964,8 @@ async function processAssistantResult(
   result: { text: string; toolCall: import("./lib/ai-chat").ToolCall | null },
   aSession: AssistantSessionRow,
   messages: AssistantMessage[],
-): Promise<{ action: "confirm" | "photo" | "show_mirror" | "show_examples" | "grant_credit" | "deny_credit" | "normal"; updatedSession: AssistantSessionRow }> {
-  let action: "confirm" | "photo" | "show_mirror" | "show_examples" | "grant_credit" | "deny_credit" | "normal" = "normal";
+): Promise<{ action: "confirm" | "photo" | "show_mirror" | "show_examples" | "grant_credit" | "deny_credit" | "check_balance" | "normal"; updatedSession: AssistantSessionRow }> {
+  let action: "confirm" | "photo" | "show_mirror" | "show_examples" | "grant_credit" | "deny_credit" | "check_balance" | "normal" = "normal";
   let sessionUpdates: Partial<AssistantSessionRow> = {};
 
   if (result.toolCall) {
@@ -989,6 +989,8 @@ async function processAssistantResult(
       action = "grant_credit";
     } else if (toolResult.action === "deny_credit") {
       action = "deny_credit";
+    } else if (toolResult.action === "check_balance") {
+      action = "check_balance";
     } else if (toolResult.action === "params") {
       // After updating params, check if all collected
       const mergedSession = { ...aSession, ...sessionUpdates } as AssistantSessionRow;
@@ -1783,7 +1785,7 @@ bot.on("text", async (ctx) => {
 
       // Process tool call (may get request_photo or show_examples)
       let toolUpdates: Partial<AssistantSessionRow> = {};
-      let toolAction = "none";
+      let toolAction: import("./lib/assistant-db").ToolAction | "none" = "none";
       if (result.toolCall) {
         console.log("[Assistant] wait_photo tool call:", result.toolCall.name);
         const { updates, action: ta } = handleToolCall(result.toolCall, aSession);
