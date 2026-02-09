@@ -99,23 +99,16 @@ export async function addTextToSticker(
   const yPos = position === "top" ? `${fontSize + 10}` : `${512 - 15}`;
 
   // Build SVG text overlay (512x512 to match sticker dimensions)
+  // Using DejaVu Sans Bold — it's installed in the Docker container and supports Cyrillic
   const svg = `<svg width="512" height="512" xmlns="http://www.w3.org/2000/svg">
-  <style>
-    .sticker-text {
-      font-family: "Arial Black", "Noto Sans", "DejaVu Sans", Arial, sans-serif;
-      font-size: ${fontSize}px;
-      font-weight: 900;
-      paint-order: stroke fill;
-      fill: white;
-      stroke: black;
-      stroke-width: ${strokeWidth}px;
-      stroke-linejoin: round;
-    }
-  </style>
-  <text x="256" y="${yPos}" text-anchor="middle" class="sticker-text">${escapeXml(displayText)}</text>
+  <text x="256" y="${yPos}" text-anchor="middle"
+    font-family="DejaVu Sans" font-size="${fontSize}" font-weight="bold"
+    fill="white" stroke="black" stroke-width="${strokeWidth}"
+    stroke-linejoin="round" paint-order="stroke fill">${escapeXml(displayText)}</text>
 </svg>`;
 
   const svgBuffer = Buffer.from(svg);
+  console.log("addTextToSticker: SVG length:", svg.length, "text:", displayText, "fontSize:", fontSize, "pos:", yPos);
 
   // Composite SVG text over the sticker
   const result = await sharp(inputBuffer)

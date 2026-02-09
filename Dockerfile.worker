@@ -1,8 +1,10 @@
 FROM node:20-alpine
 
 # Install fonts for SVG text rendering (Cyrillic + Latin)
-RUN apk add --no-cache fontconfig font-noto \
-    && fc-cache -f
+RUN apk add --no-cache fontconfig ttf-dejavu \
+    && fc-cache -fv \
+    && fc-list | head -5
+ENV FONTCONFIG_PATH=/etc/fonts
 
 WORKDIR /app
 COPY package*.json ./
