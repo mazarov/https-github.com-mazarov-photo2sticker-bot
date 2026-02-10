@@ -1269,6 +1269,31 @@ async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
   await ctx.reply(text, Markup.inlineKeyboard(buttons));
 }
 
+// Helper: parse start payload into UTM fields
+function parseStartPayload(payload: string): {
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+} {
+  if (!payload) return { source: null, medium: null, campaign: null, content: null };
+
+  const parts = payload.split("_");
+  const knownSources = ["ya", "gads", "fb", "ig", "vk", "tg", "web"];
+  const knownMediums = ["cpc", "cpm", "organic", "social", "referral"];
+
+  if (parts.length >= 2 && knownSources.includes(parts[0]) && knownMediums.includes(parts[1])) {
+    return {
+      source: parts[0],
+      medium: parts[1],
+      campaign: parts[2] || null,
+      content: parts[3] || null,
+    };
+  }
+
+  return { source: payload, medium: null, campaign: null, content: null };
+}
+
 // /start command
 bot.start(async (ctx) => {
   const telegramId = ctx.from?.id;
@@ -1282,6 +1307,13 @@ bot.start(async (ctx) => {
     const languageCode = ctx.from?.language_code || "";
     const lang = languageCode.toLowerCase().startsWith("ru") ? "ru" : "en";
 
+    // Parse UTM from start payload
+    const startPayload = (ctx as any).startPayload || "";
+    const utm = parseStartPayload(startPayload);
+    if (startPayload) {
+      console.log("New user - start_payload:", startPayload, "utm:", JSON.stringify(utm));
+    }
+
     console.log("New user - language_code:", languageCode, "-> lang:", lang);
 
     const { data: created, error: insertError } = await supabase
@@ -1289,11 +1321,16 @@ bot.start(async (ctx) => {
       .insert({ 
         telegram_id: telegramId, 
         lang, 
-        language_code: languageCode || null,  // save original language code
+        language_code: languageCode || null,
         credits: 1,
         has_purchased: false,
         username: ctx.from?.username || null,
         env: config.appEnv,
+        start_payload: startPayload || null,
+        utm_source: utm.source,
+        utm_medium: utm.medium,
+        utm_campaign: utm.campaign,
+        utm_content: utm.content,
       })
       .select("*")
       .single();
@@ -1321,9 +1358,10 @@ bot.start(async (ctx) => {
 
     // Send notification (async, non-blocking)
     if (user?.id) {
+      const utmInfo = utm.source ? `\n📢 Источник: ${utm.source}${utm.medium ? "/" + utm.medium : ""}${utm.campaign ? " кампания:" + utm.campaign : ""}` : "";
       sendNotification({
         type: "new_user",
-        message: `@${ctx.from?.username || "no\\_username"} (${telegramId})\n🌐 Язык: ${languageCode || "unknown"}`,
+        message: `@${ctx.from?.username || "no\\_username"} (${telegramId})\n🌐 Язык: ${languageCode || "unknown"}${utmInfo}`,
       }).catch(console.error);
     }
   } else {
