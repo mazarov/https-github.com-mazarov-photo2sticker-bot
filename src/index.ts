@@ -1279,7 +1279,7 @@ function parseStartPayload(payload: string): {
   if (!payload) return { source: null, medium: null, campaign: null, content: null };
 
   const parts = payload.split("_");
-  const knownSources = ["ya", "gads", "fb", "ig", "vk", "tg", "web"];
+  const knownSources = ["ya", "yandex", "gads", "google", "fb", "ig", "vk", "tg", "web"];
   const knownMediums = ["cpc", "cpm", "organic", "social", "referral"];
 
   if (parts.length >= 2 && knownSources.includes(parts[0]) && knownMediums.includes(parts[1])) {
@@ -1374,6 +1374,20 @@ bot.start(async (ctx) => {
     if (user.username !== currentUsername) updates.username = currentUsername;
     if (user.lang !== currentLang) updates.lang = currentLang;
     if (user.language_code !== currentLangCode) updates.language_code = currentLangCode || null;
+
+    // Update UTM for returning users if they came via a new start link and UTM is empty
+    const startPayload = (ctx as any).startPayload || "";
+    if (startPayload && !user.utm_source) {
+      const utm = parseStartPayload(startPayload);
+      if (utm.source) {
+        updates.start_payload = startPayload;
+        updates.utm_source = utm.source;
+        updates.utm_medium = utm.medium;
+        updates.utm_campaign = utm.campaign;
+        updates.utm_content = utm.content;
+        console.log("Returning user UTM update:", telegramId, "payload:", startPayload, "utm:", JSON.stringify(utm));
+      }
+    }
 
     if (Object.keys(updates).length > 0) {
       await supabase.from("users").update(updates).eq("id", user.id);
