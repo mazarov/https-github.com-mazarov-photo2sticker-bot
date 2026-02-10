@@ -119,11 +119,10 @@ export async function addTextToSticker(
   try {
     textPng = await (sharp as any)({
       text: {
-        text: `<span foreground="#1a1a1a">${escapePango(displayText)}</span>`,
+        text: `<span foreground="#1a1a1a" font="${fontSizePt}">${escapePango(displayText)}</span>`,
         fontfile: FONT_PATH,
         font: "Inter Bold",
         rgba: true,
-        dpi: 96,
         width: 480,
         height: STRIP_H,
         align: "centre",

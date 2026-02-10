@@ -1,55 +1,81 @@
 # UTM-трекинг: сохранение источника трафика
 
-## Проблема
+## Флоу пользователя
 
-Пользователи приходят из рекламы (Яндекс Директ, Google Ads и т.д.), но мы не знаем откуда. Нужно сохранять UTM-метки при регистрации для аналитики трафика.
-
-## Ограничение Telegram
-
-Telegram deep link (`https://t.me/Bot?start=PAYLOAD`) передаёт боту **только** значение `start=`. Всё остальное из URL (`&utm_source=...`) Telegram игнорирует.
-
-Пример:
 ```
-https://t.me/Photo_2_StickerBot?start=from_web&utm_source=ya&utm_medium=cpc&utm_campaign=706852522
-```
-Бот получит только `ctx.startPayload = "from_web"`. UTM-параметры потеряются.
-
-## Решение: кодировать UTM в start-параметр
-
-Формат start-параметра (до 64 символов):
-```
-start=ya_cpc_706852522_17579526984
-```
-Структура: `{source}_{medium}_{campaign_id}_{content_id}`
-
-### Примеры ссылок для рекламных кампаний
-
-**Яндекс Директ:**
-```
-https://t.me/Photo_2_StickerBot?start=ya_cpc_706852522
+Реклама (Яндекс Директ) → Лендинг (с UTM в URL) → Кнопка "Открыть бота" → Telegram бот
 ```
 
-**Google Ads:**
-```
-https://t.me/Photo_2_StickerBot?start=gads_cpc_123456
-```
-
-**Органика (ссылка с сайта):**
-```
-https://t.me/Photo_2_StickerBot?start=web
-```
-
-**Без метки (обычный /start):**
-```
-ctx.startPayload = "" или undefined
-```
+1. Пользователь кликает объявление в Яндекс Директ
+2. Попадает на лендинг с UTM-параметрами в URL:
+   ```
+   https://photo2sticker.ru/?utm_source=ya&utm_medium=cpc&utm_campaign=706852522&utm_content=17579526984&utm_term=сделать+стикер
+   ```
+3. На лендинге нажимает кнопку "Открыть бота"
+4. Кнопка ведёт на Telegram deep link с закодированными UTM:
+   ```
+   https://t.me/Photo_2_StickerBot?start=ya_cpc_706852522_17579526984
+   ```
+5. Бот получает `startPayload`, парсит UTM, сохраняет в БД
 
 ---
 
-## Миграция БД
+## Часть 1: Лендинг (JS)
 
+### Задача
+На лендинге динамически формировать Telegram-ссылку, пробрасывая UTM из URL страницы в `start=` параметр бота.
+
+### Ограничение Telegram
+Deep link `https://t.me/Bot?start=PAYLOAD` передаёт боту **только** значение `start=` (до 64 символов, допустимы `A-Za-z0-9_-`). Всё остальное из URL Telegram игнорирует.
+
+### Формат start-параметра
+```
+{source}_{medium}_{campaign_id}_{content_id}
+```
+
+Примеры:
+| URL-параметры | start payload |
+|---|---|
+| `utm_source=ya&utm_medium=cpc&utm_campaign=706852522&utm_content=17579526984` | `ya_cpc_706852522_17579526984` |
+| `utm_source=gads&utm_medium=cpc&utm_campaign=123` | `gads_cpc_123` |
+| без UTM | `web` |
+
+### JS-скрипт для лендинга
+
+```javascript
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const source   = params.get('utm_source')   || '';
+  const medium   = params.get('utm_medium')    || '';
+  const campaign = params.get('utm_campaign')  || '';
+  const content  = params.get('utm_content')   || '';
+
+  let startPayload = 'web'; // дефолт — пришёл с сайта без UTM
+  if (source) {
+    const parts = [source, medium, campaign, content].filter(Boolean);
+    // Очищаем от недопустимых символов, ограничиваем 64 символами
+    startPayload = parts.join('_').replace(/[^A-Za-z0-9_\-]/g, '').slice(0, 64);
+  }
+
+  const botLink = `https://t.me/Photo_2_StickerBot?start=${startPayload}`;
+
+  // Обновляем все кнопки с классом .open-bot-btn
+  document.querySelectorAll('.open-bot-btn').forEach(btn => {
+    btn.href = botLink;
+  });
+})();
+```
+
+### Где разместить
+- В конце `<body>` на лендинге, или
+- В GTM / Tilda custom code блоке
+
+---
+
+## Часть 2: Бот (уже реализовано)
+
+### Миграция БД — `sql/048_utm_tracking.sql`
 ```sql
--- 048_utm_tracking.sql
 ALTER TABLE users ADD COLUMN IF NOT EXISTS start_payload text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS utm_source text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS utm_medium text;
@@ -60,116 +86,39 @@ CREATE INDEX IF NOT EXISTS idx_users_utm_source ON users(utm_source);
 CREATE INDEX IF NOT EXISTS idx_users_utm_campaign ON users(utm_campaign);
 ```
 
----
-
-## Парсинг start_payload
-
-```typescript
-function parseStartPayload(payload: string): {
-  source: string | null;
-  medium: string | null;
-  campaign: string | null;
-  content: string | null;
-} {
-  if (!payload) return { source: null, medium: null, campaign: null, content: null };
-
-  // Формат: {source}_{medium}_{campaign}_{content}
-  // Примеры: "ya_cpc_706852522_17579526984", "ya_cpc_706852522", "web", "from_web"
-  const parts = payload.split("_");
-
-  // Известные источники
-  const knownSources = ["ya", "gads", "fb", "ig", "vk", "tg", "web"];
-  const knownMediums = ["cpc", "cpm", "organic", "social", "referral"];
-
-  if (parts.length >= 2 && knownSources.includes(parts[0]) && knownMediums.includes(parts[1])) {
-    return {
-      source: parts[0],
-      medium: parts[1],
-      campaign: parts[2] || null,
-      content: parts[3] || null,
-    };
-  }
-
-  // Простые метки: "web", "from_web" и т.д.
-  return {
-    source: payload,
-    medium: null,
-    campaign: null,
-    content: null,
-  };
-}
+После применения выполнить:
+```sql
+NOTIFY pgrst, 'reload schema';
 ```
 
----
+### Парсинг в боте — `src/index.ts`
+Функция `parseStartPayload()` разбирает payload:
+- `ya_cpc_706852522_17579526984` → `{ source: "ya", medium: "cpc", campaign: "706852522", content: "17579526984" }`
+- `web` → `{ source: "web", medium: null, campaign: null, content: null }`
+- пустой → `{ source: null, medium: null, campaign: null, content: null }`
 
-## Изменения в коде
+Известные источники: `ya`, `gads`, `fb`, `ig`, `vk`, `tg`, `web`
+Известные medium: `cpc`, `cpm`, `organic`, `social`, `referral`
 
-### `src/index.ts` — обработчик `/start`
+### Сохранение при регистрации
+При создании нового пользователя в `/start` хендлере UTM-поля записываются в таблицу `users`.
 
-В блоке создания нового пользователя:
-
-```typescript
-bot.start(async (ctx) => {
-  const telegramId = ctx.from?.id;
-  if (!telegramId) return;
-
-  let user = await getUser(telegramId);
-
-  if (!user) {
-    // Парсим start payload
-    const startPayload = (ctx as any).startPayload || "";
-    const utm = parseStartPayload(startPayload);
-
-    const { data: created } = await supabase
-      .from("users")
-      .insert({
-        telegram_id: telegramId,
-        lang,
-        language_code: languageCode || null,
-        credits: 1,
-        has_purchased: false,
-        username: ctx.from?.username || null,
-        env: config.appEnv,
-        // UTM tracking
-        start_payload: startPayload || null,
-        utm_source: utm.source,
-        utm_medium: utm.medium,
-        utm_campaign: utm.campaign,
-        utm_content: utm.content,
-      })
-      .select("*")
-      .single();
-
-    // Алерт с UTM
-    sendNotification({
-      type: "new_user",
-      message: `@${ctx.from?.username || "no_username"} (${telegramId})\n🌐 Язык: ${languageCode}\n📢 Источник: ${utm.source || "direct"}`,
-    }).catch(console.error);
-  }
-});
-```
+### Алерт о новом пользователе
+Включает источник трафика: `📢 Источник: ya/cpc кампания:706852522`
 
 ---
 
-## SQL-запросы для аналитики
+## Часть 3: Аналитика (SQL-запросы)
 
 ### Пользователи по источникам
 ```sql
-SELECT utm_source, utm_medium, COUNT(*) as users
+SELECT
+  COALESCE(utm_source, 'direct') as source,
+  utm_medium,
+  COUNT(*) as users
 FROM users
-WHERE utm_source IS NOT NULL
+WHERE created_at > now() - interval '30 days'
 GROUP BY utm_source, utm_medium
-ORDER BY users DESC;
-```
-
-### Пользователи по кампаниям Яндекс Директ
-```sql
-SELECT utm_campaign, COUNT(*) as users,
-  COUNT(*) FILTER (WHERE has_purchased) as paid_users,
-  SUM(credits) FILTER (WHERE has_purchased) as total_credits
-FROM users
-WHERE utm_source = 'ya'
-GROUP BY utm_campaign
 ORDER BY users DESC;
 ```
 
@@ -185,30 +134,28 @@ GROUP BY utm_source
 ORDER BY total_users DESC;
 ```
 
----
-
-## Настройка рекламы (Яндекс Директ)
-
-В Яндекс Директ в поле "Ссылка" указать:
-```
-https://t.me/Photo_2_StickerBot?start=ya_cpc_{campaign_id}
-```
-
-Где `{campaign_id}` — подстановка ID кампании из Директа.
-
-Для более детальной аналитики (с ID объявления):
-```
-https://t.me/Photo_2_StickerBot?start=ya_cpc_{campaign_id}_{ad_id}
+### Пользователи по кампаниям Яндекс Директ
+```sql
+SELECT
+  utm_campaign,
+  COUNT(*) as users,
+  COUNT(*) FILTER (WHERE has_purchased) as paid_users
+FROM users
+WHERE utm_source = 'ya'
+GROUP BY utm_campaign
+ORDER BY users DESC;
 ```
 
 ---
 
 ## Чеклист
 
-- [ ] Миграция: добавить колонки utm_* в users
-- [ ] Функция `parseStartPayload()` в index.ts
-- [ ] Парсинг `ctx.startPayload` при создании пользователя
-- [ ] Сохранение utm-полей при insert в users
-- [ ] UTM в алерте о новом пользователе
-- [ ] Обновить ссылки в рекламных кампаниях
-- [ ] NOTIFY pgrst, 'reload schema' после миграции
+- [x] Миграция: колонки utm_* в users — `sql/048_utm_tracking.sql`
+- [x] Функция `parseStartPayload()` в `src/index.ts`
+- [x] Сохранение UTM при создании пользователя
+- [x] UTM в алерте о новом пользователе
+- [x] Закоммичено и запушено в main
+- [ ] Применить миграцию в Supabase + `NOTIFY pgrst, 'reload schema'`
+- [ ] Добавить JS-скрипт на лендинг (кнопка `.open-bot-btn`)
+- [ ] Обновить ссылки в рекламных кампаниях (если используются прямые ссылки на бота)
+- [ ] Проверить: зайти с UTM → убедиться что utm_source сохранился в users
