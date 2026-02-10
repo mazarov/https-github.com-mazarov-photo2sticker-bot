@@ -27,7 +27,9 @@ function getFont(): opentype.Font {
   if (!cachedFont) {
     const fontPath = findFontPath();
     const buf = fs.readFileSync(fontPath);
-    cachedFont = opentype.parse(buf.buffer as ArrayBuffer);
+    // Node.js Buffer.buffer may contain extra data from memory pool — slice to exact range
+    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    cachedFont = opentype.parse(ab as ArrayBuffer);
     console.log("opentype.js: font loaded, glyphs:", cachedFont.glyphs.length);
   }
   return cachedFont;
