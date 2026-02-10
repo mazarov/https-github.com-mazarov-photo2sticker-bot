@@ -1,22 +1,8 @@
 import sharp from "sharp";
-import * as fs from "fs";
 import * as path from "path";
 
-// Load font once at module init — embedded in SVG as base64 to bypass fontconfig issues
-let fontBase64Cache: string | null = null;
-function getFontBase64(): string {
-  if (fontBase64Cache) return fontBase64Cache;
-  try {
-    const fontPath = path.join(__dirname, "..", "assets", "Inter-Bold.otf");
-    const fontBuffer = fs.readFileSync(fontPath);
-    fontBase64Cache = fontBuffer.toString("base64");
-    console.log("Embedded font loaded:", fontPath, "size:", fontBuffer.length);
-  } catch (err: any) {
-    console.warn("Failed to load embedded font:", err.message);
-    fontBase64Cache = ""; // empty = will use fallback font
-  }
-  return fontBase64Cache;
-}
+// Path to bundled font file (copied to dist/assets/ during Docker build)
+const FONT_PATH = path.join(__dirname, "..", "assets", "Inter-Bold.otf");
 
 /**
  * Morphological dilation of alpha channel.
@@ -82,9 +68,19 @@ function escapeXml(text: string): string {
 }
 
 /**
+ * Escape pango markup special characters.
+ */
+function escapePango(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/**
  * Add text badge overlay to a sticker.
- * Renders a white rounded badge with black text on top of the sticker.
- * Font is embedded as base64 in SVG — no system fonts or fontconfig needed.
+ * Renders a white rounded badge (SVG rect) with black text (Sharp text API + fontfile).
+ * This approach bypasses librsvg text rendering entirely — uses pango with explicit font.
  * Returns a 512x512 WebP buffer ready for Telegram.
  *
  * @param inputBuffer - WebP/PNG sticker buffer
@@ -102,62 +98,85 @@ export async function addTextToSticker(
     displayText = displayText.substring(0, 27) + "...";
   }
 
-  // Auto-scale font size based on text length
-  let fontSize: number;
+  // Auto-scale font size based on text length (pango uses points, roughly 1.33x pixels)
+  let fontSizePt: number;
   if (displayText.length <= 8) {
-    fontSize = 36;
+    fontSizePt = 28;
   } else if (displayText.length <= 15) {
-    fontSize = 30;
+    fontSizePt = 22;
   } else if (displayText.length <= 22) {
-    fontSize = 26;
+    fontSizePt = 18;
   } else {
-    fontSize = 22;
+    fontSizePt = 15;
   }
 
-  // Calculate badge dimensions — width adapts to text length
   const STRIP_H = 52;
+  const MARGIN = 8;
+
+  // Step 1: Render text to PNG using Sharp's text API with explicit fontfile
+  // This uses pango directly — NOT librsvg — so it works with the bundled font
+  let textPng: Buffer;
+  try {
+    textPng = await (sharp as any)({
+      text: {
+        text: `<span foreground="#1a1a1a">${escapePango(displayText)}</span>`,
+        fontfile: FONT_PATH,
+        font: "Inter Bold",
+        rgba: true,
+        dpi: 96,
+        width: 480,
+        height: STRIP_H,
+        align: "centre",
+      },
+    }).ensureAlpha().png().toBuffer();
+    console.log("addTextToSticker: text rendered via Sharp text API, size:", textPng.length);
+  } catch (err: any) {
+    console.error("addTextToSticker: Sharp text API failed:", err.message);
+    // If text API not available, return sticker with badge only (no text)
+    textPng = Buffer.alloc(0);
+  }
+
+  // Get text image dimensions to calculate badge width
+  let textMeta = { width: 200, height: 40 };
+  if (textPng.length > 0) {
+    const meta = await sharp(textPng).metadata();
+    textMeta = { width: meta.width || 200, height: meta.height || 40 };
+  }
+
+  // Calculate badge dimensions — adapts to text width
   const PADDING = 24;
-  const charWidth = fontSize * 0.6;
-  const textWidth = displayText.length * charWidth;
-  const rectWidth = Math.min(500, Math.max(80, textWidth + PADDING * 2));
+  const rectWidth = Math.min(500, Math.max(80, textMeta.width + PADDING * 2));
   const rectX = (512 - rectWidth) / 2;
-
-  // Position: badge offset from edge
-  const MARGIN = 6;
   const yRect = position === "bottom" ? 512 - STRIP_H - MARGIN : MARGIN;
-  const yText = position === "bottom"
-    ? 512 - STRIP_H / 2 - MARGIN + fontSize * 0.35
-    : MARGIN + STRIP_H / 2 + fontSize * 0.35;
 
-  // Build embedded font style (if available)
-  const fontB64 = getFontBase64();
-  const fontStyle = fontB64
-    ? `<defs><style>@font-face { font-family: 'Inter'; src: url('data:font/otf;base64,${fontB64}') format('opentype'); }</style></defs>`
-    : "";
-  const fontFamily = fontB64 ? "Inter" : "DejaVu Sans, Arial, sans-serif";
-
-  // Build SVG: white rounded badge + black text
-  const svg = `<svg width="512" height="512" xmlns="http://www.w3.org/2000/svg">
-  ${fontStyle}
+  // Step 2: Create badge (white rounded rect) as SVG — rect only, NO text in SVG
+  const badgeSvg = Buffer.from(`<svg width="512" height="512" xmlns="http://www.w3.org/2000/svg">
   <rect x="${rectX}" y="${yRect}" width="${rectWidth}" height="${STRIP_H}"
         fill="white" opacity="0.92" rx="14" ry="14"/>
-  <text x="256" y="${yText}" text-anchor="middle"
-        font-family="${fontFamily}" font-size="${fontSize}" font-weight="bold"
-        fill="#1a1a1a">${escapeXml(displayText)}</text>
-</svg>`;
+</svg>`);
 
-  const svgBuffer = Buffer.from(svg);
-  console.log("addTextToSticker: text:", displayText, "fontSize:", fontSize,
-    "badgeW:", rectWidth, "pos:", position, "fontEmbedded:", !!fontB64);
+  // Step 3: Composite all layers: sticker → badge → text
+  const layers: sharp.OverlayOptions[] = [
+    { input: badgeSvg, blend: "over" },
+  ];
 
-  // Composite SVG badge over the sticker
+  if (textPng.length > 0) {
+    // Center text on badge
+    const textLeft = Math.round((512 - textMeta.width) / 2);
+    const textTop = Math.round(yRect + (STRIP_H - textMeta.height) / 2);
+    layers.push({ input: textPng, left: textLeft, top: textTop, blend: "over" });
+  }
+
+  console.log("addTextToSticker: text:", displayText, "badgeW:", rectWidth,
+    "textW:", textMeta.width, "pos:", position);
+
   const result = await sharp(inputBuffer)
     .ensureAlpha()
     .resize(512, 512, {
       fit: "contain",
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     })
-    .composite([{ input: svgBuffer, blend: "over" }])
+    .composite(layers)
     .webp()
     .toBuffer();
 
