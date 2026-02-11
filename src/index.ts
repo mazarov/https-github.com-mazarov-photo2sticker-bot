@@ -30,7 +30,9 @@ import {
   type AssistantSessionRow,
 } from "./lib/assistant-db";
 
-const bot = new Telegraf(config.telegramBotToken);
+const bot = new Telegraf(config.telegramBotToken, {
+  handlerTimeout: 180_000, // 3 min — pack ideas generation with GPT-4o vision can be slow
+});
 
 // Global error handler — catch all unhandled errors from handlers
 bot.catch((err: any, ctx: any) => {
@@ -4187,6 +4189,7 @@ Categories: emotion, action, scene, text_meme, holiday, outfit`;
             "Authorization": `Bearer ${config.openaiApiKey}`,
             "Content-Type": "application/json",
           },
+          timeout: 60_000, // 60s timeout for GPT-4o vision call
         }
       );
 
@@ -4225,6 +4228,20 @@ Categories: emotion, action, scene, text_meme, holiday, outfit`;
       }
 
       console.log("[PackIdeas] GPT-4o generated", ideas.length, "ideas");
+
+      // If GPT-4o returned fewer than 8, pad with default ideas
+      if (ideas.length < 8) {
+        console.log("[PackIdeas] Padding with default ideas:", 8 - ideas.length, "needed");
+        const defaults = getDefaultIdeas(lang);
+        const existingTitles = new Set(ideas.map((i: any) => i.titleEn?.toLowerCase()));
+        for (const d of defaults) {
+          if (ideas.length >= 8) break;
+          if (!existingTitles.has(d.titleEn?.toLowerCase())) {
+            ideas.push(d);
+          }
+        }
+      }
+
       return ideas.slice(0, 8);
     } catch (err: any) {
       console.error("[PackIdeas] GPT-4o Error:", err.response?.data || err.message);
