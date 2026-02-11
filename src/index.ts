@@ -1331,7 +1331,7 @@ bot.start(async (ctx) => {
         telegram_id: telegramId, 
         lang, 
         language_code: languageCode || null,
-        credits: 1,
+        credits: 0,
         has_purchased: false,
         username: ctx.from?.username || null,
         env: config.appEnv,
@@ -1361,9 +1361,8 @@ bot.start(async (ctx) => {
       user = created;
     }
 
-    // 1 free credit for first generation
-    // Paywall shows on 2nd generation if no purchase
-    // Bonus +2 credits given on first purchase
+    // No free credits on registration — credits granted by AI assistant (grant_credit, 20/day limit)
+    // Paywall shows if no credits and no purchase
 
     // Send notification (async, non-blocking)
     if (user?.id) {
