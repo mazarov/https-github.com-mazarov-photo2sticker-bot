@@ -4193,10 +4193,14 @@ bot.action(/^onboarding_emotion:(.+):(.+)$/, async (ctx) => {
 
   const emotionHint = emotionPreset?.prompt_hint || emotionId;
 
+  // Use prompt template from DB (same as regular emotion change)
+  const emotionTemplate = await getPromptTemplate("emotion");
+  const promptFinal = buildPromptFromTemplate(emotionTemplate, emotionHint);
+
   // Start generation
   await startGeneration(ctx, user, session, lang, {
     generationType: "emotion",
-    promptFinal: `Add ${emotionHint} expression to this sticker character`,
+    promptFinal,
     emotionPrompt: emotionHint,
     selectedEmotion: emotionId,
   });
