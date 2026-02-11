@@ -406,7 +406,8 @@ async function runJob(job: any) {
     sourceFileId: sourceFileId?.substring(0, 30) + "...",
   });
   
-  console.time("step7_insert");
+  const timerLabel = (name: string) => `${name}:${job.id.substring(0, 8)}`;
+  console.time(timerLabel("step7_insert"));
   const { data: stickerRecord } = await supabase
     .from("stickers")
     .insert({
@@ -422,7 +423,7 @@ async function runJob(job: any) {
     })
     .select("id")
     .single();
-  console.timeEnd("step7_insert");
+  console.timeEnd(timerLabel("step7_insert"));
 
   const stickerId = stickerRecord?.id;
   console.log("stickerId after insert:", stickerId);
@@ -462,7 +463,7 @@ async function runJob(job: any) {
   };
 
   // Send sticker (only "Add to pack" button during first onboarding step)
-  console.time("step7_sendSticker");
+  console.time(timerLabel("step7_sendSticker"));
   const onboardingMarkup = {
     inline_keyboard: [
       [{ text: addToPackText, callback_data: stickerId ? `add_to_pack:${stickerId}` : "add_to_pack" }],
@@ -470,7 +471,7 @@ async function runJob(job: any) {
   };
   const stickerMarkup = isOnboardingFirstSticker ? onboardingMarkup : replyMarkup;
   const stickerFileId = await sendSticker(telegramId, stickerBuffer, stickerMarkup);
-  console.timeEnd("step7_sendSticker");
+  console.timeEnd(timerLabel("step7_sendSticker"));
 
   // Update telegram_file_id IMMEDIATELY after sending (before user can click buttons)
   console.log("Updating sticker with telegram_file_id:", stickerId, "fileId:", stickerFileId?.substring(0, 30) + "...");
@@ -642,13 +643,13 @@ async function runJob(job: any) {
   await clearProgress();
 
   // Upload to storage in background (non-critical, can be slow)
-  console.time("step7_upload");
+  console.time(timerLabel("step7_upload"));
   supabase.storage
     .from(config.supabaseStorageBucket)
     .upload(filePathStorage, stickerBuffer, { contentType: "image/webp", upsert: true })
-    .then(() => console.timeEnd("step7_upload"))
+    .then(() => console.timeEnd(timerLabel("step7_upload")))
     .catch((err) => {
-      console.timeEnd("step7_upload");
+      console.timeEnd(timerLabel("step7_upload"));
       console.error("Storage upload failed:", err);
     });
 
