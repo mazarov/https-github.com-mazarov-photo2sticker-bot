@@ -11,7 +11,8 @@ type AlertType =
   | "paywall_shown"
   | "assistant_gemini_error"
   | "trial_credit_granted"
-  | "trial_credit_denied";
+  | "trial_credit_denied"
+  | "idea_generated";
 
 interface AlertOptions {
   type: AlertType;
@@ -32,6 +33,7 @@ const EMOJI: Record<AlertType, string> = {
   assistant_gemini_error: "🤖",
   trial_credit_granted: "🎁",
   trial_credit_denied: "❌",
+  idea_generated: "💡",
 };
 
 export async function sendAlert(options: AlertOptions): Promise<void> {

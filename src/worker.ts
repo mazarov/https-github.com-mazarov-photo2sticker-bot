@@ -408,6 +408,15 @@ async function runJob(job: any) {
   
   const timerLabel = (name: string) => `${name}:${job.id.substring(0, 8)}`;
   console.time(timerLabel("step7_insert"));
+  // Determine idea_source from session (if sticker generated from pack idea)
+  const ideaSource = (() => {
+    if (session.state === "browsing_ideas" || session.generated_from_ideas?.length > 0) {
+      const ideas = session.generated_from_ideas || [];
+      return ideas[ideas.length - 1] || null;
+    }
+    return null;
+  })();
+
   const { data: stickerRecord } = await supabase
     .from("stickers")
     .insert({
@@ -419,6 +428,7 @@ async function runJob(job: any) {
       result_storage_path: filePathStorage,
       sticker_set_name: user?.sticker_set_name || null,
       style_preset_id: session.selected_style_id || null,  // For style examples
+      idea_source: ideaSource,
       env: config.appEnv,
     })
     .select("id")
@@ -443,6 +453,7 @@ async function runJob(job: any) {
   const changeMotionText = await getText(lang, "btn.change_motion");
   const addTextText = await getText(lang, "btn.add_text");
   const toggleBorderText = await getText(lang, "btn.toggle_border");
+  const packIdeasText = lang === "ru" ? "💡 Идеи для пака" : "💡 Pack ideas";
 
   // Use sticker ID in callback_data for message binding
   const replyMarkup = {
@@ -458,6 +469,9 @@ async function runJob(job: any) {
       ],
       [
         { text: addTextText, callback_data: stickerId ? `add_text:${stickerId}` : "add_text" },
+      ],
+      [
+        { text: packIdeasText, callback_data: stickerId ? `pack_ideas:${stickerId}` : "pack_ideas" },
       ],
     ],
   };
@@ -642,6 +656,57 @@ async function runJob(job: any) {
 
   await clearProgress();
 
+  // Auto-show next pack idea if we were browsing ideas
+  if (ideaSource && session.pack_ideas?.length > 0) {
+    const ideas = session.pack_ideas;
+    const nextIndex = session.current_idea_index || 0;
+    if (nextIndex < ideas.length) {
+      const idea = ideas[nextIndex];
+      const title = lang === "ru" ? idea.titleRu : idea.titleEn;
+      const desc = lang === "ru" ? idea.descriptionRu : idea.descriptionEn;
+      const textHint = idea.hasText && idea.textSuggestion
+        ? `\n✏️ ${lang === "ru" ? "Текст" : "Text"}: "${idea.textSuggestion}"`
+        : "";
+      const text = `💡 ${lang === "ru" ? "Идея" : "Idea"} ${nextIndex + 1}/${ideas.length}\n\n`
+        + `${idea.emoji} <b>${title}</b>\n`
+        + `${desc}${textHint}`;
+
+      const generateText = lang === "ru" ? "🎨 Сгенерить (1💎)" : "🎨 Generate (1💎)";
+      const nextText = lang === "ru" ? "➡️ Следующая" : "➡️ Next";
+      const doneText = lang === "ru" ? "✅ Хватит" : "✅ Done";
+
+      try {
+        await sendMessage(telegramId, text, {
+          inline_keyboard: [
+            [
+              { text: generateText, callback_data: `idea_generate:${nextIndex}` },
+              { text: nextText, callback_data: "idea_next" },
+            ],
+            [{ text: doneText, callback_data: "idea_done" }],
+          ],
+        });
+      } catch (err) {
+        console.error("[Worker] Failed to show next idea:", err);
+      }
+    } else {
+      // All ideas exhausted
+      const generated = ideas.filter((i: any) => i.generated).length;
+      const allDoneText = lang === "ru"
+        ? `🎉 Все ${ideas.length} идей показаны!\nСгенерировано: ${generated} из ${ideas.length}`
+        : `🎉 All ${ideas.length} ideas shown!\nGenerated: ${generated} of ${ideas.length}`;
+      try {
+        await sendMessage(telegramId, allDoneText, {
+          inline_keyboard: [
+            [{ text: lang === "ru" ? "🔄 Новые идеи" : "🔄 More ideas", callback_data: "idea_more" }],
+            [{ text: lang === "ru" ? "📷 Новое фото" : "📷 New photo", callback_data: "new_photo" }],
+          ],
+        });
+      } catch (err) {
+        console.error("[Worker] Failed to show all-done:", err);
+      }
+    }
+  }
+
   // Upload to storage in background (non-critical, can be slow)
   console.time(timerLabel("step7_upload"));
   supabase.storage
@@ -653,10 +718,13 @@ async function runJob(job: any) {
       console.error("Storage upload failed:", err);
     });
 
+  // Keep browsing_ideas state if we were in pack ideas flow
+  const nextState = ideaSource ? "browsing_ideas" : "confirm_sticker";
+
   await supabase
     .from("sessions")
     .update({
-      state: "confirm_sticker",
+      state: nextState,
       is_active: true,
       last_sticker_file_id: stickerFileId,
       last_sticker_storage_path: filePathStorage,

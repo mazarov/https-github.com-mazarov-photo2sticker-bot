@@ -4083,6 +4083,519 @@ bot.action(/^admin_discount:(\d+):(\d+)$/, async (ctx) => {
   }
 });
 
+// ============================================================
+// Pack Ideas — AI-powered sticker pack idea generator
+// ============================================================
+
+interface StickerIdea {
+  emoji: string;
+  titleRu: string;
+  titleEn: string;
+  descriptionRu: string;
+  descriptionEn: string;
+  promptModification: string;
+  hasText: boolean;
+  textSuggestion?: string | null;
+  textPlacement?: "speech_bubble" | "sign" | "bottom_caption" | null;
+  category: string;
+  generated?: boolean;
+}
+
+async function generatePackIdeas(opts: {
+  stickerFileId: string;
+  stylePresetId: string | null;
+  lang: string;
+  existingStickers: string[];
+}): Promise<StickerIdea[]> {
+  const { stickerFileId, stylePresetId, lang, existingStickers } = opts;
+
+  // Download sticker image for AI analysis
+  const filePath = await getFilePath(stickerFileId);
+  const fileBuffer = await downloadFile(filePath);
+  const base64 = fileBuffer.toString("base64");
+  const mimeType = filePath.endsWith(".webp") ? "image/webp" : filePath.endsWith(".png") ? "image/png" : "image/jpeg";
+
+  // Get style info
+  let styleName = stylePresetId || "custom";
+  let styleHint = "";
+  if (stylePresetId) {
+    const presets = await getStylePresets();
+    const preset = presets.find((p: any) => p.id === stylePresetId);
+    if (preset) {
+      styleName = preset.name_en || preset.id;
+      styleHint = preset.prompt_hint || "";
+    }
+  }
+
+  const existingList = existingStickers.length > 0
+    ? existingStickers.map((s, i) => `${i + 1}. ${s}`).join("\n")
+    : "None yet (this is the first sticker)";
+
+  const textLang = lang === "ru" ? "Russian" : "English";
+
+  const systemPrompt = `You are a professional sticker pack designer. Analyze the sticker image and create a set of 8 unique ideas for additional stickers in the same style to build a complete sticker pack.
+
+The user's sticker style: ${styleName} (${styleHint})
+
+Already existing stickers in the pack (DO NOT repeat similar ideas):
+${existingList}
+
+Rules:
+1. Each idea must be visually distinct from all others
+2. Mix categories for a well-rounded pack:
+   - 2-3 emotion ideas (happy, angry, sad, shocked, shy, etc.)
+   - 1-2 action/pose ideas (waving, thumbs up, running, dancing)
+   - 2-3 text/meme ideas with short text on the sticker
+   - 1-2 scene ideas (morning coffee, working, party)
+3. For text ideas:
+   - Suggest short text (1-3 words) in ${textLang}
+   - Text should be casual/memey: ${lang === "ru" ? '"ОК", "Нет", "Жиза", "Привет!", "Ору", "Спасибо"' : '"OK", "Nope", "LOL", "Hi!", "Thanks", "Mood"'}
+   - Specify placement: speech_bubble, sign, or bottom_caption
+4. promptModification must be in English, detailed enough for image generation
+5. Keep the same character/subject from the original sticker
+6. titleRu and descriptionRu must be in Russian, titleEn and descriptionEn in English
+
+Return a JSON array of exactly 8 ideas in this format:
+[{
+  "emoji": "😂",
+  "titleRu": "Хохочет до слёз",
+  "titleEn": "Laughing hard",
+  "descriptionRu": "Персонаж смеётся, держась за живот",
+  "descriptionEn": "Character laughing hysterically, holding belly",
+  "promptModification": "laughing hysterically, holding belly, tears of joy, mouth wide open",
+  "hasText": false,
+  "textSuggestion": null,
+  "textPlacement": null,
+  "category": "emotion"
+}]
+
+Categories: emotion, action, scene, text_meme, holiday, outfit`;
+
+  try {
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
+      {
+        systemInstruction: {
+          parts: [{ text: systemPrompt }],
+        },
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: "Analyze this sticker and generate 8 unique ideas for a sticker pack." },
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+        },
+      },
+      {
+        headers: { "x-goog-api-key": config.geminiApiKey },
+      }
+    );
+
+    const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      console.error("[PackIdeas] Gemini returned no text");
+      return getDefaultIdeas(lang);
+    }
+
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      console.error("[PackIdeas] Unexpected format:", text.slice(0, 200));
+      return getDefaultIdeas(lang);
+    }
+
+    return parsed.slice(0, 8);
+  } catch (err: any) {
+    console.error("[PackIdeas] Error:", err.response?.data || err.message);
+    return getDefaultIdeas(lang);
+  }
+}
+
+function getDefaultIdeas(lang: string): StickerIdea[] {
+  return [
+    { emoji: "😂", titleRu: "Хохочет", titleEn: "Laughing", descriptionRu: "Смеётся от души", descriptionEn: "Laughing out loud", promptModification: "laughing hysterically, tears of joy, mouth wide open", hasText: false, textSuggestion: null, textPlacement: null, category: "emotion" },
+    { emoji: "😢", titleRu: "Грустит", titleEn: "Sad", descriptionRu: "Грустный, слёзы", descriptionEn: "Feeling sad, teary", promptModification: "looking sad, single tear rolling down cheek, pouty expression", hasText: false, textSuggestion: null, textPlacement: null, category: "emotion" },
+    { emoji: "😡", titleRu: "Злится", titleEn: "Angry", descriptionRu: "Злой, в ярости", descriptionEn: "Angry, furious", promptModification: "angry expression, furrowed brows, clenched fists, red face", hasText: false, textSuggestion: null, textPlacement: null, category: "emotion" },
+    { emoji: "👋", titleRu: "Машет рукой", titleEn: "Waving", descriptionRu: "Приветливо машет", descriptionEn: "Waving hello", promptModification: "waving hand cheerfully, friendly smile, saying hello", hasText: false, textSuggestion: null, textPlacement: null, category: "action" },
+    { emoji: "👍", titleRu: "Класс!", titleEn: "Thumbs up", descriptionRu: "Показывает палец вверх", descriptionEn: "Giving thumbs up", promptModification: "giving thumbs up, confident smile, approving gesture", hasText: false, textSuggestion: null, textPlacement: null, category: "action" },
+    { emoji: "💬", titleRu: "Привет!", titleEn: "Hi!", descriptionRu: "С речевым пузырём", descriptionEn: "With speech bubble", promptModification: "cheerful expression, waving, with speech bubble", hasText: true, textSuggestion: lang === "ru" ? "Привет!" : "Hi!", textPlacement: "speech_bubble", category: "text_meme" },
+    { emoji: "💬", titleRu: "ОК", titleEn: "OK", descriptionRu: "Показывает ОК", descriptionEn: "Saying OK", promptModification: "calm confident expression, OK hand gesture", hasText: true, textSuggestion: "OK", textPlacement: "speech_bubble", category: "text_meme" },
+    { emoji: "☕", titleRu: "Утро с кофе", titleEn: "Morning coffee", descriptionRu: "Пьёт кофе утром", descriptionEn: "Drinking morning coffee", promptModification: "holding a coffee cup, sleepy but happy expression, morning vibes", hasText: false, textSuggestion: null, textPlacement: null, category: "scene" },
+  ];
+}
+
+function formatIdeaMessage(idea: StickerIdea, index: number, total: number, lang: string): string {
+  const title = lang === "ru" ? idea.titleRu : idea.titleEn;
+  const desc = lang === "ru" ? idea.descriptionRu : idea.descriptionEn;
+  const textHint = idea.hasText && idea.textSuggestion
+    ? `\n✏️ ${lang === "ru" ? "Текст" : "Text"}: "${idea.textSuggestion}"`
+    : "";
+
+  return `💡 ${lang === "ru" ? "Идея" : "Idea"} ${index + 1}/${total}\n\n`
+    + `${idea.emoji} <b>${title}</b>\n`
+    + `${desc}${textHint}`;
+}
+
+function getIdeaKeyboard(index: number, total: number, lang: string) {
+  const generateText = lang === "ru" ? "🎨 Сгенерить (1💎)" : "🎨 Generate (1💎)";
+  const nextText = lang === "ru" ? "➡️ Следующая" : "➡️ Next";
+  const doneText = lang === "ru" ? "✅ Хватит" : "✅ Done";
+
+  const buttons: any[][] = [
+    [
+      { text: generateText, callback_data: `idea_generate:${index}` },
+      { text: nextText, callback_data: "idea_next" },
+    ],
+    [{ text: doneText, callback_data: "idea_done" }],
+  ];
+
+  return { inline_keyboard: buttons };
+}
+
+// Callback: Pack Ideas button
+bot.action(/^pack_ideas:(.+)$/, async (ctx) => {
+  console.log("=== pack_ideas callback ===");
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+  const stickerId = ctx.match[1];
+
+  // Get sticker info
+  const { data: sticker } = await supabase
+    .from("stickers")
+    .select("telegram_file_id, style_preset_id, user_id")
+    .eq("id", stickerId)
+    .maybeSingle();
+
+  if (!sticker?.telegram_file_id) {
+    console.log("[PackIdeas] No sticker found:", stickerId);
+    return;
+  }
+
+  if (sticker.user_id !== user.id) return;
+
+  // Get or create session
+  let session = await getActiveSession(user.id);
+  if (!session?.id) {
+    const { data: newSession } = await supabase
+      .from("sessions")
+      .insert({ user_id: user.id, state: "browsing_ideas", is_active: true, env: config.appEnv })
+      .select()
+      .single();
+    session = newSession;
+  }
+  if (!session?.id) return;
+
+  // Show thinking message
+  const thinkingText = lang === "ru" ? "💡 Придумываю идеи для пака..." : "💡 Thinking of ideas for your pack...";
+  const thinkingMsg = await ctx.reply(thinkingText);
+
+  // Gather existing stickers context for deduplication
+  const existingStickers: string[] = [];
+  if (session.generated_from_ideas?.length) {
+    const ideas: StickerIdea[] = session.pack_ideas || [];
+    for (const ideaId of session.generated_from_ideas) {
+      const idx = parseInt(ideaId.replace("idea_", ""), 10);
+      if (ideas[idx]) {
+        existingStickers.push(ideas[idx].titleEn);
+      }
+    }
+  }
+  if (session.selected_style_id) {
+    existingStickers.unshift(`Style: ${session.selected_style_id} (initial sticker)`);
+  }
+  if (session.selected_emotion) {
+    existingStickers.push(`Emotion: ${session.selected_emotion}`);
+  }
+
+  // Generate ideas via AI
+  const ideas = await generatePackIdeas({
+    stickerFileId: sticker.telegram_file_id,
+    stylePresetId: sticker.style_preset_id,
+    lang,
+    existingStickers,
+  });
+
+  // Save ideas to session
+  await supabase.from("sessions").update({
+    pack_ideas: ideas,
+    current_idea_index: 0,
+    state: "browsing_ideas",
+    is_active: true,
+  }).eq("id", session.id);
+
+  // Delete thinking message
+  try {
+    await ctx.deleteMessage(thinkingMsg.message_id);
+  } catch {}
+
+  // Show first idea
+  const text = formatIdeaMessage(ideas[0], 0, ideas.length, lang);
+  const keyboard = getIdeaKeyboard(0, ideas.length, lang);
+  await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
+});
+
+// Callback: Generate sticker from idea
+bot.action(/^idea_generate:(\d+)$/, async (ctx) => {
+  console.log("=== idea_generate callback ===");
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session?.pack_ideas) {
+    await ctx.reply(lang === "ru" ? "⚠️ Идеи не найдены. Попробуй снова." : "⚠️ Ideas not found. Try again.");
+    return;
+  }
+
+  const ideaIndex = parseInt(ctx.match[1], 10);
+  const ideas: StickerIdea[] = session.pack_ideas;
+  const idea = ideas[ideaIndex];
+
+  if (!idea) {
+    console.log("[PackIdeas] Invalid idea index:", ideaIndex);
+    return;
+  }
+
+  // Build prompt: use base emotion template + idea's prompt modification
+  const emotionTemplate = await getPromptTemplate("emotion");
+  let promptFinal: string;
+  if (emotionTemplate) {
+    promptFinal = buildPromptFromTemplate(emotionTemplate, idea.promptModification);
+  } else {
+    promptFinal = idea.promptModification;
+  }
+
+  // Handle text overlay
+  let textPrompt: string | null = null;
+  let generationType: "style" | "emotion" | "motion" | "text" = "emotion";
+
+  if (idea.hasText && idea.textSuggestion) {
+    if (idea.textPlacement === "bottom_caption") {
+      textPrompt = idea.textSuggestion;
+      generationType = "text";
+    } else {
+      // Text in prompt (speech bubble / sign)
+      const textInPrompt = idea.textPlacement === "speech_bubble"
+        ? `with speech bubble saying "${idea.textSuggestion}"`
+        : `holding a sign that reads "${idea.textSuggestion}"`;
+      promptFinal += `. ${textInPrompt}`;
+    }
+  }
+
+  // Mark idea as generated
+  ideas[ideaIndex].generated = true;
+  const generatedFromIdeas = [...(session.generated_from_ideas || []), `idea_${ideaIndex}`];
+
+  await supabase.from("sessions").update({
+    pack_ideas: ideas,
+    current_idea_index: ideaIndex + 1,
+    generated_from_ideas: generatedFromIdeas,
+  }).eq("id", session.id);
+
+  // Update the idea message to show it's being generated
+  try {
+    const generatingText = lang === "ru"
+      ? `💡 Идея ${ideaIndex + 1}/${ideas.length}\n\n${idea.emoji} <b>${idea.titleRu}</b>\n\n⏳ Генерация...`
+      : `💡 Idea ${ideaIndex + 1}/${ideas.length}\n\n${idea.emoji} <b>${idea.titleEn}</b>\n\n⏳ Generating...`;
+    await ctx.editMessageText(generatingText, { parse_mode: "HTML" });
+  } catch {}
+
+  // Start generation using existing pipeline
+  await startGeneration(ctx, user, session, lang, {
+    generationType,
+    promptFinal,
+    textPrompt,
+    selectedStyleId: session.selected_style_id,
+    selectedEmotion: idea.titleEn,
+    emotionPrompt: idea.promptModification,
+  });
+
+  // Alert for analytics
+  sendAlert({
+    type: "idea_generated",
+    message: "Sticker from pack idea",
+    details: {
+      user: `@${user.username || telegramId}`,
+      ideaTitle: idea.titleEn,
+      ideaCategory: idea.category,
+      hasText: idea.hasText,
+      ideaIndex,
+      totalIdeas: ideas.length,
+      generatedCount: generatedFromIdeas.length,
+    },
+  }).catch(console.error);
+});
+
+// Callback: Next idea
+bot.action("idea_next", async (ctx) => {
+  console.log("=== idea_next callback ===");
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session?.pack_ideas) return;
+
+  const ideas: StickerIdea[] = session.pack_ideas;
+  const nextIndex = (session.current_idea_index || 0) + 1;
+
+  if (nextIndex >= ideas.length) {
+    // All ideas shown
+    const generated = ideas.filter((i: StickerIdea) => i.generated).length;
+    const text = lang === "ru"
+      ? `🎉 Все ${ideas.length} идей показаны!\nСгенерировано: ${generated} из ${ideas.length}`
+      : `🎉 All ${ideas.length} ideas shown!\nGenerated: ${generated} of ${ideas.length}`;
+
+    try {
+      await ctx.editMessageText(text, {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: lang === "ru" ? "🔄 Новые идеи" : "🔄 More ideas", callback_data: "idea_more" }],
+            [{ text: lang === "ru" ? "📷 Новое фото" : "📷 New photo", callback_data: "new_photo" }],
+          ],
+        },
+      });
+    } catch {}
+    return;
+  }
+
+  await supabase.from("sessions").update({
+    current_idea_index: nextIndex,
+  }).eq("id", session.id);
+
+  // Edit current message with next idea
+  const text = formatIdeaMessage(ideas[nextIndex], nextIndex, ideas.length, lang);
+  const keyboard = getIdeaKeyboard(nextIndex, ideas.length, lang);
+  try {
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: keyboard });
+  } catch {}
+});
+
+// Callback: Done browsing ideas
+bot.action("idea_done", async (ctx) => {
+  console.log("=== idea_done callback ===");
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+
+  // Count stickers in pack
+  const { count } = await supabase
+    .from("stickers")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .not("telegram_file_id", "is", null);
+
+  const stickerCount = count || 0;
+  const text = lang === "ru"
+    ? `🎉 Отлично! В твоём паке уже ${stickerCount} стикеров`
+    : `🎉 Great! Your pack has ${stickerCount} stickers`;
+
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: lang === "ru" ? "📷 Новое фото" : "📷 New photo", callback_data: "new_photo" }],
+          [{ text: lang === "ru" ? "💡 Ещё идеи" : "💡 More ideas", callback_data: "idea_more" }],
+        ],
+      },
+    });
+  } catch {}
+});
+
+// Callback: Generate more ideas
+bot.action("idea_more", async (ctx) => {
+  console.log("=== idea_more callback ===");
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session?.id) return;
+
+  // Need a sticker to analyze — use last_sticker_file_id
+  const stickerFileId = session.last_sticker_file_id;
+  if (!stickerFileId) {
+    await ctx.reply(lang === "ru" ? "⚠️ Сначала сгенерируй стикер" : "⚠️ Generate a sticker first");
+    return;
+  }
+
+  // Show thinking
+  const thinkingText = lang === "ru" ? "💡 Придумываю новые идеи..." : "💡 Coming up with new ideas...";
+  try {
+    await ctx.editMessageText(thinkingText);
+  } catch {}
+
+  // Gather all previously generated ideas for dedup
+  const existingStickers: string[] = [];
+  const prevIdeas: StickerIdea[] = session.pack_ideas || [];
+  for (const idea of prevIdeas) {
+    existingStickers.push(idea.titleEn);
+  }
+  if (session.selected_style_id) {
+    existingStickers.unshift(`Style: ${session.selected_style_id}`);
+  }
+
+  const ideas = await generatePackIdeas({
+    stickerFileId,
+    stylePresetId: session.selected_style_id,
+    lang,
+    existingStickers,
+  });
+
+  await supabase.from("sessions").update({
+    pack_ideas: ideas,
+    current_idea_index: 0,
+    state: "browsing_ideas",
+  }).eq("id", session.id);
+
+  // Show first new idea
+  const text = formatIdeaMessage(ideas[0], 0, ideas.length, lang);
+  const keyboard = getIdeaKeyboard(0, ideas.length, lang);
+  try {
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: keyboard });
+  } catch {
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
+  }
+});
+
+// ============================================================
+// End of Pack Ideas handlers
+// ============================================================
+
 // Callback: style_example - show first example
 bot.action(/^style_example:(.+)$/, async (ctx) => {
   console.log("=== style_example callback ===");
