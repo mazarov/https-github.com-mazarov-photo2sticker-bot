@@ -29,9 +29,39 @@
 
 ## Деплой
 
+### Архитектура
+Проект работает на **Dockhost** — 4 отдельных Docker-контейнера, каждый со своим Dockerfile:
+- `Dockerfile.api` → API бот (Telegram webhook / long polling)
+- `Dockerfile.worker` → Воркер генерации стикеров
+- `Dockerfile.support` → Саппорт бот
+- `Dockerfile.rembg` → Self-hosted rembg сервер (удаление фона)
+
+### Прод (main)
 - Деплой автоматический через GitHub Actions при пуше в `main`
 - **НЕ использовать** Dockhost API для редеплоя — endpoint не работает
 - После `git push` просто дождаться автодеплоя
+
+### Тест (feature ветки)
+1. Создать feature-ветку: `git checkout -b feature/my-feature`
+2. Запушить: `git push -u origin feature/my-feature`
+3. **Применить SQL-миграции** в Supabase (единая БД для прод и тест, разделение по колонке `env`)
+4. **Редеплой тестовых контейнеров на Dockhost вручную:**
+   - Зайти в Dockhost → выбрать тестовый контейнер (api / worker)
+   - Сменить ветку на feature-ветку → Rebuild
+   - Или: пользователь делает это сам через UI Dockhost
+5. Тестовый бот использует `.env.test` с `APP_ENV=test` — все данные (users, sessions, jobs) фильтруются по `env = 'test'`
+
+### Локальный запуск для отладки
+```bash
+npm run dev:test:api      # API с .env.test (long polling)
+npm run dev:test:worker   # Воркер с .env.test
+```
+⚠️ Локальный запуск конфликтует с запущенным на Dockhost тестовым ботом (409 Conflict) — нужно сначала остановить контейнер на Dockhost
+
+### Разделение окружений
+- `APP_ENV=prod` / `APP_ENV=test` — колонка `env` в таблицах `users`, `sessions`, `jobs`, `stickers`
+- Одна Supabase БД для обоих окружений
+- Разные Telegram боты (разные токены)
 
 ## Известные ограничения
 

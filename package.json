@@ -9,7 +9,9 @@
     "dev:test:worker": "DOTENV_CONFIG_PATH=.env.test npx tsx src/worker.ts",
     "build": "tsc -p tsconfig.json",
     "start:api": "node dist/index.js",
-    "start:worker": "node dist/worker.js"
+    "start:worker": "node dist/worker.js",
+    "broadcast:valentine": "DOTENV_CONFIG_PATH=.env tsx src/broadcast-valentine.ts",
+    "broadcast:valentine:test": "DOTENV_CONFIG_PATH=.env tsx src/broadcast-valentine.ts --test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.48.0",
