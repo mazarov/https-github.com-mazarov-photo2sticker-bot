@@ -676,9 +676,11 @@ const CREDIT_PACKS = [
   { credits: 30, price: 300, price_rub: 249, label_ru: "💎 Популярный", label_en: "💎 Popular" },
   { credits: 100, price: 700, price_rub: 699, label_ru: "👑 Про", label_en: "👑 Pro" },
   { credits: 250, price: 1500, price_rub: 1490, label_ru: "🚀 Макс", label_en: "🚀 Max" },
-  // Hidden discount packs for abandoned carts (not shown in UI, used via direct callback)
+  // Hidden discount packs (not shown in UI, used via direct callback for promos & abandoned carts)
   { credits: 10, price: 135, price_rub: 89, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
   { credits: 30, price: 270, price_rub: 224, label_ru: "💎 Популярный -10%", label_en: "💎 Popular -10%", hidden: true },
+  { credits: 100, price: 630, price_rub: 629, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true },
+  { credits: 250, price: 1350, price_rub: 1341, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true },
 ];
 
 /**
@@ -1294,6 +1296,13 @@ function parseStartPayload(payload: string): {
   return { source: payload, medium: null, campaign: null, content: null };
 }
 
+// Get start payload from /start deep link (t.me/bot?start=payload → message "/start payload")
+function getStartPayload(ctx: { message?: { text?: string } }): string {
+  const text = ctx.message?.text || "";
+  const match = text.match(/^\/start\s+(.+)$/);
+  return match ? match[1].trim() : "";
+}
+
 // /start command
 bot.start(async (ctx) => {
   const telegramId = ctx.from?.id;
@@ -1307,8 +1316,8 @@ bot.start(async (ctx) => {
     const languageCode = ctx.from?.language_code || "";
     const lang = languageCode.toLowerCase().startsWith("ru") ? "ru" : "en";
 
-    // Parse UTM from start payload
-    const startPayload = (ctx as any).startPayload || "";
+    // Parse UTM from start payload (t.me/bot?start=payload)
+    const startPayload = getStartPayload(ctx);
     const utm = parseStartPayload(startPayload);
     if (startPayload) {
       console.log("New user - start_payload:", startPayload, "utm:", JSON.stringify(utm));
@@ -1376,7 +1385,7 @@ bot.start(async (ctx) => {
     if (user.language_code !== currentLangCode) updates.language_code = currentLangCode || null;
 
     // Update UTM for returning users if they came via a new start link and UTM is empty
-    const startPayload = (ctx as any).startPayload || "";
+    const startPayload = getStartPayload(ctx);
     if (startPayload && !user.utm_source) {
       const utm = parseStartPayload(startPayload);
       if (utm.source) {
@@ -1397,12 +1406,86 @@ bot.start(async (ctx) => {
 
   if (user?.id) {
     const lang = user.lang || "en";
+    const startPayload = getStartPayload(ctx);
+
+    // Valentine broadcast: val_STYLE_ID — create session for direct style generation
+    if (startPayload.startsWith("val_")) {
+      const styleId = startPayload.replace("val_", "");
+      const preset = await getStylePresetV2ById(styleId);
+      if (preset) {
+        // Close active sessions, create new one with preferred style
+        await supabase
+          .from("sessions")
+          .update({ state: "canceled", is_active: false })
+          .eq("user_id", user.id)
+          .eq("is_active", true);
+
+        await supabase.from("sessions").insert({
+          user_id: user.id,
+          state: "wait_photo",
+          is_active: true,
+          selected_style_id: styleId,
+          env: config.appEnv,
+        });
+
+        const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
+        const text = lang === "ru"
+          ? `💝 Отправь фото — создам стикер в стиле «${styleName}»!\n\n${preset.emoji} Просто отправь фото сюда 👇`
+          : `💝 Send a photo — I'll create a sticker in «${styleName}» style!\n\n${preset.emoji} Just send your photo here 👇`;
+        await ctx.reply(text, getMainMenuKeyboard(lang));
+        return;
+      }
+    }
+
     // Start AI assistant dialog (cancels old sessions inside)
     await startAssistantDialog(ctx, user, lang);
   } else {
     const lang = "en";
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
   }
+});
+
+// Valentine broadcast: callback val_STYLE_ID (user already in bot, no /start redirect)
+bot.action(/^val_(.+)$/, async (ctx) => {
+  const styleId = ctx.match[1];
+  console.log("[Broadcast] val_ callback:", styleId, "telegramId:", ctx.from?.id);
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) {
+    console.log("[Broadcast] val_ user not found for telegramId:", telegramId, "appEnv:", config.appEnv);
+    return;
+  }
+
+  const preset = await getStylePresetV2ById(styleId);
+  if (!preset) {
+    console.log("[Broadcast] val_ preset not found:", styleId);
+    return;
+  }
+
+  const lang = user.lang || "en";
+
+  await supabase
+    .from("sessions")
+    .update({ state: "canceled", is_active: false })
+    .eq("user_id", user.id)
+    .eq("is_active", true);
+
+  await supabase.from("sessions").insert({
+    user_id: user.id,
+    state: "wait_photo",
+    is_active: true,
+    selected_style_id: styleId,
+    env: config.appEnv,
+  });
+
+  const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
+  const text = lang === "ru"
+    ? `💝 Отправь фото — создам стикер в стиле «${styleName}»!\n\n${preset.emoji} Просто отправь фото сюда 👇`
+    : `💝 Send a photo — I'll create a sticker in «${styleName}» style!\n\n${preset.emoji} Just send your photo here 👇`;
+  await ctx.reply(text, getMainMenuKeyboard(lang));
 });
 
 // /balance command - shows balance + tariffs directly (no intermediate "Top up" button)
@@ -1618,6 +1701,35 @@ bot.on("photo", async (ctx) => {
   // === Manual mode: existing logic ===
   const photos = Array.isArray(session.photos) ? session.photos : [];
   photos.push(photo.file_id);
+
+  // Valentine flow: came from val_* link with pre-selected style — go straight to generation
+  if (session.state === "wait_photo" && session.selected_style_id) {
+    const preset = await getStylePresetV2ById(session.selected_style_id);
+    if (preset) {
+      const { error: upErr } = await supabase
+        .from("sessions")
+        .update({
+          photos,
+          state: "wait_style",
+          is_active: true,
+          current_photo_file_id: photo.file_id,
+        })
+        .eq("id", session.id);
+      if (upErr) console.error("Valentine photo update error:", upErr);
+      await ctx.reply(await getText(lang, "photo.processing"));
+      const userInput = preset.prompt_hint;
+      const promptResult = await generatePrompt(userInput);
+      const generatedPrompt = promptResult.ok && !promptResult.retry ? promptResult.prompt || userInput : userInput;
+      Object.assign(session, { photos, current_photo_file_id: photo.file_id, state: "wait_style", selected_style_id: preset.id });
+      await startGeneration(ctx, user, session, lang, {
+        generationType: "style",
+        promptFinal: generatedPrompt,
+        userInput,
+        selectedStyleId: preset.id,
+      });
+      return;
+    }
+  }
 
   const { error } = await supabase
     .from("sessions")
@@ -2430,6 +2542,72 @@ bot.action(/^style_groups_back(:.*)?$/, async (ctx) => {
     await sendStyleKeyboardFlat(ctx, lang, ctx.callbackQuery?.message?.message_id);
   } catch (err) {
     console.error("Style groups back callback error:", err);
+  }
+});
+
+// Callback: example from broadcast — original message stays, only sticker+caption removed on Back
+bot.action(/^broadcast_example:(.+):(.+)$/, async (ctx) => {
+  try {
+    const substyleId = ctx.match[1];
+    const groupId = ctx.match[2];
+    console.log("[Broadcast] broadcast_example callback:", substyleId, groupId, "telegramId:", ctx.from?.id);
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const user = await getUser(telegramId);
+    if (!user?.id) {
+      console.log("[Broadcast] broadcast_example user not found for telegramId:", telegramId, "appEnv:", config.appEnv);
+      return;
+    }
+
+    const lang = user.lang || "en";
+
+    const { data: example } = await supabase
+      .from("stickers")
+      .select("telegram_file_id")
+      .eq("style_preset_id", substyleId)
+      .eq("is_example", true)
+      .not("telegram_file_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!example?.telegram_file_id) {
+      const noExamplesText = await getText(lang, "style.no_examples");
+      await ctx.reply(noExamplesText);
+      return;
+    }
+
+    const preset = await getStylePresetV2ById(substyleId);
+    const styleName = preset ? (lang === "ru" ? preset.name_ru : preset.name_en) : substyleId;
+    const titleText = await getText(lang, "style.example_title", { style: styleName });
+    const backText = await getText(lang, "btn.back_to_styles");
+
+    // Don't delete original broadcast message — send as new messages
+    const stickerMsg = await ctx.replyWithSticker(example.telegram_file_id);
+    await ctx.reply(titleText, {
+      reply_markup: {
+        inline_keyboard: [[{ text: backText, callback_data: `back_from_broadcast:${stickerMsg.message_id}` }]],
+      },
+    });
+  } catch (err) {
+    console.error("Broadcast example error:", err);
+  }
+});
+
+bot.action(/^back_from_broadcast:(\d+)$/, async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const stickerMsgId = parseInt(ctx.match[1], 10);
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+
+    // Delete caption (current message) and sticker
+    await ctx.deleteMessage().catch(() => {});
+    await ctx.telegram.deleteMessage(chatId, stickerMsgId).catch(() => {});
+  } catch (err) {
+    console.error("Back from broadcast example error:", err);
   }
 });
 
