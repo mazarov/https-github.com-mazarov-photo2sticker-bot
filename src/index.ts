@@ -4465,10 +4465,16 @@ bot.action("idea_next", async (ctx) => {
 
   const lang = user.lang || "en";
   const session = await getActiveSession(user.id);
-  if (!session?.pack_ideas) return;
+  console.log("[idea_next] session:", session?.id, "pack_ideas:", !!session?.pack_ideas, "current_idea_index:", session?.current_idea_index);
+
+  if (!session?.pack_ideas) {
+    console.log("[idea_next] No pack_ideas in session, aborting");
+    return;
+  }
 
   const ideas: StickerIdea[] = session.pack_ideas;
   const nextIndex = (session.current_idea_index || 0) + 1;
+  console.log("[idea_next] nextIndex:", nextIndex, "total:", ideas.length);
 
   if (nextIndex >= ideas.length) {
     // All ideas shown
@@ -4487,20 +4493,34 @@ bot.action("idea_next", async (ctx) => {
           ],
         },
       });
-    } catch {}
+    } catch (err: any) {
+      console.error("[idea_next] editMessage (all shown) failed:", err.message);
+    }
     return;
   }
 
-  await supabase.from("sessions").update({
+  const { error: idxErr } = await supabase.from("sessions").update({
     current_idea_index: nextIndex,
   }).eq("id", session.id);
+  if (idxErr) console.error("[idea_next] index update failed:", idxErr.message);
 
   // Edit current message with next idea
   const text = formatIdeaMessage(ideas[nextIndex], nextIndex, ideas.length, lang);
   const keyboard = getIdeaKeyboard(nextIndex, ideas.length, lang);
+  console.log("[idea_next] Editing message with idea", nextIndex);
   try {
     await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: keyboard });
-  } catch {}
+    console.log("[idea_next] Message edited OK");
+  } catch (err: any) {
+    console.error("[idea_next] editMessage failed:", err.message);
+    // Fallback: send new message
+    try {
+      await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
+      console.log("[idea_next] Sent as new message instead");
+    } catch (err2: any) {
+      console.error("[idea_next] reply also failed:", err2.message);
+    }
+  }
 });
 
 // Callback: Done browsing ideas
