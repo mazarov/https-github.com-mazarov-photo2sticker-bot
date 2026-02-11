@@ -1091,18 +1091,24 @@ async function handleShowStyleExamples(ctx: any, styleId: string | undefined | n
  * Build final prompt for Gemini image generation from assistant params.
  */
 function buildAssistantPrompt(params: { style: string; emotion: string; pose: string }): string {
-  return `Create a telegram sticker of the person from the photo.
+  return `Create a high-quality messenger sticker of the person from the photo.
 
 Style: ${params.style}
 Emotion: ${params.emotion}
 Pose/gesture: ${params.pose}
 
-Requirements:
-- Solid black background (NOT white, NOT transparent) — critical for clean cutout
-- Sticker-like proportions (head slightly larger)
-- No outline/border around the character
-- Expressive and recognizable
-- High contrast between character and background`;
+Subject: Analyze the provided photo carefully:
+- If there is ONE person — extract that person.
+- If there are MULTIPLE people — extract ALL of them together, preserving their relative positions and interactions.
+- If a person is interacting with a significant object (vehicle, bicycle, musical instrument, pet, sports equipment, furniture they sit/lean on) — include that object as part of the sticker.
+- Remove ONLY irrelevant background (walls, sky, floor, landscape, generic surroundings).
+Preserve recognizable facial features, proportions, and overall likeness for every person. Adapt proportions to match the style while keeping facial identity.
+Composition: Characters and objects occupy maximum canvas area with clear silhouette.
+Outline: Bold uniform border around the entire composition (approx 25–35% outline width), smooth and consistent.
+Visual design: High contrast, strong edge separation, color palette consistent with the selected style.
+Background: Solid contrasting color that makes background removal easy — use bright green (#00FF00) or solid gray (#808080), whichever contrasts best with the character palette. NEVER use black or white background.
+Requirements: No watermark, no logo, no frame, no text unless the style specifically requires it.
+Quality: Expressive, visually appealing, optimized for clean automated background removal and messenger sticker use.`;
 }
 
 // Helper: get active session
@@ -4149,10 +4155,10 @@ bot.action(/^onboarding_emotion:(.+):(.+)$/, async (ctx) => {
     return;
   }
 
-  // Get sticker to find source photo
+  // Get sticker to find source photo and telegram_file_id
   const { data: sticker } = await supabase
     .from("stickers")
-    .select("source_photo_file_id, user_id")
+    .select("source_photo_file_id, user_id, telegram_file_id")
     .eq("id", stickerId)
     .maybeSingle();
 
@@ -4173,13 +4179,14 @@ bot.action(/^onboarding_emotion:(.+):(.+)$/, async (ctx) => {
   }
   if (!session?.id) return;
 
-  // Update session with photo and emotion
+  // Update session with photo, sticker file_id, and emotion
   await supabase
     .from("sessions")
     .update({
       state: "wait_emotion",
       is_active: true,
       current_photo_file_id: sticker.source_photo_file_id,
+      last_sticker_file_id: sticker.telegram_file_id || null,
       selected_emotion: emotionId,
     })
     .eq("id", session.id);
