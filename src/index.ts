@@ -4323,27 +4323,49 @@ bot.action(/^pack_ideas:(.+)$/, async (ctx) => {
   }
 
   // Generate ideas via AI
-  const ideas = await generatePackIdeas({
-    stickerFileId: sticker.telegram_file_id,
-    stylePresetId: sticker.style_preset_id,
-    lang,
-    existingStickers,
-  });
+  let ideas: StickerIdea[];
+  try {
+    ideas = await generatePackIdeas({
+      stickerFileId: sticker.telegram_file_id,
+      stylePresetId: sticker.style_preset_id,
+      lang,
+      existingStickers,
+    });
+    console.log("[PackIdeas] Generated", ideas.length, "ideas");
+  } catch (err: any) {
+    console.error("[PackIdeas] generatePackIdeas threw:", err.message);
+    ideas = getDefaultIdeas(lang);
+    console.log("[PackIdeas] Using default ideas");
+  }
 
   // Save ideas to session
-  await supabase.from("sessions").update({
+  const { error: updateErr } = await supabase.from("sessions").update({
     pack_ideas: ideas,
     current_idea_index: 0,
     state: "browsing_ideas",
     is_active: true,
   }).eq("id", session.id);
 
+  if (updateErr) {
+    console.error("[PackIdeas] Session update FAILED:", updateErr.message, updateErr.code, updateErr.details);
+    // Fallback: try updating without pack_ideas columns (in case migration not applied)
+    const { error: fallbackErr } = await supabase.from("sessions").update({
+      state: "browsing_ideas",
+      is_active: true,
+    }).eq("id", session.id);
+    if (fallbackErr) {
+      console.error("[PackIdeas] Fallback update also failed:", fallbackErr.message);
+    }
+  } else {
+    console.log("[PackIdeas] Session updated OK, ideas saved to DB");
+  }
+
   // Delete thinking message
   try {
     await ctx.deleteMessage(thinkingMsg.message_id);
   } catch {}
 
-  // Show first idea
+  // Show first idea — embed idea data in callback_data for resilience
   const text = formatIdeaMessage(ideas[0], 0, ideas.length, lang);
   const keyboard = getIdeaKeyboard(0, ideas.length, lang);
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
@@ -4361,8 +4383,11 @@ bot.action(/^idea_generate:(\d+)$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const session = await getActiveSession(user.id);
+  console.log("[idea_generate] session:", session?.id, "state:", session?.state, "pack_ideas:", !!session?.pack_ideas, "pack_ideas type:", typeof session?.pack_ideas);
+
   if (!session?.pack_ideas) {
-    await ctx.reply(lang === "ru" ? "⚠️ Идеи не найдены. Попробуй снова." : "⚠️ Ideas not found. Try again.");
+    console.log("[idea_generate] pack_ideas is null/undefined — session update likely failed");
+    await ctx.reply(lang === "ru" ? "⚠️ Идеи не найдены. Нажми 💡 Идеи для пака ещё раз." : "⚠️ Ideas not found. Press 💡 Pack ideas again.");
     return;
   }
 
@@ -4371,9 +4396,11 @@ bot.action(/^idea_generate:(\d+)$/, async (ctx) => {
   const idea = ideas[ideaIndex];
 
   if (!idea) {
-    console.log("[PackIdeas] Invalid idea index:", ideaIndex);
+    console.log("[PackIdeas] Invalid idea index:", ideaIndex, "total ideas:", ideas.length);
     return;
   }
+
+  console.log("[idea_generate] Generating idea:", ideaIndex, idea.titleEn, "category:", idea.category);
 
   // Build prompt: use base emotion template + idea's prompt modification
   const emotionTemplate = await getPromptTemplate("emotion");
@@ -4405,11 +4432,14 @@ bot.action(/^idea_generate:(\d+)$/, async (ctx) => {
   ideas[ideaIndex].generated = true;
   const generatedFromIdeas = [...(session.generated_from_ideas || []), `idea_${ideaIndex}`];
 
-  await supabase.from("sessions").update({
+  const { error: ideaUpdateErr } = await supabase.from("sessions").update({
     pack_ideas: ideas,
     current_idea_index: ideaIndex + 1,
     generated_from_ideas: generatedFromIdeas,
   }).eq("id", session.id);
+  if (ideaUpdateErr) {
+    console.error("[idea_generate] Session update failed:", ideaUpdateErr.message);
+  }
 
   // Update the idea message to show it's being generated
   try {
