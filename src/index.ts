@@ -2198,20 +2198,19 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
     return;
   }
 
-  // Copy photo from user to session if needed
+  // Always set state to wait_style + copy photo if needed
+  const sessionUpdate: any = { state: "wait_style", is_active: true };
   if (!session.current_photo_file_id && photoFileId) {
-    await supabase.from("sessions")
-      .update({ current_photo_file_id: photoFileId, photos: [photoFileId], state: "wait_style", is_active: true })
-      .eq("id", session.id);
+    sessionUpdate.current_photo_file_id = photoFileId;
+    sessionUpdate.photos = [photoFileId];
     console.log("Styles: reused photo from user.last_photo_file_id");
-  } else if (session.state !== "wait_style" && !session.state?.startsWith("assistant_")) {
-    // Always set state to wait_style so style selection handlers work
-    console.log("Styles: switching state from", session.state, "to wait_style, session:", session.id);
-    await supabase
-      .from("sessions")
-      .update({ state: "wait_style" })
-      .eq("id", session.id);
   }
+  if (session.state !== "wait_style") {
+    console.log("Styles: switching state from", session.state, "to wait_style, session:", session.id);
+  }
+  await supabase.from("sessions")
+    .update(sessionUpdate)
+    .eq("id", session.id);
 
   // Show style carousel (manual mode)
   await sendStyleCarousel(ctx, lang);
