@@ -7,6 +7,7 @@ import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, editMessageText, deleteMessage } from "./lib/telegram";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
+import { chromaKeyGreen, getGreenPixelRatio } from "./lib/image-utils";
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
@@ -261,6 +262,17 @@ async function runJob(job: any) {
   await updateProgress(4);
   const generatedBuffer = Buffer.from(imageBase64, "base64");
 
+  // Pre-check: calculate green pixel ratio on original image (before rembg)
+  // Used later to decide whether chroma key cleanup is needed
+  let greenRatio = 0;
+  try {
+    const rawOriginal = await sharp(generatedBuffer).ensureAlpha().raw().toBuffer();
+    greenRatio = getGreenPixelRatio(rawOriginal, 4);
+    console.log(`[chromaKey] Green pixel ratio in original image: ${(greenRatio * 100).toFixed(1)}%`);
+  } catch (err: any) {
+    console.error(`[chromaKey] Failed to calculate green ratio: ${err.message}`);
+  }
+
   await updateProgress(5);
   // Remove background (rembg first, Pixian fallback)
   const imageSizeKb = Math.round(generatedBuffer.length / 1024);
@@ -384,8 +396,25 @@ async function runJob(job: any) {
   }
 
   await updateProgress(6);
+
+  // Chroma key cleanup: remove leftover green pixels after rembg
+  // Only run if original image had significant green background (> 5%)
+  let cleanedBuffer = noBgBuffer;
+  if (greenRatio > 0.05) {
+    try {
+      const ckStart = Date.now();
+      cleanedBuffer = await chromaKeyGreen(noBgBuffer);
+      console.log(`[chromaKey] Cleanup done in ${Date.now() - ckStart}ms`);
+    } catch (err: any) {
+      console.error(`[chromaKey] Cleanup failed, using rembg output: ${err.message}`);
+      cleanedBuffer = noBgBuffer;
+    }
+  } else {
+    console.log(`[chromaKey] Skipped — green ratio ${(greenRatio * 100).toFixed(1)}% below 5% threshold`);
+  }
+
   // Trim transparent borders and fit into 512x512
-  const stickerBuffer = await sharp(noBgBuffer)
+  const stickerBuffer = await sharp(cleanedBuffer)
     .trim({ threshold: 2 })
     .resize(512, 512, {
       fit: "contain",

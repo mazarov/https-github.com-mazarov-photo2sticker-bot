@@ -3,6 +3,61 @@ import * as fs from "fs";
 import * as path from "path";
 import opentype from "opentype.js";
 
+// ============================================================
+// Chroma Key — remove leftover green (#00FF00) pixels after rembg
+// ============================================================
+
+/**
+ * Calculate the ratio of bright green pixels in an image buffer.
+ * Used to decide whether chroma key cleanup is needed.
+ * Run on the ORIGINAL generated image BEFORE rembg.
+ */
+export function getGreenPixelRatio(data: Buffer, channels: number): number {
+  let greenCount = 0;
+  let totalCount = 0;
+  for (let i = 0; i < data.length; i += channels) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    totalCount++;
+    if (g > 200 && r < 80 && b < 80) greenCount++;
+  }
+  return greenCount / totalCount;
+}
+
+/**
+ * Remove leftover green (#00FF00) pixels from an image after rembg.
+ * Only affects semi-transparent pixels (alpha <= 220) to avoid
+ * damaging green elements that are part of the character.
+ */
+export async function chromaKeyGreen(buffer: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(buffer)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  const thresholdSq = 80 * 80; // ~80 units in RGB space
+  const targetR = 0, targetG = 255, targetB = 0;
+  let cleaned = 0;
+
+  for (let i = 0; i < data.length; i += channels) {
+    const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+
+    // Don't touch opaque pixels — they're part of the character
+    if (a > 220) continue;
+
+    const distSq = (r - targetR) ** 2 + (g - targetG) ** 2 + (b - targetB) ** 2;
+    if (distSq < thresholdSq) {
+      data[i + 3] = 0; // make transparent
+      cleaned++;
+    }
+  }
+
+  console.log(`[chromaKey] Cleaned ${cleaned} green pixels out of ${data.length / channels} total`);
+
+  return sharp(Buffer.from(data), { raw: { width, height, channels } })
+    .png()
+    .toBuffer();
+}
+
 // Try multiple paths to find the font file (works both locally and in Docker)
 function findFontPath(): string {
   const candidates = [
