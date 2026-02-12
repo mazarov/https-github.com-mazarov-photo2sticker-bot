@@ -4217,6 +4217,77 @@ bot.action(/^admin_discount:(\d+):(\d+)$/, async (ctx) => {
   }
 });
 
+// Callback: retry_generation — retry failed generation from error message
+bot.action(/^retry_generation:(.+)$/, async (ctx) => {
+  console.log("=== retry_generation callback ===");
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const sessionId = ctx.match[1];
+  console.log("[retry_generation] sessionId:", sessionId, "telegramId:", telegramId);
+
+  const user = await getUser(telegramId);
+  if (!user?.id) {
+    console.log("[retry_generation] User not found:", telegramId);
+    return;
+  }
+
+  const lang = user.lang || "en";
+
+  // Get the original session
+  const { data: session } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!session) {
+    console.log("[retry_generation] Session not found:", sessionId);
+    const notFoundText = lang === "ru"
+      ? "❌ Сессия не найдена. Отправь новое фото."
+      : "❌ Session not found. Send a new photo.";
+    await ctx.editMessageText(notFoundText);
+    return;
+  }
+
+  if (!session.prompt_final) {
+    console.log("[retry_generation] No prompt_final in session:", sessionId);
+    const noPromptText = lang === "ru"
+      ? "❌ Не удалось повторить. Отправь новое фото."
+      : "❌ Cannot retry. Send a new photo.";
+    await ctx.editMessageText(noPromptText);
+    return;
+  }
+
+  // Update error message to show retry in progress
+  const retryingText = lang === "ru"
+    ? "🔄 Повторяю генерацию..."
+    : "🔄 Retrying generation...";
+  await ctx.editMessageText(retryingText).catch(() => {});
+
+  try {
+    // Re-run startGeneration with the same parameters
+    await startGeneration(ctx, user, session, lang, {
+      generationType: session.generation_type || "style",
+      promptFinal: session.prompt_final,
+      userInput: session.user_input,
+      selectedStyleId: session.selected_style_id,
+      selectedEmotion: session.selected_emotion,
+      emotionPrompt: session.emotion_prompt,
+      textPrompt: session.text_prompt,
+    });
+    console.log("[retry_generation] Generation restarted for session:", sessionId);
+  } catch (err: any) {
+    console.error("[retry_generation] Failed:", err.message);
+    const failText = lang === "ru"
+      ? "❌ Не удалось повторить генерацию. Попробуй позже или отправь новое фото."
+      : "❌ Retry failed. Try again later or send a new photo.";
+    await ctx.reply(failText);
+  }
+});
+
 // ============================================================
 // Pack Ideas — AI-powered sticker pack idea generator
 // ============================================================
@@ -4233,6 +4304,52 @@ interface StickerIdea {
   textPlacement?: "speech_bubble" | "sign" | "bottom_caption" | null;
   category: string;
   generated?: boolean;
+}
+
+// --- Pack Ideas: randomization pools ---
+const IDEA_THEME_POOL = [
+  "everyday reactions",
+  "work & study life",
+  "food & drinks",
+  "relationships & love",
+  "gaming & internet culture",
+  "celebrations & holidays",
+  "passive-aggressive responses",
+  "motivational & inspiring",
+  "sarcastic comebacks",
+  "party & nightlife",
+  "morning & evening routine",
+  "pet owner life",
+  "introvert vs extrovert",
+  "sports & fitness",
+  "weather & seasons",
+  "shopping & money",
+  "travel & vacation",
+  "procrastination & deadlines",
+  "self-care & relaxation",
+  "friendship & loyalty",
+  "awkward situations",
+  "nostalgia & childhood",
+  "compliments & flirting",
+  "apologies & forgiveness",
+];
+
+const IDEA_TONE_POOL = [
+  "wholesome & cute",
+  "sarcastic & edgy",
+  "meme energy",
+  "chill & minimal",
+  "chaotic & absurd",
+  "dramatic & expressive",
+];
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
 }
 
 async function generatePackIdeas(opts: {
@@ -4267,9 +4384,17 @@ async function generatePackIdeas(opts: {
 
   const textLang = lang === "ru" ? "Russian" : "English";
 
+  // Randomize themes and tone for diverse results
+  const selectedThemes = shuffleArray(IDEA_THEME_POOL).slice(0, 4);
+  const selectedTone = IDEA_TONE_POOL[Math.floor(Math.random() * IDEA_TONE_POOL.length)];
+
+  console.log("[PackIdeas] Themes:", selectedThemes.join(", "), "| Tone:", selectedTone);
+
   const systemPrompt = `You are a professional sticker pack designer. Analyze the sticker image and create a set of 8 unique ideas for additional stickers in the same style to build a complete sticker pack.
 
 The user's sticker style: ${styleName} (${styleHint})
+Pack vibe: ${selectedTone}
+Themes to explore: ${selectedThemes.join(", ")}
 
 Already existing stickers in the pack (DO NOT repeat similar ideas):
 ${existingList}
@@ -4281,19 +4406,18 @@ CRITICAL — Preserving character appearance:
 - Example: if the character wears a red hoodie and sneakers, every promptModification should include "wearing red hoodie and sneakers"
 
 Rules:
-1. Each idea must be visually distinct from all others
-2. Mix categories for a well-rounded pack:
-   - 2-3 emotion ideas (happy, angry, sad, shocked, shy, etc.)
-   - 1-2 action/pose ideas (waving, thumbs up, running, dancing)
-   - 2-3 text/meme ideas with short text on the sticker
-   - 1-2 scene ideas (morning coffee, working, party)
-3. For text ideas:
+1. Each idea MUST be from a DIFFERENT category — no two ideas share the same category
+2. Distribute ideas across the given themes (at least 1 per theme: ${selectedThemes.join(", ")})
+3. Match the pack vibe: ${selectedTone}
+4. For text ideas:
    - Suggest short text (1-3 words) in ${textLang}
-   - Text should be casual/memey: ${lang === "ru" ? '"ОК", "Нет", "Жиза", "Привет!", "Ору", "Спасибо"' : '"OK", "Nope", "LOL", "Hi!", "Thanks", "Mood"'}
+   - Text should be creative and unexpected — avoid cliché like "OK", "Hello", "Thanks", "LOL"
+   - Think of funny, niche, or culturally relevant phrases. Inside jokes, meme references, emotional outbursts, sarcastic comments work great.
    - Specify placement: speech_bubble, sign, or bottom_caption
-4. promptModification must be in English, detailed enough for image generation. ALWAYS include the character's original outfit description.
-5. Keep the same character/subject from the original sticker — same face, body, outfit, accessories
-6. titleRu and descriptionRu must be in Russian, titleEn and descriptionEn in English
+5. promptModification must be in English, detailed enough for image generation. ALWAYS include the character's original outfit description.
+6. Keep the same character/subject from the original sticker — same face, body, outfit, accessories
+7. titleRu and descriptionRu must be in Russian, titleEn and descriptionEn in English
+8. Be CREATIVE and SURPRISING — avoid generic/obvious ideas. Think of situations, micro-moments, and niche scenarios that feel relatable.
 
 Return a JSON array of exactly 8 ideas in this format:
 [{
@@ -4309,7 +4433,7 @@ Return a JSON array of exactly 8 ideas in this format:
   "category": "emotion"
 }]
 
-Categories: emotion, action, scene, text_meme, holiday, outfit`;
+Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sarcasm, motivation, celebration, question, flirt, tired, proud, confusion, surprise`;
 
   // Use GPT-4o when OpenAI key is set, otherwise fallback to Gemini
   if (config.openaiApiKey) {
@@ -4334,6 +4458,7 @@ Categories: emotion, action, scene, text_meme, holiday, outfit`;
           ],
           response_format: { type: "json_object" },
           max_tokens: 4096,
+          temperature: 1.2,
         },
         {
           headers: {
@@ -4424,6 +4549,7 @@ Categories: emotion, action, scene, text_meme, holiday, outfit`;
         ],
         generationConfig: {
           responseMimeType: "application/json",
+          temperature: 1.2,
         },
       },
       {

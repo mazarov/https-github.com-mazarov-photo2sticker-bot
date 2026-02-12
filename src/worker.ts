@@ -216,12 +216,17 @@ async function runJob(job: any) {
       },
     });
 
-    // Send user-friendly message and refund (don't throw — avoid generic error)
+    // Send user-friendly message with retry button and refund
     const lang = user?.lang || "en";
     const blockedMsg = lang === "ru"
       ? "⚠️ Не удалось обработать это фото в выбранном стиле.\n\nПопробуй другое фото или другой стиль.\nКредит возвращён на баланс."
       : "⚠️ Could not process this photo with the chosen style.\n\nTry a different photo or style.\nCredit has been refunded.";
-    await sendMessage(telegramId, blockedMsg);
+    const retryBtnBlocked = lang === "ru" ? "🔄 Повторить" : "🔄 Retry";
+    await sendMessage(telegramId, blockedMsg, {
+      inline_keyboard: [[
+        { text: retryBtnBlocked, callback_data: `retry_generation:${session.id}` },
+      ]],
+    });
 
     // Refund credits
     const creditsToRefund = session.credits_spent || 1;
@@ -787,10 +792,18 @@ async function poll() {
               .update({ credits: (refundUser.credits || 0) + creditsToRefund })
               .eq("id", session.user_id);
 
-            // Notify user
+            // Notify user with retry button
             if (refundUser.telegram_id) {
-              const errorMessage = await getText(refundUser.lang || "en", "processing.error");
-              await sendMessage(refundUser.telegram_id, errorMessage);
+              const rlang = refundUser.lang || "en";
+              const errorText = rlang === "ru"
+                ? "❌ Произошла ошибка при генерации стикера.\n\nКредиты возвращены на баланс."
+                : "❌ An error occurred during sticker generation.\n\nCredits have been refunded.";
+              const retryBtn = rlang === "ru" ? "🔄 Повторить" : "🔄 Retry";
+              await sendMessage(refundUser.telegram_id, errorText, {
+                inline_keyboard: [[
+                  { text: retryBtn, callback_data: `retry_generation:${job.session_id}` },
+                ]],
+              });
             }
           }
         }
