@@ -687,8 +687,16 @@ async function runJob(job: any) {
 
   // Auto-show next pack idea if we were browsing ideas
   if (ideaSource && session.pack_ideas?.length > 0) {
-    const ideas = session.pack_ideas;
-    const nextIndex = session.current_idea_index || 0;
+    // Re-fetch session to get the latest current_idea_index
+    // (index.ts updates it BEFORE creating the job, but worker reads session at job start — can be stale)
+    const { data: freshSession } = await supabase
+      .from("sessions")
+      .select("current_idea_index, pack_ideas")
+      .eq("id", session.id)
+      .maybeSingle();
+    const ideas = freshSession?.pack_ideas || session.pack_ideas;
+    const nextIndex = freshSession?.current_idea_index ?? session.current_idea_index ?? 0;
+    console.log(`[Worker] Next idea: fresh_index=${freshSession?.current_idea_index}, stale_index=${session.current_idea_index}, using=${nextIndex}`);
     if (nextIndex < ideas.length) {
       const idea = ideas[nextIndex];
       const title = lang === "ru" ? idea.titleRu : idea.titleEn;

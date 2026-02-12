@@ -4700,6 +4700,10 @@ bot.action(/^idea_generate:(\d+)$/, async (ctx) => {
     promptFinal = idea.promptModification;
   }
 
+  // IMPORTANT: Tell Gemini to ignore any baked-in text from the source sticker
+  // (previous generation might have text on a sign/speech bubble that bleeds through)
+  promptFinal += "\nIMPORTANT: If the input image contains any text, signs, speech bubbles, or captions — REMOVE them completely. Do NOT copy or preserve any text from the input image. Only add text if explicitly requested below.";
+
   // Handle text overlay
   let textPrompt: string | null = null;
   let generationType: "style" | "emotion" | "motion" | "text" = "emotion";
@@ -5010,6 +5014,9 @@ bot.action("idea_generate_custom", async (ctx) => {
   } else {
     promptFinal = idea.promptModification;
   }
+
+  // IMPORTANT: Tell Gemini to ignore any baked-in text from the source sticker
+  promptFinal += "\nIMPORTANT: If the input image contains any text, signs, speech bubbles, or captions — REMOVE them completely. Do NOT copy or preserve any text from the input image. Only add text if explicitly requested below.";
 
   // Handle text overlay
   let textPrompt: string | null = null;
