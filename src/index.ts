@@ -702,16 +702,19 @@ const CREDIT_PACKS = [
   { credits: 250, price: 1500, price_rub: 1490, label_ru: "🚀 Макс", label_en: "🚀 Max" },
   // Hidden discount packs (not shown in UI, used via direct callback for promos, abandoned carts, admin discounts)
   // -10%
+  { credits: 2, price: 18, price_rub: 13, label_ru: "🎁 Try -10%", label_en: "🎁 Try -10%", hidden: true },
   { credits: 10, price: 135, price_rub: 89, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
   { credits: 30, price: 270, price_rub: 224, label_ru: "💎 Поп -10%", label_en: "💎 Pop -10%", hidden: true },
   { credits: 100, price: 630, price_rub: 629, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true },
   { credits: 250, price: 1350, price_rub: 1341, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true },
   // -15%
+  { credits: 2, price: 17, price_rub: 12, label_ru: "🎁 Try -15%", label_en: "🎁 Try -15%", hidden: true },
   { credits: 10, price: 127, price_rub: 84, label_ru: "⭐ Старт -15%", label_en: "⭐ Start -15%", hidden: true },
   { credits: 30, price: 255, price_rub: 211, label_ru: "💎 Поп -15%", label_en: "💎 Pop -15%", hidden: true },
   { credits: 100, price: 595, price_rub: 594, label_ru: "👑 Про -15%", label_en: "👑 Pro -15%", hidden: true },
   { credits: 250, price: 1275, price_rub: 1267, label_ru: "🚀 Макс -15%", label_en: "🚀 Max -15%", hidden: true },
   // -25%
+  { credits: 2, price: 15, price_rub: 11, label_ru: "🎁 Try -25%", label_en: "🎁 Try -25%", hidden: true },
   { credits: 10, price: 112, price_rub: 74, label_ru: "⭐ Старт -25%", label_en: "⭐ Start -25%", hidden: true },
   { credits: 30, price: 225, price_rub: 186, label_ru: "💎 Поп -25%", label_en: "💎 Pop -25%", hidden: true },
   { credits: 100, price: 525, price_rub: 524, label_ru: "👑 Про -25%", label_en: "👑 Pro -25%", hidden: true },
@@ -4300,6 +4303,11 @@ bot.action(/^admin_discount:(\d+):(\d+)$/, async (ctx) => {
       text: `${label}: ${pack.credits} ${unit} — ${pack.price}⭐ (${pack.price_rub}₽)`,
       callback_data: `pack_${pack.credits}_${pack.price}`,
     }]);
+  }
+
+  // Add "Buy Stars for ₽" button (RU only)
+  if (lang === "ru") {
+    inlineKeyboard.push([{ text: "💵 Купить Stars за ₽", url: "https://t.me/StarsZakupBot?start=ref_r_0477825983" }]);
   }
 
   // Send discount message to user
