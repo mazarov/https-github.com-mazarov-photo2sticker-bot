@@ -520,32 +520,35 @@ async function runJob(job: any) {
     console.log(">>> WARNING: skipped telegram_file_id update, stickerId:", stickerId, "stickerFileId:", !!stickerFileId);
   }
 
-  // For assistant mode: silently advance onboarding_step (no hardcoded messages, AI handles guidance)
+  // Advance onboarding_step (for both assistant and manual mode)
   // Skip for avatar_demo — don't touch onboarding state
-  if (isAssistantMode && !isAvatarDemo && onboardingStep < 2) {
+  if (!isAvatarDemo && onboardingStep < 2) {
     const newStep = Math.min(onboardingStep + 1, 2);
     await supabase
       .from("users")
       .update({ onboarding_step: newStep })
       .eq("id", session.user_id);
-    console.log("assistant mode: onboarding_step updated to", newStep);
+    console.log("onboarding_step updated to", newStep);
   }
 
-  // Onboarding message after first sticker (manual mode only)
-  if (isOnboardingFirstSticker && stickerId) {
-    // First sticker: action-oriented CTA with specific examples
+  // Post-generation CTA: show after first sticker (both assistant and manual mode)
+  // Only for style generation (not emotion/motion iterations)
+  if (!isAvatarDemo && onboardingStep <= 1 && generationType === "style" && stickerId) {
     const onboardingText = lang === "ru"
-      ? "🎉 Вот твой первый стикер!\n\n👇 Попробуй прямо сейчас:\n😊 **Изменить эмоцию** — сделай грустного, злого, влюблённого\n🏃 **Добавить движение** — танец, прыжок, бег\n💡 **Идеи для пака** — AI подберёт идеи для целого стикерпака!"
-      : "🎉 Here's your first sticker!\n\n👇 Try it now:\n😊 **Change emotion** — make it sad, angry, in love\n🏃 **Add motion** — dance, jump, run\n💡 **Pack ideas** — AI will suggest ideas for a whole sticker pack!";
+      ? "👇 Попробуй прямо сейчас:\n😊 **Изменить эмоцию** — сделай грустного, злого, влюблённого\n🏃 **Добавить движение** — танец, прыжок, бег\n💡 **Идеи для пака** — AI подберёт идеи для целого стикерпака!"
+      : "👇 Try it now:\n😊 **Change emotion** — make it sad, angry, in love\n🏃 **Add motion** — dance, jump, run\n💡 **Pack ideas** — AI will suggest ideas for a whole sticker pack!";
     
     await sendMessage(telegramId, onboardingText);
+    console.log("post-generation CTA sent, onboardingStep:", onboardingStep);
 
-    // Skip guided emotion step, go straight to step 2 (onboarding complete)
-    await supabase
-      .from("users")
-      .update({ onboarding_step: 2 })
-      .eq("id", session.user_id);
-    console.log("onboarding_step updated to 2 (skipped guided emotion step)");
+    // Mark onboarding complete
+    if (onboardingStep < 2) {
+      await supabase
+        .from("users")
+        .update({ onboarding_step: 2 })
+        .eq("id", session.user_id);
+      console.log("onboarding_step updated to 2 (complete)");
+    }
   }
 
   // Avatar demo: send CTA message after sticker (instead of onboarding)
