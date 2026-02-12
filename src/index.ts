@@ -3906,14 +3906,31 @@ bot.action("assistant_confirm", async (ctx) => {
           await handleTrialCreditAction(ctx, action, result, freshUserConfirm || user, session, replyText, lang);
         }
       } else if (action === "confirm") {
-        // AI called confirm_and_generate instead of grant_trial_credit — code fallback: treat as grant
-        console.log("[assistant_confirm] AI called confirm but user is trial-eligible — forcing grant_credit fallback");
-        const freshUserConfirm = await getUser(user.telegram_id);
-        if (freshUserConfirm && (freshUserConfirm.credits || 0) > 0) {
-          if (replyText) await ctx.reply(replyText);
-          await handleAssistantConfirm(ctx, freshUserConfirm, session.id, lang);
+        // AI called confirm_and_generate instead of grant_trial_credit — retry with explicit instruction
+        console.log("[assistant_confirm] AI called confirm but user is trial-eligible — retrying with explicit instruction");
+        messages.push({
+          role: "user",
+          content: "[SYSTEM: You called confirm_and_generate but this user has 0 credits and never purchased. You MUST call grant_trial_credit(decision, confidence, reason) instead. Decide: grant or deny based on the conversation above.]",
+        });
+        const retryResult = await callAIChat(messages, systemPrompt);
+        console.log("[assistant_confirm] Retry AI response:", retryResult.toolCall?.name || "no tool", "confidence:", retryResult.toolCall?.args?.confidence);
+        const retryMessages = [...messages, { role: "assistant" as const, content: retryResult.text || "" }];
+        const { action: retryAction } = await processAssistantResult(retryResult, aSession, retryMessages);
+
+        if (retryAction === "grant_credit" || retryAction === "deny_credit") {
+          const freshUserConfirm = await getUser(user.telegram_id);
+          const retryReplyText = retryResult.text || replyText;
+          if (freshUserConfirm && (freshUserConfirm.credits || 0) > 0) {
+            if (retryReplyText) await ctx.reply(retryReplyText);
+            await handleAssistantConfirm(ctx, freshUserConfirm, session.id, lang);
+          } else {
+            await handleTrialCreditAction(ctx, retryAction, retryResult, freshUserConfirm || user, session, retryReplyText, lang);
+          }
         } else {
-          await handleTrialCreditAction(ctx, "grant_credit", result, freshUserConfirm || user, session, replyText, lang);
+          // Retry also failed — fallback to paywall
+          console.log("[assistant_confirm] Retry also returned:", retryAction, "— falling back to paywall");
+          if (replyText) await ctx.reply(replyText);
+          await handleAssistantConfirm(ctx, user, session.id, lang);
         }
       } else {
         // AI returned something else — show text + paywall as fallback
