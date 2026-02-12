@@ -81,7 +81,17 @@ bot.on("text", async (ctx) => {
     pendingReplies.delete(telegramId);
     
     try {
-      await bot.telegram.sendMessage(targetId, ctx.message.text);
+      // Send via MAIN bot (not support bot) — user may not have started support bot
+      const mainBotToken = config.telegramBotToken;
+      const res = await fetch(`https://api.telegram.org/bot${mainBotToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: targetId, text: ctx.message.text }),
+      });
+      const data = await res.json() as any;
+      if (!data.ok) {
+        throw new Error(data.description || "Unknown Telegram error");
+      }
       
       await supabase.from("user_feedback")
         .update({ 
@@ -92,7 +102,7 @@ bot.on("text", async (ctx) => {
       
       // Уведомление в Support Channel
       await sendToSupportChannel(
-        `✅ *Ответ отправлен*\n\n` +
+        `✅ *Ответ отправлен* (через основной бот)\n\n` +
         `👤 Кому: ${targetId}\n` +
         `💬 "${escapeMarkdown(ctx.message.text)}"`
       );
