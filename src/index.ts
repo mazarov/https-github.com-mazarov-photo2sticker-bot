@@ -695,24 +695,25 @@ async function startGeneration(
 // Credit packages: { credits, price_in_stars, label_ru, label_en, price_rub, adminOnly?, hidden? }
 const CREDIT_PACKS = [
   { credits: 1, price: 1, price_rub: 1, label_ru: "🔧 Тест", label_en: "🔧 Test", adminOnly: true },
+  { credits: 2, price: 20, price_rub: 15, label_ru: "🎁 Попробовать", label_en: "🎁 Try", trialOnly: true },
   { credits: 10, price: 150, price_rub: 99, label_ru: "⭐ Старт", label_en: "⭐ Start" },
-  { credits: 30, price: 300, price_rub: 249, label_ru: "💎 Популярный", label_en: "💎 Popular" },
+  { credits: 30, price: 300, price_rub: 249, label_ru: "💎 Поп", label_en: "💎 Pop" },
   { credits: 100, price: 700, price_rub: 699, label_ru: "👑 Про", label_en: "👑 Pro" },
   { credits: 250, price: 1500, price_rub: 1490, label_ru: "🚀 Макс", label_en: "🚀 Max" },
   // Hidden discount packs (not shown in UI, used via direct callback for promos, abandoned carts, admin discounts)
   // -10%
   { credits: 10, price: 135, price_rub: 89, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
-  { credits: 30, price: 270, price_rub: 224, label_ru: "💎 Популярный -10%", label_en: "💎 Popular -10%", hidden: true },
+  { credits: 30, price: 270, price_rub: 224, label_ru: "💎 Поп -10%", label_en: "💎 Pop -10%", hidden: true },
   { credits: 100, price: 630, price_rub: 629, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true },
   { credits: 250, price: 1350, price_rub: 1341, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true },
   // -15%
   { credits: 10, price: 127, price_rub: 84, label_ru: "⭐ Старт -15%", label_en: "⭐ Start -15%", hidden: true },
-  { credits: 30, price: 255, price_rub: 211, label_ru: "💎 Популярный -15%", label_en: "💎 Popular -15%", hidden: true },
+  { credits: 30, price: 255, price_rub: 211, label_ru: "💎 Поп -15%", label_en: "💎 Pop -15%", hidden: true },
   { credits: 100, price: 595, price_rub: 594, label_ru: "👑 Про -15%", label_en: "👑 Pro -15%", hidden: true },
   { credits: 250, price: 1275, price_rub: 1267, label_ru: "🚀 Макс -15%", label_en: "🚀 Max -15%", hidden: true },
   // -25%
   { credits: 10, price: 112, price_rub: 74, label_ru: "⭐ Старт -25%", label_en: "⭐ Start -25%", hidden: true },
-  { credits: 30, price: 225, price_rub: 186, label_ru: "💎 Популярный -25%", label_en: "💎 Popular -25%", hidden: true },
+  { credits: 30, price: 225, price_rub: 186, label_ru: "💎 Поп -25%", label_en: "💎 Pop -25%", hidden: true },
   { credits: 100, price: 525, price_rub: 524, label_ru: "👑 Про -25%", label_en: "👑 Pro -25%", hidden: true },
   { credits: 250, price: 1125, price_rub: 1117, label_ru: "🚀 Макс -25%", label_en: "🚀 Max -25%", hidden: true },
 ];
@@ -1362,8 +1363,12 @@ async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
   const text = messageText || await getText(lang, "payment.balance", { credits: user.credits });
   const isAdmin = config.adminIds.includes(user.telegram_id);
 
-  // Filter packs: hide adminOnly (unless admin) and hidden packs
-  const availablePacks = CREDIT_PACKS.filter(p => !p.hidden && (!p.adminOnly || isAdmin));
+  // Filter packs: hide adminOnly (unless admin), hidden packs, and trialOnly (unless first purchase)
+  const availablePacks = CREDIT_PACKS.filter((p: any) =>
+    !p.hidden &&
+    (!p.adminOnly || isAdmin) &&
+    (!p.trialOnly || !user.has_purchased)
+  );
 
   const buttons: any[][] = [];
 
@@ -4163,7 +4168,7 @@ bot.action(/^admin_discount:(\d+):(\d+)$/, async (ctx) => {
   // Find discount packs matching the percent
   const discountSuffix = `-${discountPercent}%`;
   const discountPacks = CREDIT_PACKS.filter(
-    (p) => p.hidden && p.label_en.endsWith(discountSuffix)
+    (p: any) => p.hidden && p.label_en.endsWith(discountSuffix)
   );
 
   if (discountPacks.length === 0) {
@@ -5562,6 +5567,12 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
   if (!pack) {
     console.log("PAYMENT ERROR: invalid pack");
     await ctx.reply(await getText(lang, "payment.invalid_pack"));
+    return;
+  }
+  // Block trialOnly pack for users who already purchased
+  if ((pack as any).trialOnly && user.has_purchased) {
+    console.log("PAYMENT ERROR: trialOnly pack blocked, user already purchased");
+    await ctx.reply(lang === "ru" ? "Этот пакет доступен только для первой покупки." : "This pack is only available for your first purchase.");
     return;
   }
   console.log("pack validated:", pack.label_en);
