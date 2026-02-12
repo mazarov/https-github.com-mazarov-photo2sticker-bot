@@ -1919,6 +1919,47 @@ bot.on("photo", async (ctx) => {
     }
   }
 
+  // === AI Assistant: photo sent during active chat — update photo and continue ===
+  if (session.state === "assistant_chat") {
+    console.log("Assistant chat photo: updating photo for session:", session.id);
+    const chatPhotos = Array.isArray(session.photos) ? session.photos : [];
+    chatPhotos.push(photo.file_id);
+    await supabase.from("sessions")
+      .update({ photos: chatPhotos, current_photo_file_id: photo.file_id, is_active: true })
+      .eq("id", session.id);
+
+    const aSessionChat = await getActiveAssistantSession(user.id);
+    if (aSessionChat) {
+      // Notify assistant about the new photo
+      const chatMessages: AssistantMessage[] = Array.isArray(aSessionChat.messages) ? [...aSessionChat.messages] : [];
+      chatMessages.push({ role: "user", content: "[User sent a new photo]" });
+      const chatSystemPrompt = await getAssistantSystemPrompt(chatMessages, aSessionChat, {
+        credits: user.credits || 0,
+        hasPurchased: !!user.has_purchased,
+        totalGenerations: user.total_generations || 0,
+        utmSource: user.utm_source,
+        utmMedium: user.utm_medium,
+      });
+      try {
+        const chatResult = await callAIChat(chatMessages, chatSystemPrompt);
+        chatMessages.push({ role: "assistant", content: chatResult.text });
+        await updateAssistantSession(aSessionChat.id, { messages: chatMessages });
+        if (chatResult.text) await ctx.reply(chatResult.text, getMainMenuKeyboard(lang));
+      } catch (err: any) {
+        console.error("Assistant chat photo AI error:", err.message);
+        const ack = lang === "ru"
+          ? "Фото обновлено! Продолжаем — что будем делать со стикером?"
+          : "Photo updated! Let's continue — what shall we do with the sticker?";
+        await ctx.reply(ack, getMainMenuKeyboard(lang));
+      }
+    } else {
+      // No assistant session — acknowledge photo update
+      const ack = lang === "ru" ? "Фото принято! 📸" : "Photo received! 📸";
+      await ctx.reply(ack, getMainMenuKeyboard(lang));
+    }
+    return;
+  }
+
   // === AI Assistant: waiting for photo ===
   if (session.state === "assistant_wait_photo") {
     console.log("Assistant photo: received, session:", session.id);
@@ -2546,6 +2587,13 @@ bot.on("text", async (ctx) => {
       }
 
       console.log("Assistant chat: sending reply, action:", action, "replyText length:", replyText?.length || 0);
+
+      // Race condition guard: re-check session state after AI call (user may have switched modes)
+      const freshSession = await getActiveSession(user.id);
+      if (freshSession && freshSession.state !== "assistant_chat") {
+        console.log("Assistant chat: session state changed to", freshSession.state, "during AI call — skipping reply");
+        return;
+      }
 
       try {
         if (action === "confirm") {

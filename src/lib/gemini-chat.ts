@@ -309,7 +309,7 @@ export async function callGeminiChat(
         body,
         {
           headers: { "x-goog-api-key": config.geminiApiKey },
-          timeout: 15000,
+          timeout: 30000,
         }
       );
 
@@ -381,7 +381,7 @@ ${conversationText}`;
       },
       {
         headers: { "x-goog-api-key": config.geminiApiKey },
-        timeout: 15000,
+        timeout: 30000,
       }
     );
 
