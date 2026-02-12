@@ -3906,9 +3906,15 @@ bot.action("assistant_confirm", async (ctx) => {
           await handleTrialCreditAction(ctx, action, result, freshUserConfirm || user, session, replyText, lang);
         }
       } else if (action === "confirm") {
-        // AI decided to confirm directly (shouldn't happen but safe fallback)
-        if (replyText) await ctx.reply(replyText);
-        await handleAssistantConfirm(ctx, user, session.id, lang);
+        // AI called confirm_and_generate instead of grant_trial_credit — code fallback: treat as grant
+        console.log("[assistant_confirm] AI called confirm but user is trial-eligible — forcing grant_credit fallback");
+        const freshUserConfirm = await getUser(user.telegram_id);
+        if (freshUserConfirm && (freshUserConfirm.credits || 0) > 0) {
+          if (replyText) await ctx.reply(replyText);
+          await handleAssistantConfirm(ctx, freshUserConfirm, session.id, lang);
+        } else {
+          await handleTrialCreditAction(ctx, "grant_credit", result, freshUserConfirm || user, session, replyText, lang);
+        }
       } else {
         // AI returned something else — show text + paywall as fallback
         if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));

@@ -69,7 +69,7 @@ const ASSISTANT_TOOLS = [
   },
   {
     name: "confirm_and_generate",
-    description: "Call ONLY when user explicitly confirms all parameters and is ready to generate the sticker. User must say something affirmative like 'yes', 'ok', 'да', 'confirm', 'go ahead', 'подтверждаю'.",
+    description: "Call ONLY when user explicitly confirms all parameters and is ready to generate the sticker. User must say something affirmative like 'yes', 'ok', 'да', 'confirm', 'go ahead', 'подтверждаю'. NEVER call this when credits=0 and has_purchased=false — use grant_trial_credit() instead.",
   },
   {
     name: "request_photo",
@@ -199,6 +199,7 @@ CRITICAL RULES for confirm_and_generate():
 - NEVER call confirm_and_generate() in the same turn where you collect the last parameter
 - When user provides the last missing param: FIRST call update_sticker_params(), THEN show mirror, THEN STOP
 - The user MUST explicitly say something affirmative AFTER seeing the mirror before you call confirm_and_generate()
+- **NEVER** call confirm_and_generate() when credits=0 AND has_purchased=false — you MUST call grant_trial_credit() instead
 
 For experienced users (total_generations > 10):
   Combine style + emotion + pose into one question after photo.
