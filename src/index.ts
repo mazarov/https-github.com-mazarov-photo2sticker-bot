@@ -234,6 +234,7 @@ async function sendStyleKeyboardFlat(ctx: any, lang: string, messageId?: number)
 
 /**
  * Get a sticker example image URL for a style from Supabase Storage.
+ * Uses signed URLs (works even if bucket is private).
  * Tries is_example first, then any sticker with result_storage_path.
  */
 async function getStyleExampleUrl(styleId: string): Promise<string | null> {
@@ -248,25 +249,41 @@ async function getStyleExampleUrl(styleId: string): Promise<string | null> {
     .limit(1)
     .maybeSingle();
 
-  if (exData?.result_storage_path) {
-    return `${config.supabaseUrl}/storage/v1/object/public/${config.supabaseStorageBucket}/${exData.result_storage_path}`;
+  const storagePath = exData?.result_storage_path;
+
+  if (!storagePath) {
+    // Fallback: any sticker for this style with storage path
+    const { data: anyData } = await supabase
+      .from("stickers")
+      .select("result_storage_path")
+      .eq("style_preset_id", styleId)
+      .not("result_storage_path", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!anyData?.result_storage_path) {
+      console.log("[StyleCarousel] No storage path for style:", styleId);
+      return null;
+    }
+
+    return await getSignedStorageUrl(anyData.result_storage_path);
   }
 
-  // Fallback: any sticker for this style with storage path
-  const { data: anyData } = await supabase
-    .from("stickers")
-    .select("result_storage_path")
-    .eq("style_preset_id", styleId)
-    .not("result_storage_path", "is", null)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  return await getSignedStorageUrl(storagePath);
+}
 
-  if (anyData?.result_storage_path) {
-    return `${config.supabaseUrl}/storage/v1/object/public/${config.supabaseStorageBucket}/${anyData.result_storage_path}`;
+async function getSignedStorageUrl(path: string): Promise<string | null> {
+  const { data, error } = await supabase.storage
+    .from(config.supabaseStorageBucket)
+    .createSignedUrl(path, 3600); // 1 hour
+
+  if (error || !data?.signedUrl) {
+    console.error("[StyleCarousel] Signed URL error:", path, error?.message);
+    return null;
   }
 
-  return null;
+  return data.signedUrl;
 }
 
 /**
