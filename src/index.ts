@@ -1429,6 +1429,74 @@ function getStartPayload(ctx: { message?: { text?: string } }): string {
   return match ? match[1].trim() : "";
 }
 
+// Avatar auto-generation for paid traffic users
+async function handleAvatarAutoGeneration(ctx: any, user: any, lang: string) {
+  const telegramId = user.telegram_id;
+  console.log("[AvatarAuto] Starting for user:", telegramId);
+
+  // Get profile photo
+  const photos = await ctx.telegram.getUserProfilePhotos(telegramId, 0, 1);
+  if (!photos || photos.total_count === 0) {
+    console.log("[AvatarAuto] No profile photos found");
+    return false;
+  }
+
+  const photoSizes = photos.photos[0]; // first photo, array of sizes
+  const bestPhoto = photoSizes[photoSizes.length - 1]; // largest size
+  const avatarFileId = bestPhoto.file_id;
+  console.log("[AvatarAuto] Got avatar file_id:", avatarFileId?.substring(0, 30) + "...");
+
+  // Send instant greeting
+  const greetingText = lang === "ru"
+    ? "Привет! Уже делаю стикер из твоей аватарки ✨"
+    : "Hi! Already making a sticker from your profile photo ✨";
+  await ctx.reply(greetingText, getMainMenuKeyboard(lang));
+
+  // Fixed anime prompt with green background (no LLM prompt_generator)
+  const avatarPrompt = `Create a high-quality messenger sticker. Style: anime/manga art style, expressive eyes, clean bold lines, vibrant colors. Subject: Analyze the provided photo. Extract the person. Preserve recognizable facial features, hairstyle, and distinctive traits. Adapt proportions to anime style while keeping facial identity. The character should have a friendly, welcoming expression. Composition: Upper body or full body pose, facing the viewer. Fit the character fully into the frame, do not crop. Leave small padding around the edges. Bold uniform border around the composition (thick, approx 25-35% outline width), smooth and consistent outline. Visual design: High contrast, strong edge separation, simplified shapes, bright saturated anime color palette. Requirements: No watermark, no logo, no frame, no text. Quality: Expressive, visually appealing, optimized for clean automated background removal. CRITICAL REQUIREMENT: The background MUST be a solid uniform bright green color (#00FF00). Do NOT use any other background color. The ENTIRE area behind the character must be filled with exactly #00FF00 green.`;
+
+  // Close any active sessions
+  await supabase
+    .from("sessions")
+    .update({ state: "canceled", is_active: false })
+    .eq("user_id", user.id)
+    .eq("is_active", true);
+
+  // Create session with credits_spent: 0 (free demo) and generation_type: avatar_demo
+  const { data: session, error: sessionError } = await supabase
+    .from("sessions")
+    .insert({
+      user_id: user.id,
+      state: "processing",
+      is_active: true,
+      selected_style_id: "anime_classic",
+      current_photo_file_id: avatarFileId,
+      prompt_final: avatarPrompt,
+      user_input: "[avatar_demo] anime style",
+      generation_type: "avatar_demo",
+      credits_spent: 0,
+      env: config.appEnv,
+    })
+    .select("*")
+    .single();
+
+  if (sessionError || !session) {
+    console.error("[AvatarAuto] Failed to create session:", sessionError?.message);
+    return false;
+  }
+
+  console.log("[AvatarAuto] Session created:", session.id);
+
+  // Enqueue job (no credit deduction needed)
+  await enqueueJob(session.id, user.id, false);
+
+  // Send progress message
+  await sendProgressStart(ctx, session.id, lang);
+
+  console.log("[AvatarAuto] Job enqueued, progress shown");
+  return true;
+}
+
 // /start command
 bot.start(async (ctx) => {
   const telegramId = ctx.from?.id;
@@ -1537,6 +1605,21 @@ bot.start(async (ctx) => {
   if (user?.id) {
     const lang = user.lang || "en";
     const startPayload = getStartPayload(ctx);
+
+    // Avatar auto-generation for new paid traffic users (yandex/cpc + has profile photo)
+    if (isNewUser && user.utm_source === "yandex" && user.utm_medium === "cpc") {
+      console.log("[AvatarAuto] Paid traffic user detected, checking profile photo...");
+      try {
+        const success = await handleAvatarAutoGeneration(ctx, user, lang);
+        if (success) {
+          console.log("[AvatarAuto] Auto-generation started, skipping assistant dialog");
+          return;
+        }
+        console.log("[AvatarAuto] No avatar or failed, falling back to assistant dialog");
+      } catch (err: any) {
+        console.error("[AvatarAuto] Error:", err.message);
+      }
+    }
 
     // Valentine broadcast: val_STYLE_ID — create session for direct style generation
     if (startPayload.startsWith("val_")) {
@@ -1766,9 +1849,15 @@ bot.on("photo", async (ctx) => {
         // Re-fetch user to get fresh credits (user may have purchased during conversation)
         const freshUserPhoto = await getUser(user.telegram_id);
         if (freshUserPhoto && (freshUserPhoto.credits || 0) > 0) {
-          console.log("[assistant_photo] User has credits after re-fetch:", freshUserPhoto.credits, "— generating");
-          if (replyText) await ctx.reply(replyText);
-          await handleAssistantConfirm(ctx, freshUserPhoto, session.id, lang);
+          // Only auto-generate if params (style, emotion, pose) are collected
+          if (allParamsCollected(updatedSession)) {
+            console.log("[assistant_photo] User has credits, params complete — generating");
+            if (replyText) await ctx.reply(replyText);
+            await handleAssistantConfirm(ctx, freshUserPhoto, session.id, lang);
+          } else {
+            console.log("[assistant_photo] User has credits but params not complete — continuing dialog");
+            if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+          }
         } else {
           await handleTrialCreditAction(ctx, action, result, freshUserPhoto || user, session, replyText, lang);
         }
@@ -2146,10 +2235,16 @@ bot.on("text", async (ctx) => {
         if (result.text) await ctx.reply(result.text, getMainMenuKeyboard(lang));
       } else if (toolAction === "grant_credit" || toolAction === "deny_credit") {
         const freshUserWP = await getUser(user.telegram_id);
+        const mergedSession = { ...aSession, ...toolUpdates, ...goalUpdate } as AssistantSessionRow;
         if (freshUserWP && (freshUserWP.credits || 0) > 0) {
-          console.log("[wait_photo_text] User has credits after re-fetch:", freshUserWP.credits, "— generating");
-          if (result.text) await ctx.reply(result.text);
-          await handleAssistantConfirm(ctx, freshUserWP, session.id, lang);
+          if (allParamsCollected(mergedSession)) {
+            console.log("[wait_photo_text] User has credits, params complete — generating");
+            if (result.text) await ctx.reply(result.text);
+            await handleAssistantConfirm(ctx, freshUserWP, session.id, lang);
+          } else {
+            console.log("[wait_photo_text] User has credits but params not complete — continuing dialog");
+            if (result.text) await ctx.reply(result.text, getMainMenuKeyboard(lang));
+          }
         } else {
           await handleTrialCreditAction(ctx, toolAction as "grant_credit" | "deny_credit", result, freshUserWP || user, session, result.text, lang);
         }
@@ -2271,10 +2366,14 @@ bot.on("text", async (ctx) => {
           // Re-fetch user to get fresh credits (user may have purchased during conversation)
           const freshUser = await getUser(user.telegram_id);
           if (freshUser && (freshUser.credits || 0) > 0) {
-            // User now has credits (bought during conversation) — skip trial, go to generation
-            console.log("[assistant_chat] User has credits after re-fetch:", freshUser.credits, "— skipping trial, generating");
-            if (replyText) await ctx.reply(replyText);
-            await handleAssistantConfirm(ctx, freshUser, session.id, lang);
+            if (allParamsCollected(updatedSession)) {
+              console.log("[assistant_chat] User has credits, params complete — generating");
+              if (replyText) await ctx.reply(replyText);
+              await handleAssistantConfirm(ctx, freshUser, session.id, lang);
+            } else {
+              console.log("[assistant_chat] User has credits but params not complete — continuing dialog");
+              if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+            }
           } else {
             await handleTrialCreditAction(ctx, action, result, freshUser || user, session, replyText, lang);
           }

@@ -137,7 +137,7 @@ async function runJob(job: any) {
   // - style/text: Pro model for quality (first impression matters)
   // - emotion/motion: Flash model for speed/cost (iterations)
   const model = 
-    generationType === "style" || generationType === "text"
+    generationType === "style" || generationType === "text" || generationType === "avatar_demo"
       ? "gemini-3-pro-image-preview"    // Nano Banana Pro — качество
       : "gemini-2.5-flash-image"; // Flash — скорость/цена
   console.log("Using model:", model, "generationType:", generationType);
@@ -474,10 +474,12 @@ async function runJob(job: any) {
 
   // Onboarding logic - determine UI based on onboarding_step
   // Skip hardcoded onboarding for assistant mode — AI handles the guidance
+  // Skip for avatar_demo — it's a free preview, not a real generation
+  const isAvatarDemo = generationType === "avatar_demo";
   const isAssistantMode = session.selected_style_id === "assistant";
   const onboardingStep = user.onboarding_step ?? 99;
-  const isOnboardingFirstSticker = !isAssistantMode && onboardingStep === 0 && generationType === "style";
-  const isOnboardingEmotion = !isAssistantMode && onboardingStep === 1 && generationType === "emotion";
+  const isOnboardingFirstSticker = !isAssistantMode && !isAvatarDemo && onboardingStep === 0 && generationType === "style";
+  const isOnboardingEmotion = !isAssistantMode && !isAvatarDemo && onboardingStep === 1 && generationType === "emotion";
   
   console.log("onboarding_step:", onboardingStep, "isOnboardingFirstSticker:", isOnboardingFirstSticker, "isOnboardingEmotion:", isOnboardingEmotion);
 
@@ -524,7 +526,8 @@ async function runJob(job: any) {
   }
 
   // For assistant mode: silently advance onboarding_step (no hardcoded messages, AI handles guidance)
-  if (isAssistantMode && onboardingStep < 2) {
+  // Skip for avatar_demo — don't touch onboarding state
+  if (isAssistantMode && !isAvatarDemo && onboardingStep < 2) {
     const newStep = Math.min(onboardingStep + 1, 2);
     await supabase
       .from("users")
@@ -550,6 +553,15 @@ async function runJob(job: any) {
     console.log("onboarding_step updated to 2 (skipped guided emotion step)");
   }
 
+  // Avatar demo: send CTA message after sticker (instead of onboarding)
+  if (isAvatarDemo) {
+    const ctaText = lang === "ru"
+      ? "🎉 Вот что получилось!\n\n📸 Пришли своё фото — результат будет ещё лучше!\n💡 Лучше всего подходит фото лица крупным планом"
+      : "🎉 Here's what I got!\n\n📸 Send your own photo — the result will be even better!\n💡 A close-up face photo works best";
+    await sendMessage(telegramId, ctaText);
+    console.log("[AvatarDemo] CTA sent to user:", telegramId);
+  }
+
   // Send sticker notification (async, non-blocking)
   const emotionText = session.selected_emotion || "-";
   const motionText = generationType === "motion" ? (session.selected_emotion || "-") : "-";
@@ -571,8 +583,8 @@ async function runJob(job: any) {
     styleId: session.selected_style_id || undefined,
   }).catch(console.error);
 
-  // Send rating request (skip for first sticker, delayed 30s for onboarding emotion)
-  const skipRating = isOnboardingFirstSticker;
+  // Send rating request (skip for first sticker and avatar demo, delayed 30s for onboarding emotion)
+  const skipRating = isOnboardingFirstSticker || isAvatarDemo;
   const ratingDelay = isOnboardingEmotion ? 30000 : 3000;  // 30s for onboarding, 3s normally
   if (stickerId && !skipRating) {
     setTimeout(async () => {
