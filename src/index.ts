@@ -4558,7 +4558,7 @@ bot.action(/^admin_discount:(\d+):(\d+)$/, async (ctx) => {
 
   // Add "Buy Stars for ₽" button (RU only)
   if (lang === "ru") {
-    inlineKeyboard.push([{ text: "💵 Купить Stars за ₽", url: "https://t.me/StarsZakupBot?start=ref_r_0477825983" }]);
+    (inlineKeyboard as any[]).push([{ text: "💵 Купить Stars за ₽", url: "https://t.me/StarsZakupBot?start=ref_r_0477825983" }]);
   }
 
   // Send discount message to user
