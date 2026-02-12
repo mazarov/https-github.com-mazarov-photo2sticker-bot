@@ -233,6 +233,76 @@ async function sendStyleKeyboardFlat(ctx: any, lang: string, messageId?: number)
 }
 
 /**
+ * Style carousel: show 2 styles at a time with sticker examples.
+ * Sends 2 stickers + 1 text message with names and buttons.
+ * Returns message IDs for cleanup on navigation.
+ */
+async function sendStyleCarousel(ctx: any, lang: string, page: number = 0): Promise<void> {
+  const allPresets = await getStylePresetsV2();
+  const isRu = lang === "ru";
+  const PAGE_SIZE = 2;
+
+  // Filter presets that have examples (async check)
+  const presetsWithExamples: Array<{ preset: StylePresetV2; example: StyleExample }> = [];
+  for (const preset of allPresets) {
+    const example = await getStyleExample(preset.id);
+    if (example?.telegram_file_id) {
+      presetsWithExamples.push({ preset, example });
+    }
+  }
+
+  if (presetsWithExamples.length === 0) {
+    // No examples at all — fallback to flat list
+    await sendStyleKeyboardFlat(ctx, lang);
+    return;
+  }
+
+  const totalPages = Math.ceil(presetsWithExamples.length / PAGE_SIZE);
+  const safePage = page % totalPages; // cyclic
+  const startIdx = safePage * PAGE_SIZE;
+  const pageItems = presetsWithExamples.slice(startIdx, startIdx + PAGE_SIZE);
+
+  // Send stickers
+  const stickerMsgIds: number[] = [];
+  for (const item of pageItems) {
+    try {
+      const msg = await ctx.replyWithSticker(item.example.telegram_file_id);
+      stickerMsgIds.push(msg.message_id);
+    } catch (err: any) {
+      console.error("[StyleCarousel] Failed to send sticker:", item.preset.id, err.message);
+    }
+  }
+
+  // Build text with style names
+  const nameLines = pageItems.map((item, i) => {
+    const num = i === 0 ? "1️⃣" : "2️⃣";
+    const name = isRu ? item.preset.name_ru : item.preset.name_en;
+    return `${num} ${item.preset.emoji} ${name}`;
+  });
+
+  const headerText = isRu ? "Выбери стиль:" : "Choose a style:";
+  const text = `${headerText}\n\n${nameLines.join("\n")}`;
+
+  // Build buttons
+  const selectButtons = pageItems.map((item, i) => {
+    const num = i === 0 ? "1️⃣" : "2️⃣";
+    const label = isRu ? "Выбрать" : "Select";
+    return { text: `${num} ${label}`, callback_data: `style_carousel_pick:${item.preset.id}` };
+  });
+
+  const navButtons: any[] = [
+    { text: isRu ? "➡️ Другие стили" : "➡️ More styles", callback_data: `style_carousel_next:${safePage + 1}:${stickerMsgIds.join(",")}` },
+    { text: isRu ? "📋 Все стили" : "📋 All styles", callback_data: `style_carousel_all:${stickerMsgIds.join(",")}` },
+  ];
+
+  const keyboard = [selectButtons, navButtons];
+
+  const textMsg = await ctx.reply(text, { reply_markup: { inline_keyboard: keyboard } });
+
+  console.log("[StyleCarousel] Page:", safePage, "styles:", pageItems.map(i => i.preset.id).join(","), "stickerMsgs:", stickerMsgIds, "textMsg:", textMsg.message_id);
+}
+
+/**
  * Send style keyboard for assistant's "show examples" — same layout as sendStyleKeyboardFlat
  * but clicking a STYLE returns the choice to the assistant (not manual mode).
  * Clicking "Example" uses the standard style_example_v2 callback.
@@ -2022,7 +2092,7 @@ bot.on("photo", async (ctx) => {
     console.error("Failed to update session to wait_style:", error);
   }
 
-  await sendStyleKeyboardFlat(ctx, lang);
+  await sendStyleCarousel(ctx, lang);
 });
 
 // ============================================
@@ -2095,8 +2165,8 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
       .eq("id", session.id);
   }
 
-  // Show flat style keyboard (manual mode)
-  await sendStyleKeyboardFlat(ctx, lang);
+  // Show style carousel (manual mode)
+  await sendStyleCarousel(ctx, lang);
 });
 
 // Menu: 💰 Баланс — show balance + credit packs
@@ -2810,6 +2880,110 @@ bot.action(/^style_(?!v2:|example|custom|group)([^:]+)$/, async (ctx) => {
 });
 
 // ============================================
+// Style Carousel handlers
+// ============================================
+
+// Callback: carousel — select a style
+bot.action(/^style_carousel_pick:(.+)$/, async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+
+    const lang = user.lang || "en";
+    const session = await getActiveSession(user.id);
+    if (!session?.id || session.state !== "wait_style") return;
+
+    const styleId = ctx.match[1];
+    console.log("[StyleCarousel] Pick:", styleId);
+    const preset = await getStylePresetV2ById(styleId);
+    if (!preset) return;
+
+    const photos = Array.isArray(session.photos) ? session.photos : [];
+    const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
+    if (!currentPhotoId) {
+      await ctx.reply(await getText(lang, "photo.need_photo"));
+      return;
+    }
+
+    const userInput = preset.prompt_hint;
+    await ctx.reply(await getText(lang, "photo.processing"));
+
+    const promptResult = await generatePrompt(userInput);
+    if (!promptResult.ok || promptResult.retry) {
+      await ctx.reply(await getText(lang, "photo.invalid_style"));
+      return;
+    }
+
+    const generatedPrompt = promptResult.prompt || userInput;
+    await startGeneration(ctx, user, session, lang, {
+      generationType: "style",
+      promptFinal: generatedPrompt,
+      userInput,
+      selectedStyleId: preset.id,
+    });
+  } catch (err) {
+    console.error("[StyleCarousel] Pick error:", err);
+  }
+});
+
+// Callback: carousel — next page
+bot.action(/^style_carousel_next:(\d+):(.*)$/, async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+    const lang = user.lang || "en";
+
+    const nextPage = parseInt(ctx.match[1], 10);
+    const stickerMsgIds = ctx.match[2].split(",").filter(Boolean).map(Number);
+
+    // Delete previous sticker messages
+    for (const msgId of stickerMsgIds) {
+      await ctx.telegram.deleteMessage(ctx.chat!.id, msgId).catch(() => {});
+    }
+    // Delete the text+buttons message (current message)
+    await ctx.deleteMessage().catch(() => {});
+
+    await sendStyleCarousel(ctx, lang, nextPage);
+  } catch (err) {
+    console.error("[StyleCarousel] Next error:", err);
+  }
+});
+
+// Callback: carousel — show all styles (flat list)
+bot.action(/^style_carousel_all:(.*)$/, async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+    const lang = user.lang || "en";
+
+    const stickerMsgIds = ctx.match[1].split(",").filter(Boolean).map(Number);
+
+    // Delete previous sticker messages
+    for (const msgId of stickerMsgIds) {
+      await ctx.telegram.deleteMessage(ctx.chat!.id, msgId).catch(() => {});
+    }
+    // Delete the text+buttons message
+    await ctx.deleteMessage().catch(() => {});
+
+    await sendStyleKeyboardFlat(ctx, lang);
+  } catch (err) {
+    console.error("[StyleCarousel] All error:", err);
+  }
+});
+
+// ============================================
 // Styles v2 handlers (isolated, only for enabled users)
 // ============================================
 
@@ -3072,9 +3246,9 @@ bot.action(/^back_to_substyles_v2:(.+)$/, async (ctx) => {
 
     const lang = user.lang || "en";
 
-    // Delete current message and show flat style list
+    // Delete current message and show style carousel
     await ctx.deleteMessage().catch(() => {});
-    await sendStyleKeyboardFlat(ctx, lang);
+    await sendStyleCarousel(ctx, lang);
   } catch (err) {
     console.error("Back to styles from example error:", err);
   }
@@ -3477,7 +3651,7 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendStyleKeyboardFlat(ctx, lang);
+  await sendStyleCarousel(ctx, lang);
 });
 
 // Callback: change style (old format - fallback)
@@ -3506,7 +3680,7 @@ bot.action("change_style", async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendStyleKeyboardFlat(ctx, lang);
+  await sendStyleCarousel(ctx, lang);
 });
 
 // Callback: change emotion (new format with sticker ID)
@@ -5663,7 +5837,7 @@ bot.action("back_to_styles", async (ctx) => {
   // Delete current message
   await ctx.deleteMessage().catch(() => {});
 
-  await sendStyleKeyboardFlat(ctx, lang);
+  await sendStyleCarousel(ctx, lang);
 });
 
 // Callback: onboarding emotion selection
