@@ -939,13 +939,17 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     .eq("is_active", true);
 
   // Create new session with assistant state
+  // If user has a photo from previous session, skip wait_photo
+  const lastPhoto = user.last_photo_file_id || null;
   const { data: newSession, error: sessionError } = await supabase
     .from("sessions")
     .insert({
       user_id: user.id,
-      state: "assistant_wait_photo",
+      state: lastPhoto ? "assistant_chat" : "assistant_wait_photo",
       is_active: true,
       env: config.appEnv,
+      current_photo_file_id: lastPhoto,
+      photos: lastPhoto ? [lastPhoto] : [],
     })
     .select()
     .single();
@@ -992,13 +996,25 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
   const firstName = ctx.from?.first_name || "";
   const isReturning = previousGoal || (user.total_generations || 0) > 0;
 
-  const greeting = isReturning
-    ? (lang === "ru"
-      ? `С возвращением, ${firstName}! 👋\nПришли фото — сделаем новый стикер 📸`
-      : `Welcome back, ${firstName}! 👋\nSend a photo — let's make a new sticker 📸`)
-    : (lang === "ru"
-      ? `Привет, ${firstName}! 👋\nЯ помогу превратить твоё фото в крутой стикер.\n\nПришли мне фото, из которого хочешь сделать стикер 📸`
-      : `Hi, ${firstName}! 👋\nI'll help turn your photo into an awesome sticker.\n\nSend me a photo you'd like to turn into a sticker 📸`);
+  let greeting: string;
+  if (lastPhoto) {
+    // Photo already available — skip "send photo" prompt
+    greeting = isReturning
+      ? (lang === "ru"
+        ? `С возвращением, ${firstName}! 👋\nФото уже есть — опиши какой стикер хочешь 🎨`
+        : `Welcome back, ${firstName}! 👋\nPhoto ready — describe what sticker you want 🎨`)
+      : (lang === "ru"
+        ? `Привет, ${firstName}! 👋\nФото уже загружено — опиши стиль стикера или выбери из меню 🎨`
+        : `Hi, ${firstName}! 👋\nPhoto already loaded — describe the sticker style or pick from the menu 🎨`);
+  } else {
+    greeting = isReturning
+      ? (lang === "ru"
+        ? `С возвращением, ${firstName}! 👋\nПришли фото — сделаем новый стикер 📸`
+        : `Welcome back, ${firstName}! 👋\nSend a photo — let's make a new sticker 📸`)
+      : (lang === "ru"
+        ? `Привет, ${firstName}! 👋\nЯ помогу превратить твоё фото в крутой стикер.\n\nПришли мне фото, из которого хочешь сделать стикер 📸`
+        : `Hi, ${firstName}! 👋\nI'll help turn your photo into an awesome sticker.\n\nSend me a photo you'd like to turn into a sticker 📸`);
+  }
 
   // Save greeting to assistant_sessions so AI has context when photo arrives
   const messages: AssistantMessage[] = [
@@ -1852,6 +1868,14 @@ bot.command("support", async (ctx) => {
   });
 });
 
+/**
+ * Get photo file_id: from current session first, then from user.last_photo_file_id.
+ * If found from user, copies it into the session for generation to work.
+ */
+function getUserPhotoFileId(user: any, session: any): string | null {
+  return session?.current_photo_file_id || user?.last_photo_file_id || null;
+}
+
 // Photo handler
 bot.on("photo", async (ctx) => {
   const telegramId = ctx.from?.id;
@@ -1872,6 +1896,16 @@ bot.on("photo", async (ctx) => {
   const photo = ctx.message.photo?.[ctx.message.photo.length - 1];
   if (!photo) return;
 
+  // Save last photo on user for reuse across sessions
+  const { error: lastPhotoErr } = await supabase.from("users")
+    .update({ last_photo_file_id: photo.file_id })
+    .eq("id", user.id);
+  if (lastPhotoErr) {
+    console.error("Failed to update last_photo_file_id:", lastPhotoErr.message);
+  } else {
+    console.log("last_photo_file_id updated for user:", user.id);
+  }
+
   // === AI Assistant: re-route to assistant_wait_photo if assistant is active after generation ===
   if (!session.state?.startsWith("assistant_") && !["processing", "processing_emotion", "processing_motion", "processing_text"].includes(session.state)) {
     const activeAssistant = await getActiveAssistantSession(user.id);
@@ -1885,11 +1919,60 @@ bot.on("photo", async (ctx) => {
     }
   }
 
+  // === AI Assistant: photo sent during active chat — update photo and continue ===
+  if (session.state === "assistant_chat") {
+    console.log("Assistant chat photo: updating photo for session:", session.id);
+    const chatPhotos = Array.isArray(session.photos) ? session.photos : [];
+    chatPhotos.push(photo.file_id);
+    await supabase.from("sessions")
+      .update({ photos: chatPhotos, current_photo_file_id: photo.file_id, is_active: true })
+      .eq("id", session.id);
+
+    const aSessionChat = await getActiveAssistantSession(user.id);
+    if (aSessionChat) {
+      // Notify assistant about the new photo
+      const chatMessages: AssistantMessage[] = Array.isArray(aSessionChat.messages) ? [...aSessionChat.messages] : [];
+      chatMessages.push({ role: "user", content: "[User sent a new photo]" });
+      const chatSystemPrompt = await getAssistantSystemPrompt(chatMessages, aSessionChat, {
+        credits: user.credits || 0,
+        hasPurchased: !!user.has_purchased,
+        totalGenerations: user.total_generations || 0,
+        utmSource: user.utm_source,
+        utmMedium: user.utm_medium,
+      });
+      try {
+        const chatResult = await callAIChat(chatMessages, chatSystemPrompt);
+        chatMessages.push({ role: "assistant", content: chatResult.text });
+        await updateAssistantSession(aSessionChat.id, { messages: chatMessages });
+        if (chatResult.text) await ctx.reply(chatResult.text, getMainMenuKeyboard(lang));
+      } catch (err: any) {
+        console.error("Assistant chat photo AI error:", err.message);
+        const ack = lang === "ru"
+          ? "Фото обновлено! Продолжаем — что будем делать со стикером?"
+          : "Photo updated! Let's continue — what shall we do with the sticker?";
+        await ctx.reply(ack, getMainMenuKeyboard(lang));
+      }
+    } else {
+      // No assistant session — acknowledge photo update
+      const ack = lang === "ru" ? "Фото принято! 📸" : "Photo received! 📸";
+      await ctx.reply(ack, getMainMenuKeyboard(lang));
+    }
+    return;
+  }
+
   // === AI Assistant: waiting for photo ===
   if (session.state === "assistant_wait_photo") {
     console.log("Assistant photo: received, session:", session.id);
     const aSession = await getActiveAssistantSession(user.id);
-    if (!aSession) { console.error("Assistant photo: no assistant_session"); return; }
+    if (!aSession) {
+      console.log("Assistant photo: no assistant_session — falling through to manual mode");
+      // Reset session state so it doesn't stay stuck in assistant_wait_photo
+      await supabase.from("sessions")
+        .update({ state: "wait_photo", is_active: true })
+        .eq("id", session.id);
+      session.state = "wait_photo";
+      // Fall through to manual photo handler below
+    } else {
 
     const photos = Array.isArray(session.photos) ? session.photos : [];
     photos.push(photo.file_id);
@@ -2082,6 +2165,7 @@ bot.on("photo", async (ctx) => {
       }
     }
     return;
+    } // end else (aSession exists)
   }
 
   // === Manual mode: existing logic ===
@@ -2175,28 +2259,34 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
   if (session?.state?.startsWith("assistant_")) {
     console.log("Styles: switching from assistant to manual mode, session:", session.id);
     await closeAllActiveAssistantSessions(user.id, "abandoned");
-    // Reset state immediately so photo handler won't route to dead assistant
-    await supabase
-      .from("sessions")
-      .update({ state: session.current_photo_file_id ? "wait_style" : "wait_photo" })
+    // Always reset session state so photo handler won't get stuck in assistant_wait_photo
+    await supabase.from("sessions")
+      .update({ state: "wait_photo", is_active: true })
       .eq("id", session.id);
-    console.log("Styles: reset state to", session.current_photo_file_id ? "wait_style" : "wait_photo");
+    if (session) session.state = "wait_photo";
   }
 
-  // Check if user has a photo in active session
-  if (!session || !session.current_photo_file_id) {
+  // Get photo: from session or from user's last photo
+  const photoFileId = getUserPhotoFileId(user, session);
+
+  if (!session || !photoFileId) {
     await ctx.reply(await getText(lang, "photo.need_photo"), getMainMenuKeyboard(lang));
     return;
   }
 
-  // Always set state to wait_style so style selection handlers work
-  if (session.state !== "wait_style" && !session.state?.startsWith("assistant_")) {
-    console.log("Styles: switching state from", session.state, "to wait_style, session:", session.id);
-    await supabase
-      .from("sessions")
-      .update({ state: "wait_style" })
-      .eq("id", session.id);
+  // Always set state to wait_style + copy photo if needed
+  const sessionUpdate: any = { state: "wait_style", is_active: true };
+  if (!session.current_photo_file_id && photoFileId) {
+    sessionUpdate.current_photo_file_id = photoFileId;
+    sessionUpdate.photos = [photoFileId];
+    console.log("Styles: reused photo from user.last_photo_file_id");
   }
+  if (session.state !== "wait_style") {
+    console.log("Styles: switching state from", session.state, "to wait_style, session:", session.id);
+  }
+  await supabase.from("sessions")
+    .update(sessionUpdate)
+    .eq("id", session.id);
 
   // Show style carousel (manual mode)
   await sendStyleCarousel(ctx, lang);
@@ -2497,6 +2587,13 @@ bot.on("text", async (ctx) => {
       }
 
       console.log("Assistant chat: sending reply, action:", action, "replyText length:", replyText?.length || 0);
+
+      // Race condition guard: re-check session state after AI call (user may have switched modes)
+      const freshSession = await getActiveSession(user.id);
+      if (freshSession && freshSession.state !== "assistant_chat") {
+        console.log("Assistant chat: session state changed to", freshSession.state, "during AI call — skipping reply");
+        return;
+      }
 
       try {
         if (action === "confirm") {
@@ -2935,11 +3032,17 @@ bot.action(/^style_carousel_pick:(.+)$/, async (ctx) => {
     const preset = await getStylePresetV2ById(styleId);
     if (!preset) return;
 
-    const photos = Array.isArray(session.photos) ? session.photos : [];
-    const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
+    const currentPhotoId = getUserPhotoFileId(user, session);
     if (!currentPhotoId) {
       await ctx.reply(await getText(lang, "photo.need_photo"));
       return;
+    }
+
+    // Copy photo from user to session if needed
+    if (!session.current_photo_file_id && currentPhotoId) {
+      await supabase.from("sessions")
+        .update({ current_photo_file_id: currentPhotoId, photos: [currentPhotoId] })
+        .eq("id", session.id);
     }
 
     const userInput = preset.prompt_hint;
@@ -3039,11 +3142,17 @@ bot.action(/^style_v2:(.+)$/, async (ctx) => {
       return;
     }
 
-    const photos = Array.isArray(session.photos) ? session.photos : [];
-    const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
+    const currentPhotoId = getUserPhotoFileId(user, session);
     if (!currentPhotoId) {
       await ctx.reply(await getText(lang, "photo.need_photo"));
       return;
+    }
+
+    // Copy photo from user to session if needed
+    if (!session.current_photo_file_id && currentPhotoId) {
+      await supabase.from("sessions")
+        .update({ current_photo_file_id: currentPhotoId, photos: [currentPhotoId] })
+        .eq("id", session.id);
     }
 
     // Use prompt_hint as userInput

@@ -46,7 +46,7 @@ const MODEL = config.aiChatModel || DEFAULT_MODELS[PROVIDER] || DEFAULT_MODELS.g
 
 const MAX_RETRIES = 2;
 const RETRY_DELAYS = [1000, 2000]; // ms
-const TIMEOUT = 15000;
+const TIMEOUT = 30000;
 
 console.log(`[AIChat] Provider: ${PROVIDER}, Model: ${MODEL}`);
 
@@ -69,7 +69,7 @@ const ASSISTANT_TOOLS = [
   },
   {
     name: "confirm_and_generate",
-    description: "Call ONLY when user explicitly confirms all parameters and is ready to generate the sticker. User must say something affirmative like 'yes', 'ok', 'да', 'confirm', 'go ahead', 'подтверждаю'. NEVER call this when credits=0 and has_purchased=false — use grant_trial_credit() instead.",
+    description: "Call ONLY when ALL THREE parameters (style, emotion, pose) are filled AND user explicitly confirms. Pre-conditions: 1) [SYSTEM STATE] shows style, emotion, AND pose are all non-null. 2) User said something affirmative like 'yes', 'ok', 'да', 'confirm', 'подтверждаю' AFTER seeing the mirror message. If ANY parameter is null — do NOT call this, ask for the missing parameter instead. NEVER call when credits=0 and has_purchased=false — use grant_trial_credit() instead.",
   },
   {
     name: "request_photo",
