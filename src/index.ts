@@ -1897,9 +1897,14 @@ bot.on("photo", async (ctx) => {
   if (!photo) return;
 
   // Save last photo on user for reuse across sessions
-  await supabase.from("users")
+  const { error: lastPhotoErr } = await supabase.from("users")
     .update({ last_photo_file_id: photo.file_id })
     .eq("id", user.id);
+  if (lastPhotoErr) {
+    console.error("Failed to update last_photo_file_id:", lastPhotoErr.message);
+  } else {
+    console.log("last_photo_file_id updated for user:", user.id);
+  }
 
   // === AI Assistant: re-route to assistant_wait_photo if assistant is active after generation ===
   if (!session.state?.startsWith("assistant_") && !["processing", "processing_emotion", "processing_motion", "processing_text"].includes(session.state)) {
@@ -1918,7 +1923,15 @@ bot.on("photo", async (ctx) => {
   if (session.state === "assistant_wait_photo") {
     console.log("Assistant photo: received, session:", session.id);
     const aSession = await getActiveAssistantSession(user.id);
-    if (!aSession) { console.error("Assistant photo: no assistant_session"); return; }
+    if (!aSession) {
+      console.log("Assistant photo: no assistant_session — falling through to manual mode");
+      // Reset session state so it doesn't stay stuck in assistant_wait_photo
+      await supabase.from("sessions")
+        .update({ state: "wait_photo", is_active: true })
+        .eq("id", session.id);
+      session.state = "wait_photo";
+      // Fall through to manual photo handler below
+    } else {
 
     const photos = Array.isArray(session.photos) ? session.photos : [];
     photos.push(photo.file_id);
@@ -2111,6 +2124,7 @@ bot.on("photo", async (ctx) => {
       }
     }
     return;
+    } // end else (aSession exists)
   }
 
   // === Manual mode: existing logic ===
@@ -2204,6 +2218,11 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
   if (session?.state?.startsWith("assistant_")) {
     console.log("Styles: switching from assistant to manual mode, session:", session.id);
     await closeAllActiveAssistantSessions(user.id, "abandoned");
+    // Always reset session state so photo handler won't get stuck in assistant_wait_photo
+    await supabase.from("sessions")
+      .update({ state: "wait_photo", is_active: true })
+      .eq("id", session.id);
+    if (session) session.state = "wait_photo";
   }
 
   // Get photo: from session or from user's last photo
