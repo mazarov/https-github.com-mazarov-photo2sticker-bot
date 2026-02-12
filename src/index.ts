@@ -328,7 +328,7 @@ async function sendStyleCarousel(ctx: any, lang: string, page: number = 0): Prom
 
   const textMsg = await ctx.reply(text, { reply_markup: { inline_keyboard: keyboard } });
 
-  console.log("[StyleCarousel] Page:", safePage, "styles:", pageItems.map(i => i.preset.id).join(","), "stickerMsgs:", stickerMsgIds, "textMsg:", textMsg.message_id);
+  console.log("[StyleCarousel] Page:", safePage, "styles:", pagePresets.map((p: StylePresetV2) => p.id).join(","), "stickerMsgs:", stickerMsgIds, "textMsg:", textMsg.message_id);
 }
 
 /**
