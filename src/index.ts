@@ -233,71 +233,37 @@ async function sendStyleKeyboardFlat(ctx: any, lang: string, messageId?: number)
 }
 
 /**
- * Get a sticker example image URL for a style from Supabase Storage.
- * Uses signed URLs (works even if bucket is private).
- * Tries is_example first, then any sticker with result_storage_path.
+ * Get a sticker telegram_file_id for a style (for carousel preview).
+ * Filtered by env so file_ids work only for the current bot.
+ * Tries is_example first, then any sticker.
  */
-async function getStyleExampleUrl(styleId: string): Promise<string | null> {
-  // Try is_example with storage path first
+async function getStyleStickerFileId(styleId: string): Promise<string | null> {
+  // Try is_example first
   const { data: exData } = await supabase
     .from("stickers")
-    .select("result_storage_path")
+    .select("telegram_file_id")
     .eq("style_preset_id", styleId)
     .eq("is_example", true)
-    .not("result_storage_path", "is", null)
+    .eq("env", config.appEnv)
+    .not("telegram_file_id", "is", null)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  const storagePath = exData?.result_storage_path;
+  if (exData?.telegram_file_id) return exData.telegram_file_id;
 
-  if (!storagePath) {
-    // Fallback: any sticker for this style with storage path
-    const { data: anyData } = await supabase
-      .from("stickers")
-      .select("result_storage_path")
-      .eq("style_preset_id", styleId)
-      .not("result_storage_path", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  // Fallback: any sticker for this style in same env
+  const { data: anyData } = await supabase
+    .from("stickers")
+    .select("telegram_file_id")
+    .eq("style_preset_id", styleId)
+    .eq("env", config.appEnv)
+    .not("telegram_file_id", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-    if (!anyData?.result_storage_path) {
-      console.log("[StyleCarousel] No storage path for style:", styleId);
-      return null;
-    }
-
-    return await getSignedStorageUrl(anyData.result_storage_path);
-  }
-
-  return await getSignedStorageUrl(storagePath);
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
-  ]);
-}
-
-async function getSignedStorageUrl(path: string): Promise<string | null> {
-  try {
-    const { data, error } = await withTimeout(
-      supabase.storage.from(config.supabaseStorageBucket).createSignedUrl(path, 3600),
-      5000,
-      { data: null, error: { message: "timeout" } } as any
-    );
-
-    if (error || !data?.signedUrl) {
-      console.error("[StyleCarousel] Signed URL error:", path, error?.message);
-      return null;
-    }
-
-    return data.signedUrl;
-  } catch (err: any) {
-    console.error("[StyleCarousel] getSignedStorageUrl exception:", path, err.message);
-    return null;
-  }
+  return anyData?.telegram_file_id || null;
 }
 
 /**
@@ -319,20 +285,19 @@ async function sendStyleCarousel(ctx: any, lang: string, page: number = 0): Prom
   const startIdx = safePage * PAGE_SIZE;
   const pagePresets = allPresets.slice(startIdx, startIdx + PAGE_SIZE);
 
-  // TODO: Re-enable when Supabase Storage signed URLs are fixed
-  // For now, skip sending images to avoid blocking the bot
+  // Send sticker examples for each style on the page (via telegram_file_id)
   const stickerMsgIds: number[] = [];
-  // for (const preset of pagePresets) {
-  //   try {
-  //     const imageUrl = await getStyleExampleUrl(preset.id);
-  //     if (imageUrl) {
-  //       const msg = await withTimeout(ctx.replyWithPhoto(imageUrl), 10000, null);
-  //       if (msg?.message_id) stickerMsgIds.push(msg.message_id);
-  //     }
-  //   } catch (err: any) {
-  //     console.error("[StyleCarousel] Failed to send example photo:", preset.id, err.message);
-  //   }
-  // }
+  for (const preset of pagePresets) {
+    try {
+      const fileId = await getStyleStickerFileId(preset.id);
+      if (fileId) {
+        const msg = await ctx.replyWithSticker(fileId);
+        stickerMsgIds.push(msg.message_id);
+      }
+    } catch (err: any) {
+      console.error("[StyleCarousel] Failed to send sticker:", preset.id, err.message);
+    }
+  }
 
   // Build text with style names
   const nameLines = pagePresets.map((preset, i) => {
