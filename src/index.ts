@@ -567,10 +567,12 @@ async function startGeneration(
       }
     }).catch(console.error);
 
-    await supabase
+    const targetState = isPaywall ? "wait_first_purchase" : "wait_buy_credit";
+    console.log("[startGeneration] Setting paywall state:", targetState, "sessionId:", session.id);
+    const { error: paywallUpdateErr } = await supabase
       .from("sessions")
       .update({
-        state: isPaywall ? "wait_first_purchase" : "wait_buy_credit",
+        state: targetState,
         pending_generation_type: options.generationType,
         user_input: options.userInput || session.user_input || null,
         prompt_final: options.promptFinal,
@@ -581,6 +583,11 @@ async function startGeneration(
         is_active: true,
       })
       .eq("id", session.id);
+    if (paywallUpdateErr) {
+      console.error("[startGeneration] Paywall state update FAILED:", paywallUpdateErr.message);
+    } else {
+      console.log("[startGeneration] Paywall state update OK");
+    }
 
     if (isPaywall) {
       // Show paywall message with bonus info
@@ -1451,8 +1458,8 @@ async function handleAvatarAutoGeneration(ctx: any, user: any, lang: string) {
 
   // Send instant greeting
   const greetingText = lang === "ru"
-    ? "Привет! Уже делаю стикер из твоей аватарки ✨"
-    : "Hi! Already making a sticker from your profile photo ✨";
+    ? "Привет! Я делаю стикеры из фото 🎨 Смотри — уже готовлю один из твоей аватарки, чтобы ты увидел как это работает!"
+    : "Hi! I turn photos into stickers 🎨 Look — I'm already making one from your profile photo so you can see how it works!";
   await ctx.reply(greetingText, getMainMenuKeyboard(lang));
 
   // Fixed anime prompt with green background (no LLM prompt_generator)
@@ -1924,6 +1931,56 @@ bot.on("photo", async (ctx) => {
         )],
       ])
     );
+    return;
+  }
+
+  // === Avatar demo follow-up: user sends photo after avatar_demo → start assistant dialog ===
+  if (session.generation_type === "avatar_demo" && session.state === "confirm_sticker") {
+    console.log("[AvatarDemo] User sent photo after avatar_demo — starting assistant dialog");
+    await startAssistantDialog(ctx, user, lang);
+    // Re-fetch session to get the new assistant_wait_photo state
+    const newSession = await getActiveSession(user.id);
+    if (newSession?.state === "assistant_wait_photo") {
+      // Save photo and process as assistant photo
+      const photos = Array.isArray(newSession.photos) ? [...newSession.photos] : [];
+      photos.push(photo.file_id);
+      await supabase.from("sessions")
+        .update({ photos, current_photo_file_id: photo.file_id, state: "assistant_chat", is_active: true })
+        .eq("id", newSession.id);
+
+      const aSession = await getActiveAssistantSession(user.id);
+      if (aSession) {
+        const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
+        messages.push({ role: "user", content: "[User sent a photo]" });
+
+        const systemPrompt = await getAssistantSystemPrompt(messages, aSession, {
+          credits: user.credits || 0,
+          hasPurchased: !!user.has_purchased,
+          totalGenerations: user.total_generations || 0,
+          utmSource: user.utm_source,
+          utmMedium: user.utm_medium,
+        });
+
+        try {
+          const result = await callAIChat(messages, systemPrompt);
+          messages.push({ role: "assistant", content: result.text });
+          const { action, updatedSession } = await processAssistantResult(result, aSession, messages);
+          let replyText = result.text;
+          if (!replyText && result.toolCall) {
+            replyText = generateFallbackReply(action, updatedSession, lang);
+            messages[messages.length - 1] = { role: "assistant", content: replyText };
+          }
+          await updateAssistantSession(aSession.id, { messages });
+          if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+        } catch (err: any) {
+          console.error("[AvatarDemo] Assistant AI error:", err.message);
+          const fallback = lang === "ru"
+            ? "Отличное фото! Опиши стиль стикера (например: аниме, мультяшный, минимализм)"
+            : "Great photo! Describe the sticker style (e.g.: anime, cartoon, minimal)";
+          await ctx.reply(fallback, getMainMenuKeyboard(lang));
+        }
+      }
+    }
     return;
   }
 
@@ -6043,7 +6100,7 @@ bot.on("successful_payment", async (ctx) => {
     // Check if there's a pending session waiting for credits (paywall or normal)
     const session = await getActiveSession(finalUser.id);
     const isWaitingForCredits = session?.state === "wait_buy_credit" || session?.state === "wait_first_purchase";
-    console.log("[payment] session:", session?.id, "state:", session?.state, "is_active:", session?.is_active, "prompt_final:", !!session?.prompt_final, "isWaitingForCredits:", isWaitingForCredits);
+    console.log("[payment] session:", session?.id, "state:", session?.state, "is_active:", session?.is_active, "prompt_final:", !!session?.prompt_final, "credits_spent:", session?.credits_spent, "isWaitingForCredits:", isWaitingForCredits);
     
     // === AI Assistant: paid after paywall — trigger generation with assistant params ===
     if (isWaitingForCredits && !session.prompt_final) {
@@ -6117,6 +6174,69 @@ bot.on("successful_payment", async (ctx) => {
         await ctx.reply(await getText(lang, "payment.need_more", {
           needed: creditsNeeded - currentCredits,
         }));
+      }
+    } else if (session && !isWaitingForCredits) {
+      // Session exists but not in paywall state — try to auto-continue anyway
+      console.log("[payment] session not in paywall state:", session.state, "— checking fallbacks");
+
+      // Fallback 1: session has prompt_final (startGeneration paywall update may have failed)
+      if (session.prompt_final && session.current_photo_file_id) {
+        const creditsNeeded = session.credits_spent || 1;
+        console.log("[payment] fallback: session has prompt_final, auto-continuing. creditsNeeded:", creditsNeeded);
+
+        if (currentCredits >= creditsNeeded) {
+          const nextState =
+            session.pending_generation_type === "emotion" ? "processing_emotion" : "processing";
+
+          const { data: deductedFb } = await supabase
+            .rpc("deduct_credits", { p_user_id: finalUser.id, p_amount: creditsNeeded });
+
+          if (deductedFb) {
+            await supabase
+              .from("sessions")
+              .update({ state: nextState, is_active: true })
+              .eq("id", session.id);
+
+            await enqueueJob(session.id, finalUser.id);
+            await sendProgressStart(ctx, session.id, lang);
+            console.log("[payment] fallback: generation started, state:", nextState);
+          } else {
+            console.error("[payment] fallback: deduct failed");
+          }
+        }
+      }
+
+      // Fallback 2: assistant session with collected params (no prompt_final yet)
+      if (!session.prompt_final) {
+        const aSessionFallback = await getActiveAssistantSession(finalUser.id);
+        if (aSessionFallback && allParamsCollected(aSessionFallback) && session.current_photo_file_id) {
+          console.log("[payment] assistant fallback: params collected, auto-generating");
+          const params = getAssistantParams(aSessionFallback);
+          const promptFinal = buildAssistantPrompt(params);
+
+          await supabase
+            .from("sessions")
+            .update({
+              state: "processing",
+              is_active: true,
+              prompt_final: promptFinal,
+              user_input: `[assistant] ${params.style}, ${params.emotion}, ${params.pose}`,
+              selected_style_id: "assistant",
+              credits_spent: 1,
+            })
+            .eq("id", session.id);
+
+          const { data: deductedFb } = await supabase
+            .rpc("deduct_credits", { p_user_id: finalUser.id, p_amount: 1 });
+
+          if (deductedFb) {
+            await enqueueJob(session.id, finalUser.id);
+            await sendProgressStart(ctx, session.id, lang);
+            console.log("[payment] assistant fallback: generation started");
+          } else {
+            console.error("[payment] assistant fallback: deduct failed");
+          }
+        }
       }
     }
     console.log("=== PAYMENT: successful_payment COMPLETE ===");

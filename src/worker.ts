@@ -133,13 +133,8 @@ async function runJob(job: any) {
   console.log("Full prompt:", session.prompt_final);
   console.log("text_prompt:", session.text_prompt);
 
-  // Select model by generation type:
-  // - style/text: Pro model for quality (first impression matters)
-  // - emotion/motion: Flash model for speed/cost (iterations)
-  const model = 
-    generationType === "style" || generationType === "text" || generationType === "avatar_demo"
-      ? "gemini-3-pro-image-preview"    // Nano Banana Pro — качество
-      : "gemini-2.5-flash-image"; // Flash — скорость/цена
+  // Use Gemini 2.5 Flash for all generation types (best balance of quality/speed/cost)
+  const model = "gemini-2.5-flash-image";
   console.log("Using model:", model, "generationType:", generationType);
 
   let geminiRes;
@@ -525,39 +520,42 @@ async function runJob(job: any) {
     console.log(">>> WARNING: skipped telegram_file_id update, stickerId:", stickerId, "stickerFileId:", !!stickerFileId);
   }
 
-  // For assistant mode: silently advance onboarding_step (no hardcoded messages, AI handles guidance)
+  // Advance onboarding_step (for both assistant and manual mode)
   // Skip for avatar_demo — don't touch onboarding state
-  if (isAssistantMode && !isAvatarDemo && onboardingStep < 2) {
+  if (!isAvatarDemo && onboardingStep < 2) {
     const newStep = Math.min(onboardingStep + 1, 2);
     await supabase
       .from("users")
       .update({ onboarding_step: newStep })
       .eq("id", session.user_id);
-    console.log("assistant mode: onboarding_step updated to", newStep);
+    console.log("onboarding_step updated to", newStep);
   }
 
-  // Onboarding message after first sticker (manual mode only)
-  if (isOnboardingFirstSticker && stickerId) {
-    // First sticker: explain buttons workflow, skip guided emotion step
+  // Post-generation CTA: show after first sticker (both assistant and manual mode)
+  // Only for style generation (not emotion/motion iterations)
+  if (!isAvatarDemo && onboardingStep <= 1 && generationType === "style" && stickerId) {
     const onboardingText = lang === "ru"
-      ? "🎉 Вот твой первый стикер!\n\n💡 Лайфхак: используй кнопки под стикером, чтобы быстро сделать целый стикерпак:\n\n😊 Сменить эмоцию\n🏃 Добавить движение\n🔲 Обводка\n💬 Текст на стикере\n💡 Идеи для пака — ИИ предложит варианты!\n\nТак из одного фото можно создать 10+ стикеров 🚀"
-      : "🎉 Here's your first sticker!\n\n💡 Pro tip: use the buttons below the sticker to quickly make a whole sticker pack:\n\n😊 Change emotion\n🏃 Add motion\n🔲 Border\n💬 Text on sticker\n💡 Pack ideas — AI suggests variations!\n\nThis way you can create 10+ stickers from one photo 🚀";
+      ? "👇 Попробуй прямо сейчас:\n😊 **Изменить эмоцию** — сделай грустного, злого, влюблённого\n🏃 **Добавить движение** — танец, прыжок, бег\n💡 **Идеи для пака** — AI подберёт идеи для целого стикерпака!"
+      : "👇 Try it now:\n😊 **Change emotion** — make it sad, angry, in love\n🏃 **Add motion** — dance, jump, run\n💡 **Pack ideas** — AI will suggest ideas for a whole sticker pack!";
     
     await sendMessage(telegramId, onboardingText);
+    console.log("post-generation CTA sent, onboardingStep:", onboardingStep);
 
-    // Skip guided emotion step, go straight to step 2 (onboarding complete)
-    await supabase
-      .from("users")
-      .update({ onboarding_step: 2 })
-      .eq("id", session.user_id);
-    console.log("onboarding_step updated to 2 (skipped guided emotion step)");
+    // Mark onboarding complete
+    if (onboardingStep < 2) {
+      await supabase
+        .from("users")
+        .update({ onboarding_step: 2 })
+        .eq("id", session.user_id);
+      console.log("onboarding_step updated to 2 (complete)");
+    }
   }
 
-  // Avatar demo: send CTA message after sticker (instead of onboarding)
+  // Avatar demo: send action CTA + "send your own photo" prompt
   if (isAvatarDemo) {
     const ctaText = lang === "ru"
-      ? "🎉 Вот что получилось!\n\n📸 Пришли своё фото — результат будет ещё лучше!\n💡 Лучше всего подходит фото лица крупным планом"
-      : "🎉 Here's what I got!\n\n📸 Send your own photo — the result will be even better!\n💡 A close-up face photo works best";
+      ? "🎉 Вот что получилось!\n\n👇 Попробуй прямо сейчас:\n😊 **Изменить эмоцию** — сделай грустного, злого, влюблённого\n🏃 **Добавить движение** — танец, прыжок, бег\n💡 **Идеи для пака** — AI подберёт идеи для целого стикерпака!\n\n📸 Пришли своё фото — результат будет ещё лучше!"
+      : "🎉 Here's what I got!\n\n👇 Try it now:\n😊 **Change emotion** — make it sad, angry, in love\n🏃 **Add motion** — dance, jump, run\n💡 **Pack ideas** — AI will suggest ideas for a whole sticker pack!\n\n📸 Send your own photo — the result will be even better!";
     await sendMessage(telegramId, ctaText);
     console.log("[AvatarDemo] CTA sent to user:", telegramId);
   }
@@ -583,8 +581,8 @@ async function runJob(job: any) {
     styleId: session.selected_style_id || undefined,
   }).catch(console.error);
 
-  // Send rating request (skip for first sticker and avatar demo, delayed 30s for onboarding emotion)
-  const skipRating = isOnboardingFirstSticker || isAvatarDemo;
+  // Send rating request — DISABLED (temporarily, to reduce noise)
+  const skipRating = true; // was: isOnboardingFirstSticker || isAvatarDemo;
   const ratingDelay = isOnboardingEmotion ? 30000 : 3000;  // 30s for onboarding, 3s normally
   if (stickerId && !skipRating) {
     setTimeout(async () => {
