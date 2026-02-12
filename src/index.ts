@@ -1448,8 +1448,8 @@ async function handleAvatarAutoGeneration(ctx: any, user: any, lang: string) {
 
   // Send instant greeting
   const greetingText = lang === "ru"
-    ? "Привет! Уже делаю стикер из твоей аватарки ✨"
-    : "Hi! Already making a sticker from your profile photo ✨";
+    ? "Привет! Я делаю стикеры из фото 🎨 Смотри — уже готовлю один из твоей аватарки, чтобы ты увидел как это работает!"
+    : "Hi! I turn photos into stickers 🎨 Look — I'm already making one from your profile photo so you can see how it works!";
   await ctx.reply(greetingText, getMainMenuKeyboard(lang));
 
   // Fixed anime prompt with green background (no LLM prompt_generator)
@@ -6035,7 +6035,7 @@ bot.on("successful_payment", async (ctx) => {
     // Check if there's a pending session waiting for credits (paywall or normal)
     const session = await getActiveSession(finalUser.id);
     const isWaitingForCredits = session?.state === "wait_buy_credit" || session?.state === "wait_first_purchase";
-    console.log("[payment] session:", session?.id, "state:", session?.state, "is_active:", session?.is_active, "prompt_final:", !!session?.prompt_final, "isWaitingForCredits:", isWaitingForCredits);
+    console.log("[payment] session:", session?.id, "state:", session?.state, "is_active:", session?.is_active, "prompt_final:", !!session?.prompt_final, "credits_spent:", session?.credits_spent, "isWaitingForCredits:", isWaitingForCredits);
     
     // === AI Assistant: paid after paywall — trigger generation with assistant params ===
     if (isWaitingForCredits && !session.prompt_final) {
@@ -6109,6 +6109,38 @@ bot.on("successful_payment", async (ctx) => {
         await ctx.reply(await getText(lang, "payment.need_more", {
           needed: creditsNeeded - currentCredits,
         }));
+      }
+    } else if (session && !isWaitingForCredits) {
+      // Session exists but not in paywall state — check if assistant has collected params
+      console.log("[payment] session not in paywall state:", session.state, "— checking assistant fallback");
+      const aSessionFallback = await getActiveAssistantSession(finalUser.id);
+      if (aSessionFallback && allParamsCollected(aSessionFallback) && session.current_photo_file_id) {
+        console.log("[payment] assistant fallback: params collected, auto-generating");
+        const params = getAssistantParams(aSessionFallback);
+        const promptFinal = buildAssistantPrompt(params);
+
+        await supabase
+          .from("sessions")
+          .update({
+            state: "processing",
+            is_active: true,
+            prompt_final: promptFinal,
+            user_input: `[assistant] ${params.style}, ${params.emotion}, ${params.pose}`,
+            selected_style_id: "assistant",
+            credits_spent: 1,
+          })
+          .eq("id", session.id);
+
+        const { data: deductedFb } = await supabase
+          .rpc("deduct_credits", { p_user_id: finalUser.id, p_amount: 1 });
+
+        if (deductedFb) {
+          await enqueueJob(session.id, finalUser.id);
+          await sendProgressStart(ctx, session.id, lang);
+          console.log("[payment] assistant fallback: generation started");
+        } else {
+          console.error("[payment] assistant fallback: deduct failed");
+        }
       }
     }
     console.log("=== PAYMENT: successful_payment COMPLETE ===");

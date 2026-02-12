@@ -133,13 +133,8 @@ async function runJob(job: any) {
   console.log("Full prompt:", session.prompt_final);
   console.log("text_prompt:", session.text_prompt);
 
-  // Select model by generation type:
-  // - style/text: Pro model for quality (first impression matters)
-  // - emotion/motion: Flash model for speed/cost (iterations)
-  const model = 
-    generationType === "style" || generationType === "text" || generationType === "avatar_demo"
-      ? "gemini-3-pro-image-preview"    // Nano Banana Pro — качество
-      : "gemini-2.5-flash-image"; // Flash — скорость/цена
+  // Use Gemini 2.5 Flash for all generation types (best balance of quality/speed/cost)
+  const model = "gemini-2.5-flash-image";
   console.log("Using model:", model, "generationType:", generationType);
 
   let geminiRes;
@@ -538,10 +533,10 @@ async function runJob(job: any) {
 
   // Onboarding message after first sticker (manual mode only)
   if (isOnboardingFirstSticker && stickerId) {
-    // First sticker: explain buttons workflow, skip guided emotion step
+    // First sticker: action-oriented CTA with specific examples
     const onboardingText = lang === "ru"
-      ? "🎉 Вот твой первый стикер!\n\n💡 Лайфхак: используй кнопки под стикером, чтобы быстро сделать целый стикерпак:\n\n😊 Сменить эмоцию\n🏃 Добавить движение\n🔲 Обводка\n💬 Текст на стикере\n💡 Идеи для пака — ИИ предложит варианты!\n\nТак из одного фото можно создать 10+ стикеров 🚀"
-      : "🎉 Here's your first sticker!\n\n💡 Pro tip: use the buttons below the sticker to quickly make a whole sticker pack:\n\n😊 Change emotion\n🏃 Add motion\n🔲 Border\n💬 Text on sticker\n💡 Pack ideas — AI suggests variations!\n\nThis way you can create 10+ stickers from one photo 🚀";
+      ? "🎉 Вот твой первый стикер!\n\n👇 Попробуй прямо сейчас:\n😊 **Изменить эмоцию** — сделай грустного, злого, влюблённого\n🏃 **Добавить движение** — танец, прыжок, бег\n💡 **Идеи для пака** — AI подберёт идеи для целого стикерпака!"
+      : "🎉 Here's your first sticker!\n\n👇 Try it now:\n😊 **Change emotion** — make it sad, angry, in love\n🏃 **Add motion** — dance, jump, run\n💡 **Pack ideas** — AI will suggest ideas for a whole sticker pack!";
     
     await sendMessage(telegramId, onboardingText);
 
@@ -583,8 +578,8 @@ async function runJob(job: any) {
     styleId: session.selected_style_id || undefined,
   }).catch(console.error);
 
-  // Send rating request (skip for first sticker and avatar demo, delayed 30s for onboarding emotion)
-  const skipRating = isOnboardingFirstSticker || isAvatarDemo;
+  // Send rating request — DISABLED (temporarily, to reduce noise)
+  const skipRating = true; // was: isOnboardingFirstSticker || isAvatarDemo;
   const ratingDelay = isOnboardingEmotion ? 30000 : 3000;  // 30s for onboarding, 3s normally
   if (stickerId && !skipRating) {
     setTimeout(async () => {
