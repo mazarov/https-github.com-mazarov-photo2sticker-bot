@@ -404,7 +404,7 @@ async function runJob(job: any) {
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     })
     .extend({
-      top: 10, bottom: 10, left: 10, right: 10,
+      top: 15, bottom: 15, left: 15, right: 15,
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     })
     .webp({ quality: 95 })

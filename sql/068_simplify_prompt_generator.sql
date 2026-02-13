@@ -28,15 +28,17 @@ Create a high-quality character illustration.
 
 Style: [visual style from user text].
 
-Subject: Analyze the provided photo. Use the person''s face and appearance as reference only.
-Recreate them in a NEW dynamic sticker-friendly pose — expressive, fun, with personality.
+Subject: Analyze the provided photo.
+- If there is ONE person — use their face and appearance as reference.
+- If there are MULTIPLE people — include ALL of them together, preserving their relative positions and interactions.
+Recreate in a NEW dynamic sticker-friendly pose — expressive, fun, with personality.
 Do NOT copy the original photo''s pose, angle, or composition.
-Preserve recognizable facial features, hairstyle, and clothing style.
-Include only what the person is wearing — no background objects or scenery from the photo.
+Preserve recognizable facial features, hairstyle, and clothing style for every person.
+Include only what the person(s) are wearing — no background objects or scenery from the photo.
 
-Composition: Close-up framing — head, shoulders, and upper body fill most of the frame.
-The character should be large and prominent, not small or distant.
-Centered with small even padding on all sides.
+Composition: Head, shoulders, and upper body visible with generous padding on all sides.
+The character(s) must NOT touch or be cut off by the image edges.
+Centered, large and prominent, but with clear space around the silhouette.
 
 Background: Flat uniform single color, highly contrasting with the character. No gradients, no textures, no shadows.
 
@@ -54,8 +56,8 @@ or
 Rules: exactly one JSON, no markdown, prompt in English only.',
 
   few_shot_examples = '[
-    {"human": "cute cartoon sticker, big eyes, smiling", "ai": "{\"ok\": true, \"prompt\": \"Create a high-quality character illustration. Style: cute cartoon style with big expressive eyes. Subject: Analyze the provided photo. Use the person''s face and appearance as reference only. Recreate them in a NEW dynamic sticker-friendly pose — waving hello with a big cheerful smile. Do NOT copy the original photo''s pose. Preserve recognizable facial features, hairstyle, and clothing style. Composition: Close-up framing — head, shoulders, and upper body fill most of the frame. Character is large and prominent. Centered with small even padding. Background: Flat uniform light blue. No gradients, no textures. Visual: Clean crisp edges, no glow, no halo. Natural shading. No watermark, no logo, no frame, no border, no outline, no text. Quality: High-resolution, optimized for automated background removal.\", \"retry\": false}"},
-    {"human": "симпсоны", "ai": "{\"ok\": true, \"prompt\": \"Create a high-quality character illustration. Style: The Simpsons cartoon style, yellow skin, bold outlines, flat colors. Subject: Analyze the provided photo. Use the person''s face as reference only. Recreate them in Simpsons style with a fun expressive pose — hands on hips, confident smirk. Do NOT copy the original pose. Preserve recognizable facial features, hairstyle, clothing. Composition: Close-up framing — head, shoulders, and upper body fill most of the frame. Character large and prominent. Centered with small padding. Background: Flat uniform white. No gradients, no textures. Visual: Clean crisp edges, bright saturated colors. No watermark, no logo, no frame, no border, no outline, no text. Quality: High-resolution, optimized for automated background removal.\", \"retry\": false}"},
+    {"human": "cute cartoon sticker, big eyes, smiling", "ai": "{\"ok\": true, \"prompt\": \"Create a high-quality character illustration. Style: cute cartoon style with big expressive eyes. Subject: Analyze the provided photo. If ONE person — use their face as reference. If MULTIPLE people — include ALL together. Recreate in a NEW dynamic sticker-friendly pose — waving hello with a big cheerful smile. Do NOT copy the original photo''s pose. Preserve recognizable facial features, hairstyle, and clothing style. Composition: Head, shoulders, and upper body visible with generous padding on all sides. Character(s) must NOT touch or be cut off by edges. Centered, large and prominent. Background: Flat uniform light blue. No gradients, no textures. Visual: Clean crisp edges, no glow, no halo. Natural shading. No watermark, no logo, no frame, no border, no outline, no text. Quality: High-resolution, optimized for automated background removal.\", \"retry\": false}"},
+    {"human": "симпсоны", "ai": "{\"ok\": true, \"prompt\": \"Create a high-quality character illustration. Style: The Simpsons cartoon style, yellow skin, bold outlines, flat colors. Subject: Analyze the provided photo. If ONE person — use their face as reference. If MULTIPLE people — include ALL together. Recreate in Simpsons style with a fun expressive pose — hands on hips, confident smirk. Do NOT copy the original pose. Preserve recognizable facial features, hairstyle, clothing for every person. Composition: Head, shoulders, and upper body visible with generous padding on all sides. Character(s) must NOT touch or be cut off by edges. Centered, large and prominent. Background: Flat uniform white. No gradients, no textures. Visual: Clean crisp edges, bright saturated colors. No watermark, no logo, no frame, no border, no outline, no text. Quality: High-resolution, optimized for automated background removal.\", \"retry\": false}"},
     {"human": "сделай красиво", "ai": "{\"ok\": false, \"prompt\": null, \"retry\": true}"},
     {"human": "любой стиль на твой выбор", "ai": "{\"ok\": false, \"prompt\": null, \"retry\": true}"}
   ]'::jsonb,

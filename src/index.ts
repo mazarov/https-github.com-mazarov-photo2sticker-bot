@@ -1284,30 +1284,31 @@ async function handleShowStyleExamples(ctx: any, styleId: string | undefined | n
  * Build final prompt for Gemini image generation from assistant params.
  */
 function buildAssistantPrompt(params: { style: string; emotion: string; pose: string }): string {
-  return `Create a high-quality messenger sticker of the person from the photo.
+  return `Create a high-quality character illustration.
 
 Style: ${params.style}
 Emotion: ${params.emotion}
 Pose/gesture: ${params.pose}
 
-Subject: Analyze the provided photo carefully:
-- If there is ONE person — extract that person.
-- If there are MULTIPLE people — extract ALL of them together, preserving their relative positions and interactions.
-- Include ONLY objects the person is physically holding or wearing (bag, phone, hat, glasses). Do NOT include background objects like furniture, railings, walls, architecture, vehicles they stand near, or scenery.
-- Remove ALL background — the sticker should show ONLY the character(s) as a clean isolated figure.
-Preserve recognizable facial features, proportions, and overall likeness for every person. Adapt proportions to match the style while keeping facial identity.
-Composition: Character(s) occupy maximum canvas area with clear silhouette. Do NOT add any border, outline, or stroke around the character(s). Keep the edges clean and natural.
-Visual design: High contrast, strong edge separation, color palette consistent with the selected style.
-Requirements: No watermark, no logo, no frame, no border, no outline, no text unless the style specifically requires it.
-Quality: Expressive, visually appealing, optimized for messenger sticker use.
+Subject: Analyze the provided photo.
+- If there is ONE person — use their face and appearance as reference.
+- If there are MULTIPLE people — include ALL of them together, preserving their relative positions and interactions.
+Recreate in a NEW dynamic sticker-friendly pose matching the emotion and pose above.
+Do NOT copy the original photo's pose, angle, or composition.
+Preserve recognizable facial features, hairstyle, and clothing style for every person.
+Include only what the person(s) are wearing — no background objects or scenery from the photo.
 
-CRITICAL BACKGROUND REQUIREMENT — READ CAREFULLY:
-The image must show ONLY the character(s) on a SOLID UNIFORM BRIGHT GREEN (#00FF00) background.
-- Fill the ENTIRE area behind the character(s) with exactly #00FF00 green.
-- Do NOT draw any scene, environment, room, landscape, or decorative backdrop.
-- Do NOT use any other background color — no dark, no gradient, no style-specific backgrounds.
-- The character(s) must appear as a clean cutout on flat green, like a green screen photo shoot.
-This is essential for automated background removal. Ignoring this requirement will ruin the sticker.`;
+Composition: Head, shoulders, and upper body visible with generous padding on all sides.
+The character(s) must NOT touch or be cut off by the image edges.
+Centered, large and prominent, but with clear space around the silhouette.
+
+Background: Flat uniform single color, highly contrasting with the character. No gradients, no textures, no shadows.
+
+Visual: Clean crisp edges, no glow, no halo, no soft transitions at silhouette. Natural shading. No watermark, no logo, no frame, no text.
+
+CRITICAL: Do NOT add any border, outline, stroke, or contour around the character. No edge decoration of any kind. The character must have clean raw edges that blend directly into the background color. This is NOT a sticker — it is a source illustration for post-processing.
+
+Quality: High-resolution, optimized for automated background removal.`;
 }
 
 // Helper: get active session
