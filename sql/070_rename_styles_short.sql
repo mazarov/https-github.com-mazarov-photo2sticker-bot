@@ -3,66 +3,80 @@
 -- Active styles: sort 1-12 (most universal first)
 -- Inactive styles: sort 20+ (grouped by category)
 
--- ===== ACTIVE STYLES (12) =====
+-- ===== ACTIVE STYLES (12): name + emoji + sort + prompt_hint =====
+-- prompt_hint = ONLY visual style (lines, colors, proportions, technique)
+-- NO: sticker, border, background, composition, multi-person — handled by prompt_generator
 
--- 1. Telegram — native platform style, best for new users
+-- 1. Telegram — flat vector, clean edges
 UPDATE style_presets_v2 SET
-  emoji = '✈️', name_ru = 'Телеграм', name_en = 'Telegram', sort_order = 1
+  emoji = '✈️', name_ru = 'Телеграм', name_en = 'Telegram', sort_order = 1,
+  prompt_hint = 'Flat vector cartoon illustration, simplified shapes, bold clean outlines, flat bright colors, high contrast, friendly expressive face, minimal details'
 WHERE id = 'cartoon_telegram';
 
--- 2. Anime — most popular sticker style
+-- 2. Anime — classic Japanese anime
 UPDATE style_presets_v2 SET
-  emoji = '🎌', name_ru = 'Аниме', name_en = 'Anime', sort_order = 2
+  emoji = '🎌', name_ru = 'Аниме', name_en = 'Anime', sort_order = 2,
+  prompt_hint = 'Japanese anime style, clean precise linework, cel-shading, large expressive eyes with detailed reflections, stylized flowing hair'
 WHERE id = 'anime_classic';
 
--- 3. Cartoon — universal appeal
+-- 3. Cartoon — bold American cartoon
 UPDATE style_presets_v2 SET
-  emoji = '🎨', name_ru = 'Мультяшный', name_en = 'Cartoon', sort_order = 3
+  emoji = '🎨', name_ru = 'Мультяшный', name_en = 'Cartoon', sort_order = 3,
+  prompt_hint = 'American cartoon style, bold black outlines, flat bright saturated colors, exaggerated proportions, large head, expressive funny face'
 WHERE id = 'cartoon_american';
 
--- 4. Anime Romance (shoujo) — popular with young audience
+-- 4. Anime Romance — soft shoujo aesthetic
 UPDATE style_presets_v2 SET
-  emoji = '💗', name_ru = 'Аниме-романс', name_en = 'Anime Romance', sort_order = 4
+  emoji = '💗', name_ru = 'Аниме-романс', name_en = 'Anime Romance', sort_order = 4,
+  prompt_hint = 'Shoujo anime style, soft pastel colors, dreamy sparkling eyes, delicate refined features, gentle expression, flowing soft hair'
 WHERE id = 'anime_romance';
 
--- 5. Chibi — very sticker-friendly (big head, small body)
+-- 5. Chibi — super-deformed proportions
 UPDATE style_presets_v2 SET
-  emoji = '🍡', name_ru = 'Чиби', name_en = 'Chibi', sort_order = 5
+  emoji = '🍡', name_ru = 'Чиби', name_en = 'Chibi', sort_order = 5,
+  prompt_hint = 'Chibi anime style, super-deformed proportions, oversized head 3x body size, tiny limbs, kawaii expression, simplified round features'
 WHERE id = 'anime_chibi';
 
--- 6. Kawaii — cute sparkly style
+-- 6. Kawaii — Japanese cute, round shapes
 UPDATE style_presets_v2 SET
-  emoji = '✨', name_ru = 'Каваий', name_en = 'Kawaii', sort_order = 6
+  emoji = '✨', name_ru = 'Каваий', name_en = 'Kawaii', sort_order = 6,
+  prompt_hint = 'Japanese kawaii style, pastel pink and blue palette, round soft shapes, sparkle accents, rosy blush cheeks, cute wide eyes'
 WHERE id = 'cute_kawaii';
 
--- 7. Kitty — cat character, internet favorite
+-- 7. Kitty — cat-ear character
 UPDATE style_presets_v2 SET
-  emoji = '🐱', name_ru = 'Котик', name_en = 'Kitty', sort_order = 7
+  emoji = '🐱', name_ru = 'Котик', name_en = 'Kitty', sort_order = 7,
+  prompt_hint = 'Cute cat-ear character style, cat ears and whiskers added, playful feline expression, soft fluffy aesthetic, adorable pose'
 WHERE id = 'cute_cat';
 
--- 8. Pastel — soft romantic watercolor, warm pastel palette
+-- 8. Pastel — soft watercolor, warm pastel palette
 UPDATE style_presets_v2 SET
-  emoji = '🌸', name_ru = 'Пастель', name_en = 'Pastel', sort_order = 8
+  emoji = '🌸', name_ru = 'Пастель', name_en = 'Pastel', sort_order = 8,
+  prompt_hint = 'Soft romantic watercolor style, delicate brushstrokes, warm pastel palette of blush pink peach and lavender, gentle dreamy expression, flowing delicate hair'
 WHERE id = 'love_soft';
 
--- 9. Couple — romantic pair, unique use case for 2-person photos
+-- 9. Couple — romantic pair illustration
 UPDATE style_presets_v2 SET
-  emoji = '👫', name_ru = 'Парочки', name_en = 'Couple', sort_order = 9
+  emoji = '👫', name_ru = 'Парочки', name_en = 'Couple', sort_order = 9,
+  prompt_hint = 'Romantic couple illustration style, warm pink tones, sweet loving atmosphere, soft warm lighting, gentle smiles, tender interaction'
 WHERE id = 'love_couple';
 
--- 10. Manhwa — Korean webtoon, growing trend
+-- 10. Manhwa — Korean webtoon digital art
 UPDATE style_presets_v2 SET
-  emoji = '📖', name_ru = 'Манхва', name_en = 'Manhwa', sort_order = 10
+  emoji = '📖', name_ru = 'Манхва', name_en = 'Manhwa', sort_order = 10,
+  prompt_hint = 'Korean manhwa webtoon style, sharp well-defined features, detailed expressive eyes, clean digital coloring, smooth skin rendering'
 WHERE id = 'manhwa_classic';
 
--- 11. Love Is — iconic comic strip
+-- 11. Love Is — minimal comic strip
 UPDATE style_presets_v2 SET
-  emoji = '💑', name_ru = 'Love Is', name_en = 'Love Is', sort_order = 11
+  emoji = '💑', name_ru = 'Love Is', name_en = 'Love Is', sort_order = 11,
+  prompt_hint = 'Love Is comic strip style, simple cute characters, minimal clean lines, sweet romantic mood, Kim Casali inspired, soft warm colors'
 WHERE id = 'ru_love_is';
 
--- 12. Brigada — Russian crime movie aesthetic
+-- 12. Brigada — Russian crime movie gritty style
 UPDATE style_presets_v2 SET
-  emoji = '🕶️', name_ru = 'Бригада', name_en = 'Brigada', sort_order = 12
+  emoji = '🕶️', name_ru = 'Бригада', name_en = 'Brigada', sort_order = 12,
+  prompt_hint = 'Russian 90s crime movie illustration, Brigada style, leather jacket, serious intense expression, cinematic dramatic lighting, gritty realistic aesthetic'
 WHERE id = 'ru_criminal';
 
 -- ===== DISABLE 5 OVERLAPPING/PROBLEMATIC STYLES =====
