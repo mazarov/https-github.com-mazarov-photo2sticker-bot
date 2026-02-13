@@ -1293,16 +1293,16 @@ Pose/gesture: ${params.pose}
 Subject: Analyze the provided photo carefully:
 - If there is ONE person — extract that person.
 - If there are MULTIPLE people — extract ALL of them together, preserving their relative positions and interactions.
-- If a person is interacting with a significant object (vehicle, bicycle, musical instrument, pet, sports equipment, furniture they sit/lean on) — include that object as part of the sticker.
-- Remove ONLY irrelevant background (walls, sky, floor, landscape, generic surroundings).
+- Include ONLY objects the person is physically holding or wearing (bag, phone, hat, glasses). Do NOT include background objects like furniture, railings, walls, architecture, vehicles they stand near, or scenery.
+- Remove ALL background — the sticker should show ONLY the character(s) as a clean isolated figure.
 Preserve recognizable facial features, proportions, and overall likeness for every person. Adapt proportions to match the style while keeping facial identity.
-Composition: Characters and objects occupy maximum canvas area with clear silhouette. Do NOT add any border, outline, or stroke around the character(s). Keep the edges clean and natural.
+Composition: Character(s) occupy maximum canvas area with clear silhouette. Do NOT add any border, outline, or stroke around the character(s). Keep the edges clean and natural.
 Visual design: High contrast, strong edge separation, color palette consistent with the selected style.
 Requirements: No watermark, no logo, no frame, no border, no outline, no text unless the style specifically requires it.
 Quality: Expressive, visually appealing, optimized for messenger sticker use.
 
 CRITICAL BACKGROUND REQUIREMENT — READ CAREFULLY:
-The image must show ONLY the character(s) and significant objects on a SOLID UNIFORM BRIGHT GREEN (#00FF00) background.
+The image must show ONLY the character(s) on a SOLID UNIFORM BRIGHT GREEN (#00FF00) background.
 - Fill the ENTIRE area behind the character(s) with exactly #00FF00 green.
 - Do NOT draw any scene, environment, room, landscape, or decorative backdrop.
 - Do NOT use any other background color — no dark, no gradient, no style-specific backgrounds.
