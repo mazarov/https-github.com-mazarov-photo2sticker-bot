@@ -190,8 +190,10 @@ async function runJob(job: any) {
   console.log("Full prompt:", session.prompt_final);
   console.log("text_prompt:", session.text_prompt);
 
-  // Use Gemini 2.5 Flash for all generation types (best balance of quality/speed/cost)
-  const model = "gemini-2.5-flash-image";
+  // Model selection: Pro 3.0 for style (best quality), Flash for derivatives (emotion/motion — speed)
+  const model = generationType === "style" 
+    ? "gemini-3-pro-image-preview" 
+    : "gemini-2.5-flash-image";
   console.log("Using model:", model, "generationType:", generationType);
 
   let geminiRes;
