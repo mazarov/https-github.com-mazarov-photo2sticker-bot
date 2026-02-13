@@ -2127,117 +2127,66 @@ bot.on("photo", async (ctx) => {
     const photos = Array.isArray(session.photos) ? session.photos : [];
     photos.push(photo.file_id);
 
-    // Save photo and move to assistant_chat
-    const { error: updateErr } = await supabase
+    // === NEW: Show sticker ideas immediately after photo ===
+    console.log("Assistant photo: showing sticker ideas flow");
+
+    // Pick random style
+    const allPresets = await getStylePresetsV2();
+    const activePresets = allPresets.filter(p => p.is_active);
+    const randomStyle = activePresets[Math.floor(Math.random() * activePresets.length)];
+
+    // Save photo and move to assistant_wait_idea
+    await supabase
       .from("sessions")
       .update({
         photos,
         current_photo_file_id: photo.file_id,
-        state: "assistant_chat",
+        state: "assistant_wait_idea",
         is_active: true,
       })
       .eq("id", session.id);
 
-    if (updateErr) {
-      console.error("Assistant photo: session update error:", updateErr.message);
-    }
-    console.log("Assistant photo: state updated to assistant_chat");
+    // Show loading message
+    const loadingMsg = await ctx.reply(
+      lang === "ru" ? "📸 Отличное фото! Подбираю идеи для стикера..." : "📸 Great photo! Picking sticker ideas..."
+    );
 
-    // Get existing messages and add photo event
-    const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
-    messages.push({ role: "user", content: "[User sent a photo]" });
-
-    // Build system prompt with state injection (including trial budget if applicable)
-    const systemPrompt = await getAssistantSystemPrompt(messages, aSession, {
-      credits: user.credits || 0,
-      hasPurchased: !!user.has_purchased,
-      totalGenerations: user.total_generations || 0,
-      utmSource: user.utm_source,
-      utmMedium: user.utm_medium,
-    });
-    console.log("Assistant photo: calling AI, messages count:", messages.length);
-
+    // Generate ideas via LLM
+    let ideas: StickerIdea[];
     try {
-      const result = await callAIChat(messages, systemPrompt);
-      console.log("Assistant photo: AI response received, length:", result.text.length);
-      messages.push({ role: "assistant", content: result.text });
-
-      const { action, updatedSession } = await processAssistantResult(result, aSession, messages);
-
-      // Generate fallback text if LLM returned only a tool call
-      let replyText = result.text;
-      if (!replyText && result.toolCall) {
-        replyText = generateFallbackReply(action, updatedSession, lang);
-        messages[messages.length - 1] = { role: "assistant", content: replyText };
-        await updateAssistantSession(aSession.id, { messages });
-      }
-
-      if (action === "show_mirror") {
-        const mirror = buildMirrorMessage(updatedSession, lang);
-        await ctx.reply(mirror);
-        await ctx.reply(
-          lang === "ru" ? "Всё верно?" : "Is everything correct?",
-          Markup.inlineKeyboard([
-            [Markup.button.callback(
-              lang === "ru" ? "✅ Подтвердить" : "✅ Confirm",
-              "assistant_confirm"
-            )],
-          ])
-        );
-      } else if (action === "show_examples") {
-        const styleId = result.toolCall?.args?.style_id;
-        await handleShowStyleExamples(ctx, styleId, lang);
-        if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
-      } else if (action === "grant_credit" || action === "deny_credit") {
-        // Re-fetch user to get fresh credits (user may have purchased during conversation)
-        const freshUserPhoto = await getUser(user.telegram_id);
-        if (freshUserPhoto && (freshUserPhoto.credits || 0) > 0) {
-          // Only auto-generate if params (style, emotion, pose) are collected
-          if (allParamsCollected(updatedSession)) {
-            console.log("[assistant_photo] User has credits, params complete — generating");
-            if (replyText) await ctx.reply(replyText);
-            await handleAssistantConfirm(ctx, freshUserPhoto, session.id, lang);
-          } else {
-            console.log("[assistant_photo] User has credits but params not complete — continuing dialog");
-            // Use params-asking fallback (style/emotion/pose), not grant_credit fallback
-            const paramsPrompt = generateFallbackReply("normal", updatedSession, lang);
-            messages[messages.length - 1] = { role: "assistant", content: paramsPrompt };
-            await updateAssistantSession(aSession.id, { messages });
-            await ctx.reply(paramsPrompt, getMainMenuKeyboard(lang));
-          }
-        } else {
-          await handleTrialCreditAction(ctx, action, result, freshUserPhoto || user, session, replyText, lang);
-        }
-      } else if (action === "check_balance") {
-        const freshUserBal2 = await getUser(user.telegram_id);
-        const u2 = freshUserBal2 || user;
-        const balanceInfo2 = buildBalanceInfo(u2, lang);
-        console.log("[assistant_photo] check_balance:", u2.credits);
-        messages.push({ role: "assistant", content: balanceInfo2 });
-        const sp2 = await getAssistantSystemPrompt(messages, aSession, {
-          credits: u2.credits || 0, hasPurchased: !!u2.has_purchased, totalGenerations: u2.total_generations || 0,
-          utmSource: u2.utm_source, utmMedium: u2.utm_medium,
-        });
-        const r2 = await callAIChat(messages, sp2);
-        messages.push({ role: "assistant", content: r2.text || "" });
-        await updateAssistantSession(aSession.id, { messages });
-        if (r2.text) await ctx.reply(r2.text, getMainMenuKeyboard(lang));
-      } else if (replyText) {
-        await ctx.reply(replyText, getMainMenuKeyboard(lang));
-      }
-      console.log("Assistant photo: reply sent to user");
+      ideas = await generateStickerIdeasFromPhoto({
+        photoFileId: photo.file_id,
+        stylePresetId: randomStyle.id,
+        lang,
+      });
+      console.log("[assistant_ideas] Generated", ideas.length, "ideas");
     } catch (err: any) {
-      console.error("Assistant photo handler AI error:", err.message, err.response?.status, err.response?.data);
-      const fallback = lang === "ru"
-        ? "Отличное фото! Опиши стиль стикера своими словами (например: аниме, мультяшный, минимализм и т.д.)"
-        : "Great photo! Describe the sticker style in your own words (e.g.: anime, cartoon, minimal, etc.)";
-      messages.push({ role: "assistant", content: fallback });
-
-      await updateAssistantSession(aSession.id, { messages });
-
-      await ctx.reply(fallback, getMainMenuKeyboard(lang));
-      console.log("Assistant photo: fallback reply sent");
+      console.error("[assistant_ideas] generateStickerIdeasFromPhoto error:", err.message);
+      ideas = getDefaultIdeas(lang);
     }
+
+    // Save ideas state
+    const ideasState = {
+      styleId: randomStyle.id,
+      ideaIndex: 0,
+      ideas,
+    };
+    await supabase
+      .from("sessions")
+      .update({ sticker_ideas_state: ideasState })
+      .eq("id", session.id);
+
+    // Delete loading message
+    try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
+
+    // Show first idea card
+    await showStickerIdeaCard(ctx, {
+      idea: ideas[0],
+      ideaIndex: 0,
+      totalIdeas: ideas.length,
+      style: randomStyle,
+      lang,
+    });
     return;
   }
 
@@ -4559,6 +4508,231 @@ bot.action("assistant_confirm", async (ctx) => {
   await handleAssistantConfirm(ctx, user, session.id, lang);
 });
 
+// ============================================================
+// Assistant Ideas — callback handlers
+// ============================================================
+
+// Generate sticker with selected idea
+bot.action(/^asst_idea_gen:(\d+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session?.sticker_ideas_state) return;
+
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[] };
+  const ideaIndex = parseInt(ctx.match[1], 10);
+  const idea = state.ideas[ideaIndex];
+  if (!idea) return;
+
+  const preset = await getStylePresetV2ById(state.styleId);
+  if (!preset) return;
+
+  console.log("[asst_idea_gen] Generating idea:", ideaIndex, idea.titleEn, "style:", preset.id);
+
+  // Build prompt via prompt_generator agent
+  const userText = `${preset.prompt_hint}, ${idea.promptModification}`;
+  const promptResult = await generatePrompt(userText);
+  const promptFinal = promptResult.ok && promptResult.prompt
+    ? promptResult.prompt
+    : `${preset.prompt_hint}. ${idea.promptModification}`;
+
+  await startGeneration(ctx, user, session, lang, {
+    generationType: "style",
+    promptFinal,
+    userInput: `[assistant_idea] ${preset.name_en}: ${idea.titleEn}`,
+    selectedStyleId: preset.id,
+  });
+});
+
+// Next idea (circular)
+bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session?.sticker_ideas_state) return;
+
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[] };
+  const nextIndex = (parseInt(ctx.match[1], 10) + 1) % state.ideas.length;
+
+  // Update index
+  await supabase.from("sessions").update({
+    sticker_ideas_state: { ...state, ideaIndex: nextIndex },
+  }).eq("id", session.id);
+
+  const preset = await getStylePresetV2ById(state.styleId);
+  if (!preset) return;
+
+  // Delete previous message and show next idea
+  try { await ctx.deleteMessage(); } catch {}
+  await showStickerIdeaCard(ctx, {
+    idea: state.ideas[nextIndex],
+    ideaIndex: nextIndex,
+    totalIdeas: state.ideas.length,
+    style: preset,
+    lang,
+  });
+});
+
+// Show style selection buttons
+bot.action(/^asst_idea_style:(\d+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const ideaIndex = parseInt(ctx.match[1], 10);
+  const allPresets = await getStylePresetsV2();
+  const isRu = lang === "ru";
+
+  // Build style buttons (3 per row)
+  const buttons: ReturnType<typeof Markup.button.callback>[][] = [];
+  for (let i = 0; i < allPresets.length; i += 3) {
+    const row: ReturnType<typeof Markup.button.callback>[] = [];
+    for (let j = i; j < Math.min(i + 3, allPresets.length); j++) {
+      const p = allPresets[j];
+      row.push(Markup.button.callback(
+        `${p.emoji} ${isRu ? p.name_ru : p.name_en}`,
+        `asst_idea_restyle:${p.id}:${ideaIndex}`
+      ));
+    }
+    buttons.push(row);
+  }
+
+  try { await ctx.deleteMessage(); } catch {}
+  await ctx.reply(
+    isRu ? "🎨 Выбери стиль:" : "🎨 Choose a style:",
+    Markup.inlineKeyboard(buttons)
+  );
+});
+
+// Restyle: change style + regenerate ideas
+bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const styleId = ctx.match[1];
+  const ideaIndex = parseInt(ctx.match[2], 10);
+  const session = await getActiveSession(user.id);
+  if (!session?.sticker_ideas_state) return;
+
+  const preset = await getStylePresetV2ById(styleId);
+  if (!preset) return;
+
+  const photoFileId = session.current_photo_file_id;
+  if (!photoFileId) return;
+
+  // Show loading
+  try { await ctx.deleteMessage(); } catch {}
+  const loadingMsg = await ctx.reply(
+    lang === "ru" ? `⏳ Подбираю идеи для стиля ${preset.emoji} ${preset.name_ru}...` : `⏳ Generating ideas for ${preset.emoji} ${preset.name_en}...`
+  );
+
+  // Regenerate ideas for new style
+  let ideas: StickerIdea[];
+  try {
+    ideas = await generateStickerIdeasFromPhoto({
+      photoFileId,
+      stylePresetId: styleId,
+      lang,
+    });
+  } catch (err: any) {
+    console.error("[asst_idea_restyle] Error:", err.message);
+    ideas = getDefaultIdeas(lang);
+  }
+
+  // Save new state
+  const newState = { styleId, ideaIndex: 0, ideas };
+  await supabase.from("sessions").update({
+    sticker_ideas_state: newState,
+  }).eq("id", session.id);
+
+  try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
+
+  await showStickerIdeaCard(ctx, {
+    idea: ideas[0],
+    ideaIndex: 0,
+    totalIdeas: ideas.length,
+    style: preset,
+    lang,
+  });
+});
+
+// Custom idea — switch to assistant chat
+bot.action("asst_idea_custom", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session?.id) return;
+
+  // Switch to assistant_chat mode
+  await supabase.from("sessions").update({
+    state: "assistant_chat",
+    is_active: true,
+  }).eq("id", session.id);
+
+  try { await ctx.deleteMessage(); } catch {}
+  await ctx.reply(
+    lang === "ru"
+      ? "✏️ Опиши свою идею для стикера — стиль, эмоцию, позу:"
+      : "✏️ Describe your sticker idea — style, emotion, pose:",
+    getMainMenuKeyboard(lang)
+  );
+});
+
+// Skip ideas — switch to normal assistant dialog
+bot.action("asst_idea_skip", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session?.id) return;
+
+  // Switch to assistant_chat mode
+  await supabase.from("sessions").update({
+    state: "assistant_chat",
+    is_active: true,
+  }).eq("id", session.id);
+
+  try { await ctx.deleteMessage(); } catch {}
+  await ctx.reply(
+    lang === "ru"
+      ? "👋 Хорошо! Опиши какой стикер хочешь — стиль, эмоцию, позу:"
+      : "👋 OK! Describe what sticker you want — style, emotion, pose:",
+    getMainMenuKeyboard(lang)
+  );
+});
+
 // Callback: assistant restart — start new assistant dialog from post-generation button
 bot.action("assistant_restart", async (ctx) => {
   safeAnswerCbQuery(ctx);
@@ -5358,6 +5532,174 @@ function getDefaultIdeas(lang: string): StickerIdea[] {
     { emoji: "💬", titleRu: "ОК", titleEn: "OK", descriptionRu: "Показывает ОК", descriptionEn: "Saying OK", promptModification: "calm confident expression, OK hand gesture", hasText: true, textSuggestion: "OK", textPlacement: "speech_bubble", category: "text_meme" },
     { emoji: "☕", titleRu: "Утро с кофе", titleEn: "Morning coffee", descriptionRu: "Пьёт кофе утром", descriptionEn: "Drinking morning coffee", promptModification: "holding a coffee cup, sleepy but happy expression, morning vibes", hasText: false, textSuggestion: null, textPlacement: null, category: "scene" },
   ];
+}
+
+// ============================================================
+// Sticker Ideas from Photo — generate ideas before first sticker
+// ============================================================
+
+async function generateStickerIdeasFromPhoto(opts: {
+  photoFileId: string;
+  stylePresetId: string;
+  lang: string;
+}): Promise<StickerIdea[]> {
+  const { photoFileId, stylePresetId, lang } = opts;
+
+  try {
+    // Download user photo
+    const filePath = await getFilePath(photoFileId);
+    const fileBuffer = await downloadFile(filePath);
+    const base64 = fileBuffer.toString("base64");
+    const mimeType = filePath.endsWith(".png") ? "image/png" : "image/jpeg";
+
+    // Get style info
+    const preset = await getStylePresetV2ById(stylePresetId);
+    const styleName = preset ? preset.name_en : stylePresetId;
+    const styleHint = preset ? preset.prompt_hint : "";
+
+    const textLang = lang === "ru" ? "Russian" : "English";
+
+    const systemPrompt = `You are a professional sticker pack designer.
+Analyze the user's PHOTO (not a sticker) and suggest 8 unique sticker ideas in the style: ${styleName} (${styleHint}).
+
+For each idea — describe an expressive pose, emotion, or scene for the character.
+Match ideas to the person in the photo (their appearance, vibe, energy).
+If there are MULTIPLE people in the photo — ideas should include ALL of them together.
+
+Rules:
+1. Each idea MUST be from a DIFFERENT category
+2. promptModification must describe what the character is DOING (emotion + pose + action). Do NOT describe the style — style comes from the preset.
+3. promptModification must be in English, detailed enough for image generation
+4. titleRu and descriptionRu in Russian, titleEn and descriptionEn in English
+5. Be CREATIVE — avoid generic ideas. Think of relatable micro-moments and surprising scenarios.
+6. For text ideas: suggest short text (1-3 words) in ${textLang}
+
+Return a JSON array of exactly 8 ideas:
+[{
+  "emoji": "😂",
+  "titleRu": "Хохочет до слёз",
+  "titleEn": "Laughing hard",
+  "descriptionRu": "Персонаж смеётся, держась за живот",
+  "descriptionEn": "Character laughing hysterically, holding belly",
+  "promptModification": "laughing hysterically, holding belly, tears of joy, mouth wide open",
+  "hasText": false,
+  "textSuggestion": null,
+  "textPlacement": null,
+  "category": "emotion"
+}]
+
+Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sarcasm, motivation, celebration`;
+
+    if (config.openaiApiKey) {
+      const imageUrl = `data:${mimeType};base64,${base64}`;
+      const response = await axios.post(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemPrompt },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Analyze this photo and generate 8 unique sticker ideas. Return a JSON array." },
+                { type: "image_url", image_url: { url: imageUrl } },
+              ],
+            },
+          ],
+          response_format: { type: "json_object" },
+          max_tokens: 4096,
+          temperature: 1.0,
+        },
+        {
+          headers: {
+            "Authorization": `Bearer ${config.openaiApiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 30_000,
+        }
+      );
+
+      const text = response.data?.choices?.[0]?.message?.content;
+      if (!text) {
+        console.error("[StickerIdeas] GPT-4o-mini returned no content");
+        return getDefaultIdeas(lang);
+      }
+
+      const parsed = JSON.parse(text);
+      const ideas: StickerIdea[] = Array.isArray(parsed) ? parsed : parsed.ideas || parsed.stickers || [];
+      if (ideas.length === 0) {
+        console.error("[StickerIdeas] No ideas parsed");
+        return getDefaultIdeas(lang);
+      }
+
+      // Pad with defaults if fewer than 8
+      if (ideas.length < 8) {
+        const defaults = getDefaultIdeas(lang);
+        const existingTitles = new Set(ideas.map((i: any) => i.titleEn?.toLowerCase()));
+        for (const d of defaults) {
+          if (ideas.length >= 8) break;
+          if (!existingTitles.has(d.titleEn.toLowerCase())) {
+            ideas.push(d);
+          }
+        }
+      }
+
+      console.log("[StickerIdeas] Generated", ideas.length, "ideas from photo");
+      return ideas.slice(0, 8);
+    }
+
+    // Fallback: no OpenAI key
+    console.log("[StickerIdeas] No OpenAI key, using defaults");
+    return getDefaultIdeas(lang);
+  } catch (err: any) {
+    console.error("[StickerIdeas] Error:", err.response?.data || err.message);
+    return getDefaultIdeas(lang);
+  }
+}
+
+// Show sticker idea card with inline buttons
+async function showStickerIdeaCard(ctx: any, opts: {
+  idea: StickerIdea;
+  ideaIndex: number;
+  totalIdeas: number;
+  style: StylePresetV2;
+  lang: string;
+}) {
+  const { idea, ideaIndex, totalIdeas, style, lang } = opts;
+  const isRu = lang === "ru";
+
+  const text = [
+    `💡 ${isRu ? "Идея" : "Idea"} ${ideaIndex + 1}/${totalIdeas}`,
+    ``,
+    `🎨 ${isRu ? "Стиль" : "Style"}: ${style.emoji} ${isRu ? style.name_ru : style.name_en}`,
+    `${idea.emoji} ${isRu ? idea.titleRu : idea.titleEn}`,
+    `${isRu ? idea.descriptionRu : idea.descriptionEn}`,
+  ].join("\n");
+
+  await ctx.reply(text, Markup.inlineKeyboard([
+    [Markup.button.callback(
+      isRu ? `🎨 Сгенерить (1💎)` : `🎨 Generate (1💎)`,
+      `asst_idea_gen:${ideaIndex}`
+    )],
+    [
+      Markup.button.callback(
+        isRu ? "🔄 Другой стиль" : "🔄 Change style",
+        `asst_idea_style:${ideaIndex}`
+      ),
+      Markup.button.callback(
+        isRu ? "➡️ Другая" : "➡️ Next",
+        `asst_idea_next:${ideaIndex}`
+      ),
+    ],
+    [Markup.button.callback(
+      isRu ? "✏️ Своя идея" : "✏️ Custom idea",
+      "asst_idea_custom"
+    )],
+    [Markup.button.callback(
+      isRu ? "⏭️ Пропустить" : "⏭️ Skip",
+      "asst_idea_skip"
+    )],
+  ]));
 }
 
 async function generateCustomIdea(opts: {
