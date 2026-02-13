@@ -1562,6 +1562,134 @@ function getStartPayload(ctx: { message?: { text?: string } }): string {
   return match ? match[1].trim() : "";
 }
 
+// ============================================
+// Outreach — personalized message to new users
+// ============================================
+
+/**
+ * Generate outreach message using AI and send alert to admin channel.
+ * Async, non-blocking — called from bot.start for new users.
+ */
+async function generateAndSendOutreachAlert(
+  ctx: any,
+  user: any,
+  languageCode: string,
+  utm: { source: string | null; medium: string | null; campaign: string | null; content: string | null }
+) {
+  const telegramId = user.telegram_id;
+  const lang = user.lang || "en";
+  const firstName = ctx.from?.first_name || "";
+  const username = ctx.from?.username || "";
+  const isPremium = ctx.from?.is_premium || false;
+
+  // Generate outreach message via Gemini
+  let outreachText = "";
+  try {
+    const systemPrompt = await getText(lang, "outreach.system_prompt");
+    const userContext = `Name: ${firstName || "unknown"}\nUsername: ${username || "none"}\nLanguage: ${lang}\nSource: ${utm.source || "organic"}/${utm.medium || "none"}\nPremium: ${isPremium}`;
+
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+      {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: "user", parts: [{ text: userContext }] }],
+      },
+      { headers: { "x-goog-api-key": config.geminiApiKey } }
+    );
+
+    outreachText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+  } catch (err: any) {
+    console.error("[Outreach] AI generation failed:", err.response?.data || err.message);
+  }
+
+  if (!outreachText) {
+    // Fallback: no AI message, send plain alert
+    const utmInfo = utm.source ? `\n📢 Источник: ${utm.source}${utm.medium ? "/" + utm.medium : ""}` : "";
+    sendNotification({
+      type: "new_user",
+      message: `@${username || "no\\_username"} (${telegramId})\n🌐 Язык: ${languageCode || "unknown"}${utmInfo}`,
+      buttons: [[
+        { text: "🔥 -10%", callback_data: `admin_discount:${telegramId}:10` },
+        { text: "🔥 -15%", callback_data: `admin_discount:${telegramId}:15` },
+        { text: "🔥 -25%", callback_data: `admin_discount:${telegramId}:25` },
+      ]],
+    }).catch(console.error);
+    return;
+  }
+
+  // Save outreach to DB
+  const { data: outreach, error: outreachError } = await supabase
+    .from("user_outreach")
+    .insert({
+      user_id: user.id,
+      telegram_id: telegramId,
+      message_text: outreachText,
+      status: "draft",
+      env: config.appEnv,
+    })
+    .select("id")
+    .single();
+
+  if (outreachError || !outreach) {
+    console.error("[Outreach] DB insert failed:", outreachError?.message);
+    return;
+  }
+
+  const outreachId = outreach.id;
+
+  // Send alert with outreach preview + buttons
+  const utmInfo = utm.source ? `\n📢 Источник: ${utm.source}${utm.medium ? "/" + utm.medium : ""}` : "";
+  const premiumTag = isPremium ? " ⭐Premium" : "";
+  const alertText =
+    `🆕 *Новый пользователь*\n\n` +
+    `👤 @${escapeMarkdownForAlert(username || "no_username")} (${telegramId})${premiumTag}\n` +
+    `🌐 Язык: ${languageCode || "unknown"}${utmInfo}\n\n` +
+    `✉️ *Outreach:*\n"${escapeMarkdownForAlert(outreachText)}"`;
+
+  const channelId = config.alertChannelId;
+  if (!channelId) return;
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: channelId,
+        text: alertText,
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "🔥 -10%", callback_data: `admin_discount:${telegramId}:10` },
+              { text: "🔥 -15%", callback_data: `admin_discount:${telegramId}:15` },
+              { text: "🔥 -25%", callback_data: `admin_discount:${telegramId}:25` },
+            ],
+            [
+              { text: "✉️ Отправить", callback_data: `admin_send_outreach:${outreachId}` },
+              { text: "🔄 Заново", callback_data: `admin_regen_outreach:${outreachId}` },
+            ],
+          ],
+        },
+      }),
+    });
+
+    const data = await res.json() as any;
+    if (data.ok && data.result?.message_id) {
+      // Save alert message_id for later editing
+      await supabase
+        .from("user_outreach")
+        .update({ alert_message_id: data.result.message_id })
+        .eq("id", outreachId);
+    }
+  } catch (err: any) {
+    console.error("[Outreach] Failed to send alert:", err.message);
+  }
+}
+
+function escapeMarkdownForAlert(text: string): string {
+  return text.replace(/[_*`\[\]]/g, "\\$&");
+}
+
 // Avatar auto-generation for paid traffic users
 async function handleAvatarAutoGeneration(ctx: any, user: any, lang: string) {
   const telegramId = user.telegram_id;
@@ -1705,18 +1833,11 @@ bot.start(async (ctx) => {
     // No free credits on registration — credits granted by AI assistant (grant_credit, 20/day limit)
     // Paywall shows if no credits and no purchase
 
-    // Send notification (async, non-blocking) with discount buttons for admin
+    // Send notification with outreach + discount buttons for admin (async, non-blocking)
     if (user?.id) {
-      const utmInfo = utm.source ? `\n📢 Источник: ${utm.source}${utm.medium ? "/" + utm.medium : ""}${utm.campaign ? " кампания:" + utm.campaign : ""}` : "";
-      sendNotification({
-        type: "new_user",
-        message: `@${ctx.from?.username || "no\\_username"} (${telegramId})\n🌐 Язык: ${languageCode || "unknown"}${utmInfo}`,
-        buttons: [[
-          { text: "🔥 -10%", callback_data: `admin_discount:${telegramId}:10` },
-          { text: "🔥 -15%", callback_data: `admin_discount:${telegramId}:15` },
-          { text: "🔥 -25%", callback_data: `admin_discount:${telegramId}:25` },
-        ]],
-      }).catch(console.error);
+      generateAndSendOutreachAlert(ctx, user, languageCode || "", utm).catch((err: any) =>
+        console.error("[Outreach] Alert generation failed:", err.message)
+      );
     }
   } else {
     // Update username and lang if changed
@@ -4701,6 +4822,160 @@ bot.action(/^admin_discount:(\d+):(\d+)$/, async (ctx) => {
     } else {
       await ctx.editMessageText(`❌ Ошибка отправки @${uname}: ${errMsg}`);
     }
+  }
+});
+
+// Callback: admin_send_outreach — send personalized outreach message to user
+bot.action(/^admin_send_outreach:(.+)$/, async (ctx) => {
+  console.log("=== admin_send_outreach callback ===");
+  safeAnswerCbQuery(ctx);
+  const adminTelegramId = ctx.from?.id;
+  if (!adminTelegramId || !config.adminIds.includes(adminTelegramId)) return;
+
+  const outreachId = ctx.match[1];
+
+  // Load outreach from DB
+  const { data: outreach } = await supabase
+    .from("user_outreach")
+    .select("*")
+    .eq("id", outreachId)
+    .single();
+
+  if (!outreach) {
+    await ctx.answerCbQuery("❌ Outreach не найден");
+    return;
+  }
+
+  if (outreach.status !== "draft") {
+    await ctx.answerCbQuery(`Уже отправлено (${outreach.status})`);
+    return;
+  }
+
+  const user = await getUser(outreach.telegram_id);
+  const uname = user?.username || outreach.telegram_id;
+
+  // Send message to user with reply button
+  try {
+    const replyButtonUrl = `https://t.me/${config.supportBotUsername}?start=outreach_${outreachId}`;
+
+    await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+      chat_id: outreach.telegram_id,
+      text: outreach.message_text,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "💬 Ответить", url: replyButtonUrl },
+        ]],
+      },
+    });
+
+    // Update status to sent
+    await supabase
+      .from("user_outreach")
+      .update({ status: "sent", sent_at: new Date().toISOString() })
+      .eq("id", outreachId);
+
+    console.log("[Outreach] Sent to:", outreach.telegram_id);
+
+    // Update alert message
+    await ctx.editMessageText(`✅ Outreach отправлен @${uname}\n\n"${outreach.message_text}"`);
+  } catch (err: any) {
+    const errMsg = err.response?.data?.description || err.message;
+    console.error("[Outreach] Failed to send:", errMsg);
+
+    if (errMsg?.includes("bot was blocked") || errMsg?.includes("chat not found")) {
+      await ctx.editMessageText(`❌ Не удалось отправить @${uname} — бот заблокирован`);
+    } else {
+      await ctx.editMessageText(`❌ Ошибка отправки @${uname}: ${errMsg}`);
+    }
+  }
+});
+
+// Callback: admin_regen_outreach — regenerate outreach message
+bot.action(/^admin_regen_outreach:(.+)$/, async (ctx) => {
+  console.log("=== admin_regen_outreach callback ===");
+  safeAnswerCbQuery(ctx);
+  const adminTelegramId = ctx.from?.id;
+  if (!adminTelegramId || !config.adminIds.includes(adminTelegramId)) return;
+
+  const outreachId = ctx.match[1];
+
+  // Load outreach from DB
+  const { data: outreach } = await supabase
+    .from("user_outreach")
+    .select("*")
+    .eq("id", outreachId)
+    .single();
+
+  if (!outreach || outreach.status !== "draft") {
+    await ctx.answerCbQuery("❌ Нельзя перегенерировать");
+    return;
+  }
+
+  // Get user info for regeneration
+  const user = await getUser(outreach.telegram_id);
+  if (!user) {
+    await ctx.answerCbQuery("❌ Пользователь не найден");
+    return;
+  }
+
+  const lang = user.lang || "en";
+
+  // Regenerate via AI
+  try {
+    const systemPrompt = await getText(lang, "outreach.system_prompt");
+    const userContext = `Name: ${user.first_name || "unknown"}\nUsername: ${user.username || "none"}\nLanguage: ${lang}\nSource: ${user.utm_source || "organic"}/${user.utm_medium || "none"}`;
+
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+      {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: "user", parts: [{ text: userContext }] }],
+      },
+      { headers: { "x-goog-api-key": config.geminiApiKey } }
+    );
+
+    const newText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!newText) {
+      await ctx.answerCbQuery("❌ AI не сгенерировал текст");
+      return;
+    }
+
+    // Update in DB
+    await supabase
+      .from("user_outreach")
+      .update({ message_text: newText })
+      .eq("id", outreachId);
+
+    // Update alert message with new preview
+    const uname = user.username || outreach.telegram_id;
+    const utmInfo = user.utm_source ? `\n📢 Источник: ${user.utm_source}${user.utm_medium ? "/" + user.utm_medium : ""}` : "";
+    const alertText =
+      `🆕 *Новый пользователь*\n\n` +
+      `👤 @${escapeMarkdownForAlert(uname)} (${outreach.telegram_id})` +
+      `\n🌐 Язык: ${user.language_code || "unknown"}${utmInfo}\n\n` +
+      `✉️ *Outreach (обновлён):*\n"${escapeMarkdownForAlert(newText)}"`;
+
+    await ctx.editMessageText(alertText, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🔥 -10%", callback_data: `admin_discount:${outreach.telegram_id}:10` },
+            { text: "🔥 -15%", callback_data: `admin_discount:${outreach.telegram_id}:15` },
+            { text: "🔥 -25%", callback_data: `admin_discount:${outreach.telegram_id}:25` },
+          ],
+          [
+            { text: "✉️ Отправить", callback_data: `admin_send_outreach:${outreachId}` },
+            { text: "🔄 Заново", callback_data: `admin_regen_outreach:${outreachId}` },
+          ],
+        ],
+      },
+    });
+
+    console.log("[Outreach] Regenerated for:", outreach.telegram_id);
+  } catch (err: any) {
+    console.error("[Outreach] Regen failed:", err.response?.data || err.message);
+    await ctx.answerCbQuery("❌ Ошибка перегенерации");
   }
 });
 

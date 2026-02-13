@@ -19,6 +19,9 @@ const pendingFeedback = new Map<number, string>(); // telegram_id -> user_id
 // Map для отслеживания кто ожидает ввода issue
 const pendingIssues = new Map<number, string>(); // telegram_id -> sticker_id
 
+// Map для отслеживания ожидающих ответов на outreach
+const pendingOutreach = new Map<number, string>(); // telegram_id -> outreach_id
+
 console.log("Admin IDs:", ADMIN_IDS);
 
 // /start handler
@@ -46,6 +49,42 @@ bot.start(async (ctx) => {
       "Опишите проблему или предложение по улучшению:\n\n" +
       "Что именно не понравилось в результате?"
     );
+    return;
+  }
+  
+  // Пользователь пришёл ответить на outreach
+  if (payload?.startsWith("outreach_")) {
+    const outreachId = payload.replace("outreach_", "");
+    
+    // Verify outreach exists and is sent
+    const { data: outreach } = await supabase
+      .from("user_outreach")
+      .select("id, status")
+      .eq("id", outreachId)
+      .single();
+    
+    if (outreach && (outreach.status === "sent" || outreach.status === "draft")) {
+      pendingOutreach.set(ctx.from.id, outreachId);
+      
+      // Get localized prompt
+      const { data: user } = await supabase
+        .from("users")
+        .select("lang")
+        .eq("telegram_id", ctx.from.id)
+        .maybeSingle();
+      const lang = user?.lang || "en";
+      
+      const { data: textRow } = await supabase
+        .from("bot_texts_new")
+        .select("text")
+        .eq("lang", lang)
+        .eq("key", "outreach.reply_prompt")
+        .maybeSingle();
+      
+      await ctx.reply(textRow?.text || "Thanks for replying! Write your thoughts — we will definitely read them 🙏");
+    } else {
+      await ctx.reply("Это бот поддержки photo2sticker. Напишите ваш вопрос!");
+    }
     return;
   }
   
@@ -112,6 +151,71 @@ bot.on("text", async (ctx) => {
       console.error("Failed to send reply:", err);
       await ctx.reply(`❌ Ошибка отправки: ${err.message}`);
     }
+    return;
+  }
+  
+  // Пользователь отвечает на outreach
+  if (pendingOutreach.has(telegramId)) {
+    const outreachId = pendingOutreach.get(telegramId)!;
+    pendingOutreach.delete(telegramId);
+    
+    // Save reply to DB
+    await supabase
+      .from("user_outreach")
+      .update({
+        reply_text: ctx.message.text,
+        status: "replied",
+        replied_at: new Date().toISOString(),
+      })
+      .eq("id", outreachId);
+    
+    // Load outreach for context
+    const { data: outreach } = await supabase
+      .from("user_outreach")
+      .select("message_text, telegram_id")
+      .eq("id", outreachId)
+      .single();
+    
+    // Forward reply to alert channel via main bot
+    const alertChannelId = config.alertChannelId;
+    if (alertChannelId && outreach) {
+      const alertText =
+        `💬 *Ответ на outreach*\n\n` +
+        `👤 @${escapeMarkdown(ctx.from.username || String(ctx.from.id))} (${ctx.from.id})\n` +
+        `📨 Было: "${escapeMarkdown((outreach.message_text || "").slice(0, 200))}"\n` +
+        `💬 Ответ: "${escapeMarkdown(ctx.message.text)}"`;
+      
+      try {
+        await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: alertChannelId,
+            text: alertText,
+            parse_mode: "Markdown",
+          }),
+        });
+      } catch (err) {
+        console.error("[Outreach] Failed to forward reply to alert channel:", err);
+      }
+    }
+    
+    // Thank the user
+    const { data: user } = await supabase
+      .from("users")
+      .select("lang")
+      .eq("telegram_id", telegramId)
+      .maybeSingle();
+    const lang = user?.lang || "en";
+    
+    const { data: thanksRow } = await supabase
+      .from("bot_texts_new")
+      .select("text")
+      .eq("lang", lang)
+      .eq("key", "outreach.reply_thanks")
+      .maybeSingle();
+    
+    await ctx.reply(thanksRow?.text || "Thank you for your feedback! We really appreciate it 🙏");
     return;
   }
   
