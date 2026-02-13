@@ -1051,7 +1051,14 @@ async function handleAssistantConfirm(ctx: any, user: any, sessionId: string, la
   }
 
   const params = getAssistantParams(aSession);
-  const promptFinal = buildAssistantPrompt(params);
+  const userText = `${params.style}, ${params.emotion}, ${params.pose}`;
+
+  // Use prompt_generator agent (same as manual flow) for consistent prompts
+  const promptResult = await generatePrompt(userText);
+  const promptFinal = promptResult.ok && promptResult.prompt
+    ? promptResult.prompt
+    : buildAssistantPrompt(params); // fallback to template if LLM fails
+  console.log("[assistant] generatePrompt ok:", promptResult.ok, "used fallback:", !(promptResult.ok && promptResult.prompt));
 
   // Keep assistant session active so user can continue dialog after generation
   // (e.g. "not what I wanted", "change emotion", etc.)
@@ -6708,7 +6715,12 @@ bot.on("successful_payment", async (ctx) => {
 
       if (aSessionForPayment?.style) {
         const params = getAssistantParams(aSessionForPayment);
-        const promptFinal = buildAssistantPrompt(params);
+        const userText = `${params.style}, ${params.emotion}, ${params.pose}`;
+        const promptResult = await generatePrompt(userText);
+        const promptFinal = promptResult.ok && promptResult.prompt
+          ? promptResult.prompt
+          : buildAssistantPrompt(params);
+        console.log("[payment] assistant generatePrompt ok:", promptResult.ok, "used fallback:", !(promptResult.ok && promptResult.prompt));
 
         // Save prompt and start generation
         await supabase
@@ -6816,7 +6828,12 @@ bot.on("successful_payment", async (ctx) => {
         if (aSessionFallback && allParamsCollected(aSessionFallback) && session.current_photo_file_id) {
           console.log("[payment] assistant fallback: params collected, auto-generating");
           const params = getAssistantParams(aSessionFallback);
-          const promptFinal = buildAssistantPrompt(params);
+          const userText = `${params.style}, ${params.emotion}, ${params.pose}`;
+          const promptResult = await generatePrompt(userText);
+          const promptFinal = promptResult.ok && promptResult.prompt
+            ? promptResult.prompt
+            : buildAssistantPrompt(params);
+          console.log("[payment] fallback generatePrompt ok:", promptResult.ok);
 
           await supabase
             .from("sessions")
