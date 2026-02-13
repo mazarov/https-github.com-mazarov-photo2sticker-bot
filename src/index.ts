@@ -2136,7 +2136,7 @@ bot.on("photo", async (ctx) => {
     const randomStyle = activePresets[Math.floor(Math.random() * activePresets.length)];
 
     // Save photo and move to assistant_wait_idea
-    await supabase
+    const { error: updateErr1 } = await supabase
       .from("sessions")
       .update({
         photos,
@@ -2145,6 +2145,7 @@ bot.on("photo", async (ctx) => {
         is_active: true,
       })
       .eq("id", session.id);
+    if (updateErr1) console.error("[assistant_ideas] session update error:", updateErr1.message);
 
     // Show loading message
     const loadingMsg = await ctx.reply(
@@ -2165,16 +2166,21 @@ bot.on("photo", async (ctx) => {
       ideas = getDefaultIdeas(lang);
     }
 
-    // Save ideas state
+    // Save ideas state (single update with state + is_active to ensure consistency)
     const ideasState = {
       styleId: randomStyle.id,
       ideaIndex: 0,
       ideas,
     };
-    await supabase
+    const { error: updateErr2 } = await supabase
       .from("sessions")
-      .update({ sticker_ideas_state: ideasState })
+      .update({
+        sticker_ideas_state: ideasState,
+        state: "assistant_wait_idea",
+        is_active: true,
+      })
       .eq("id", session.id);
+    if (updateErr2) console.error("[assistant_ideas] ideas state save error:", updateErr2.message);
 
     // Delete loading message
     try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
@@ -4523,7 +4529,11 @@ bot.action(/^asst_idea_gen:(\d+)$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const session = await getActiveSession(user.id);
-  if (!session?.sticker_ideas_state) return;
+  if (!session?.sticker_ideas_state) {
+    console.error("[asst_idea_gen] No sticker_ideas_state, session:", session?.id, "state:", session?.state);
+    await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
+    return;
+  }
 
   const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[] };
   const ideaIndex = parseInt(ctx.match[1], 10);
@@ -4561,7 +4571,11 @@ bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const session = await getActiveSession(user.id);
-  if (!session?.sticker_ideas_state) return;
+  if (!session?.sticker_ideas_state) {
+    console.error("[asst_idea_next] No sticker_ideas_state, session:", session?.id, "state:", session?.state);
+    await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
+    return;
+  }
 
   const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[] };
   const nextIndex = (parseInt(ctx.match[1], 10) + 1) % state.ideas.length;
@@ -4612,12 +4626,49 @@ bot.action(/^asst_idea_style:(\d+)$/, async (ctx) => {
     }
     buttons.push(row);
   }
+  // Back button
+  buttons.push([Markup.button.callback(
+    isRu ? "⬅️ Назад" : "⬅️ Back",
+    `asst_idea_back:${ideaIndex}`
+  )]);
 
   try { await ctx.deleteMessage(); } catch {}
   await ctx.reply(
     isRu ? "🎨 Выбери стиль:" : "🎨 Choose a style:",
     Markup.inlineKeyboard(buttons)
   );
+});
+
+// Back to idea card from style selection
+bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  const state = session?.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[] } | null;
+  if (!state?.ideas?.length) {
+    try { await ctx.deleteMessage(); } catch {}
+    await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
+    return;
+  }
+
+  const ideaIndex = parseInt(ctx.match[1], 10);
+  const preset = await getStylePresetV2ById(state.styleId);
+  if (!preset) return;
+
+  try { await ctx.deleteMessage(); } catch {}
+  await showStickerIdeaCard(ctx, {
+    idea: state.ideas[ideaIndex],
+    ideaIndex,
+    totalIdeas: state.ideas.length,
+    style: preset,
+    lang,
+  });
 });
 
 // Restyle: change style + regenerate ideas
@@ -4633,7 +4684,11 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
   const styleId = ctx.match[1];
   const ideaIndex = parseInt(ctx.match[2], 10);
   const session = await getActiveSession(user.id);
-  if (!session?.sticker_ideas_state) return;
+  if (!session?.sticker_ideas_state) {
+    console.error("[asst_idea_restyle] No sticker_ideas_state, session:", session?.id, "state:", session?.state);
+    await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
+    return;
+  }
 
   const preset = await getStylePresetV2ById(styleId);
   if (!preset) return;
