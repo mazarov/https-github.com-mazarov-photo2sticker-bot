@@ -1874,8 +1874,8 @@ bot.start(async (ctx) => {
     const lang = user.lang || "en";
     const startPayload = getStartPayload(ctx);
 
-    // Avatar auto-generation for new paid traffic users (yandex/cpc + has profile photo)
-    if (isNewUser && user.utm_source === "yandex" && user.utm_medium === "cpc") {
+    // [DISABLED] Avatar auto-generation for new paid traffic users
+    if ((false as boolean) && isNewUser && user.utm_source === "yandex" && user.utm_medium === "cpc") {
       console.log("[AvatarAuto] Paid traffic user detected, checking profile photo...");
       try {
         const success = await handleAvatarAutoGeneration(ctx, user, lang);
@@ -2259,8 +2259,8 @@ bot.on("photo", async (ctx) => {
     return;
   }
 
-  // === Avatar demo follow-up: user sends photo after avatar_demo → start assistant dialog ===
-  if (session.generation_type === "avatar_demo" && session.state === "confirm_sticker") {
+  // [DISABLED] === Avatar demo follow-up ===
+  if ((false as boolean) && session.generation_type === "avatar_demo" && session.state === "confirm_sticker") {
     console.log("[AvatarDemo] User sent photo after avatar_demo — starting assistant dialog");
     await startAssistantDialog(ctx, user, lang);
     // Re-fetch session to get the new assistant_wait_photo state
