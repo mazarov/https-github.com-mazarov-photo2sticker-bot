@@ -1,3 +1,6 @@
 [submodule "landing"]
 	path = landing
 	url = https://github.com/mazarov/photo2sticker.git
+[submodule "aiphoto"]
+	path = aiphoto
+	url = https://github.com/mazarov/aiphoto.git
