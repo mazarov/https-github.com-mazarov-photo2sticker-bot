@@ -4592,13 +4592,17 @@ bot.action(/^asst_idea_gen:(\d+)$/, async (ctx) => {
   if (!preset) return;
 
   console.log("[asst_idea_gen] Generating idea:", ideaIndex, idea.titleEn, "style:", preset.id);
+  console.log("[asst_idea_gen] prompt_hint:", preset.prompt_hint);
+  console.log("[asst_idea_gen] promptModification:", idea.promptModification);
 
   // Build prompt via prompt_generator agent
   const userText = `${preset.prompt_hint}, ${idea.promptModification}`;
+  console.log("[asst_idea_gen] userText (input to generatePrompt):", userText);
   const promptResult = await generatePrompt(userText);
   const promptFinal = promptResult.ok && promptResult.prompt
     ? promptResult.prompt
     : `${preset.prompt_hint}. ${idea.promptModification}`;
+  console.log("[asst_idea_gen] promptFinal:", promptFinal);
 
   await startGeneration(ctx, user, session, lang, {
     generationType: "style",
