@@ -341,7 +341,7 @@ async function runJob(job: any) {
   const imageSizeKb = Math.round(generatedBuffer.length / 1024);
   const rembgUrl = process.env.REMBG_URL;
   
-  let noBgBuffer: Buffer;
+  let noBgBuffer: Buffer | undefined;
   const startTime = Date.now();
 
   if (greenRatio > 0.40) {
@@ -375,12 +375,12 @@ async function runJob(job: any) {
   }
 
   // If no result yet, call rembg on original image
-  if (!noBgBuffer!) {
+  if (!noBgBuffer) {
     noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
   }
   
   // If rembg also failed, fallback to Pixian
-  if (!noBgBuffer!) {
+  if (!noBgBuffer) {
     console.log(`Calling Pixian to remove background... (image size: ${imageSizeKb} KB)`);
     const pixianForm = new FormData();
     pixianForm.append("image", generatedBuffer, {
@@ -436,16 +436,19 @@ async function runJob(job: any) {
 
   await updateProgress(6);
 
+  // At this point noBgBuffer is guaranteed to be set (or we threw above)
+  const bgRemovedBuffer = noBgBuffer!;
+
   // Final chroma key cleanup: catch any remaining green artifacts
-  let cleanedBuffer = noBgBuffer;
+  let cleanedBuffer: Buffer = bgRemovedBuffer;
   if (greenRatio > 0.05) {
     try {
       const ckStart = Date.now();
-      cleanedBuffer = await chromaKeyGreen(noBgBuffer);
+      cleanedBuffer = await chromaKeyGreen(bgRemovedBuffer);
       console.log(`[chromaKey] Final cleanup done in ${Date.now() - ckStart}ms`);
     } catch (err: any) {
       console.error(`[chromaKey] Final cleanup failed, using previous output: ${err.message}`);
-      cleanedBuffer = noBgBuffer;
+      cleanedBuffer = bgRemovedBuffer;
     }
   } else {
     console.log(`[chromaKey] Final cleanup skipped — green ratio ${(greenRatio * 100).toFixed(1)}% below 5%`);
