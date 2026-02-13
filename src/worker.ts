@@ -7,7 +7,7 @@ import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, editMessageText, deleteMessage } from "./lib/telegram";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
-import { chromaKeyGreen, fullChromaKey, getGreenPixelRatio, despillGreenEdges } from "./lib/image-utils";
+// chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
 
 async function sleep(ms: number) {
@@ -323,24 +323,9 @@ async function runJob(job: any) {
   await updateProgress(4);
   const generatedBuffer = Buffer.from(imageBase64, "base64");
 
-  // Pre-check: calculate green pixel ratio on original image (before rembg)
-  // Used later to decide whether chroma key cleanup is needed
-  let greenRatio = 0;
-  try {
-    const rawOriginal = await sharp(generatedBuffer).ensureAlpha().raw().toBuffer();
-    greenRatio = getGreenPixelRatio(rawOriginal, 4);
-    console.log(`[chromaKey] Green pixel ratio in original image: ${(greenRatio * 100).toFixed(1)}%`);
-  } catch (err: any) {
-    console.error(`[chromaKey] Failed to calculate green ratio: ${err.message}`);
-  }
-
   await updateProgress(5);
   // ============================================================
-  // Smart background removal — route by green pixel ratio
-  // ============================================================
-  // greenRatio > 40%  → fullChromaKey only (skip rembg — fast, reliable)
-  // greenRatio 5-40%  → fullChromaKey first, then rembg to clean up
-  // greenRatio < 5%   → rembg only (Gemini didn't draw green BG)
+  // Background removal — rembg directly on generated image
   // ============================================================
   const imageSizeKb = Math.round(generatedBuffer.length / 1024);
   const rembgUrl = process.env.REMBG_URL;
@@ -348,40 +333,8 @@ async function runJob(job: any) {
   let noBgBuffer: Buffer | undefined;
   const startTime = Date.now();
 
-  if (greenRatio > 0.40) {
-    // === PATH A: High green ratio — chroma key only, skip rembg ===
-    console.log(`[bgRemoval] PATH A: greenRatio=${(greenRatio * 100).toFixed(1)}% > 40% — using fullChromaKey only (skip rembg)`);
-    try {
-      const ckStart = Date.now();
-      noBgBuffer = await fullChromaKey(generatedBuffer);
-      console.log(`[bgRemoval] fullChromaKey done in ${Date.now() - ckStart}ms`);
-    } catch (err: any) {
-      console.error(`[bgRemoval] fullChromaKey failed: ${err.message} — falling back to rembg`);
-      // Fall through to rembg below
-      noBgBuffer = undefined as any;
-    }
-  } else if (greenRatio > 0.05) {
-    // === PATH B: Medium green ratio — chroma key first, then rembg ===
-    console.log(`[bgRemoval] PATH B: greenRatio=${(greenRatio * 100).toFixed(1)}% (5-40%) — fullChromaKey + rembg`);
-    try {
-      const ckStart = Date.now();
-      const chromaResult = await fullChromaKey(generatedBuffer);
-      console.log(`[bgRemoval] fullChromaKey pre-pass done in ${Date.now() - ckStart}ms`);
-      // Now pass chroma key result to rembg for final cleanup
-      noBgBuffer = await callRembg(chromaResult, rembgUrl, imageSizeKb);
-    } catch (err: any) {
-      console.error(`[bgRemoval] PATH B failed: ${err.message} — trying rembg on original`);
-      noBgBuffer = undefined as any;
-    }
-  } else {
-    // === PATH C: Low/no green ratio — rembg only ===
-    console.log(`[bgRemoval] PATH C: greenRatio=${(greenRatio * 100).toFixed(1)}% < 5% — rembg only`);
-  }
-
-  // If no result yet, call rembg on original image
-  if (!noBgBuffer) {
-    noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
-  }
+  console.log(`[bgRemoval] Calling rembg on generated image (${imageSizeKb} KB)`);
+  noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
   
   // If rembg also failed, fallback to Pixian
   if (!noBgBuffer) {
@@ -441,31 +394,7 @@ async function runJob(job: any) {
   await updateProgress(6);
 
   // At this point noBgBuffer is guaranteed to be set (or we threw above)
-  const bgRemovedBuffer = noBgBuffer!;
-
-  // Final chroma key cleanup: catch any remaining green artifacts
-  let cleanedBuffer: Buffer = bgRemovedBuffer;
-  if (greenRatio > 0.05) {
-    try {
-      const ckStart = Date.now();
-      cleanedBuffer = await chromaKeyGreen(bgRemovedBuffer);
-      console.log(`[chromaKey] Final cleanup done in ${Date.now() - ckStart}ms`);
-    } catch (err: any) {
-      console.error(`[chromaKey] Final cleanup failed, using previous output: ${err.message}`);
-      cleanedBuffer = bgRemovedBuffer;
-    }
-  } else {
-    console.log(`[chromaKey] Final cleanup skipped — green ratio ${(greenRatio * 100).toFixed(1)}% below 5%`);
-  }
-
-  // Despill: remove green fringing from edges (2 passes)
-  try {
-    const dsStart = Date.now();
-    cleanedBuffer = await despillGreenEdges(cleanedBuffer, 2);
-    console.log(`[despill] Edge cleanup done in ${Date.now() - dsStart}ms`);
-  } catch (err: any) {
-    console.error(`[despill] Edge cleanup failed, using previous output: ${err.message}`);
-  }
+  const cleanedBuffer = noBgBuffer!;
 
   // Trim transparent borders and fit into 512x512 with 10px padding for border
   const stickerBuffer = await sharp(cleanedBuffer)
