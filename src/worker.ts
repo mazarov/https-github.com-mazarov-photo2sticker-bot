@@ -396,10 +396,21 @@ async function runJob(job: any) {
   // At this point noBgBuffer is guaranteed to be set (or we threw above)
   const cleanedBuffer = noBgBuffer!;
 
-  // Trim transparent borders and fit into 512x512 with 10px padding for border
-  const stickerBuffer = await sharp(cleanedBuffer)
+  // Safety padding: add 5% transparent border so trim never eats into character
+  // (Gemini sometimes generates characters touching image edges)
+  const meta = await sharp(cleanedBuffer).metadata();
+  const safetyPad = Math.round(Math.max(meta.width || 0, meta.height || 0) * 0.05);
+  const paddedBuffer = await sharp(cleanedBuffer)
+    .extend({
+      top: safetyPad, bottom: safetyPad, left: safetyPad, right: safetyPad,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    })
+    .toBuffer();
+
+  // Trim transparent borders and fit into 512x512 with 15px padding
+  const stickerBuffer = await sharp(paddedBuffer)
     .trim({ threshold: 2 })
-    .resize(492, 492, {
+    .resize(482, 482, {
       fit: "contain",
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     })
