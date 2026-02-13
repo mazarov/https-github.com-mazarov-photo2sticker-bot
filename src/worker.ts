@@ -467,11 +467,15 @@ async function runJob(job: any) {
     console.error(`[despill] Edge cleanup failed, using previous output: ${err.message}`);
   }
 
-  // Trim transparent borders and fit into 512x512
+  // Trim transparent borders and fit into 512x512 with 10px padding for border
   const stickerBuffer = await sharp(cleanedBuffer)
     .trim({ threshold: 2 })
-    .resize(512, 512, {
+    .resize(492, 492, {
       fit: "contain",
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    })
+    .extend({
+      top: 10, bottom: 10, left: 10, right: 10,
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     })
     .webp()
