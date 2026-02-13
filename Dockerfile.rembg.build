@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir \
     scipy
 
 # Pre-download the model (faster startup)
-RUN python -c "from rembg import new_session; new_session('u2net')" || true
+RUN python -c "from rembg import new_session; new_session('isnet-general-use')" || true
 
 COPY rembg_server.py .
 

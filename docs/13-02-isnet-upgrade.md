@@ -1,7 +1,7 @@
 # Переключение модели rembg: u2net → isnet-general-use
 
 **Дата:** 2026-02-13
-**Статус:** Требования
+**Статус:** В работе
 
 ---
 
@@ -162,11 +162,11 @@ session = new_session("u2net")  # откатить обратно
 
 ## Чеклист
 
-- [ ] Обновить `rembg_server.py`: `u2net` → `isnet-general-use` (3 строки)
-- [ ] Обновить Dockerfile rembg: pre-download `isnet-general-use`
-- [ ] Пересобрать Docker-образ
+- [x] Обновить `rembg_server.py`: `u2net` → `isnet-general-use` (3 строки)
+- [x] Обновить Dockerfile rembg: pre-download `isnet-general-use`
+- [x] Обновить docs/architecture/02-worker.md (модель rembg)
+- [ ] Пересобрать Docker-образ на Dockhost
 - [ ] Деплой на test
 - [ ] Тестовые генерации (3-5 стикеров)
 - [ ] Проверить RAM / время обработки
 - [ ] Деплой в прод
-- [ ] Обновить docs/architecture/02-worker.md (модель rembg)
