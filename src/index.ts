@@ -4671,7 +4671,7 @@ bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
   });
 });
 
-// Restyle: change style + regenerate ideas
+// Restyle: change style, keep same ideas, show current idea with new style
 bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -4693,40 +4693,20 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
   const preset = await getStylePresetV2ById(styleId);
   if (!preset) return;
 
-  const photoFileId = session.current_photo_file_id;
-  if (!photoFileId) return;
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[] };
 
-  // Show loading
-  try { await ctx.deleteMessage(); } catch {}
-  const loadingMsg = await ctx.reply(
-    lang === "ru" ? `⏳ Подбираю идеи для стиля ${preset.emoji} ${preset.name_ru}...` : `⏳ Generating ideas for ${preset.emoji} ${preset.name_en}...`
-  );
-
-  // Regenerate ideas for new style
-  let ideas: StickerIdea[];
-  try {
-    ideas = await generateStickerIdeasFromPhoto({
-      photoFileId,
-      stylePresetId: styleId,
-      lang,
-    });
-  } catch (err: any) {
-    console.error("[asst_idea_restyle] Error:", err.message);
-    ideas = getDefaultIdeas(lang);
-  }
-
-  // Save new state
-  const newState = { styleId, ideaIndex: 0, ideas };
+  // Update style only, keep same ideas and current idea index
+  const newState = { ...state, styleId };
   await supabase.from("sessions").update({
     sticker_ideas_state: newState,
   }).eq("id", session.id);
 
-  try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
+  try { await ctx.deleteMessage(); } catch {}
 
   await showStickerIdeaCard(ctx, {
-    idea: ideas[0],
-    ideaIndex: 0,
-    totalIdeas: ideas.length,
+    idea: state.ideas[ideaIndex],
+    ideaIndex,
+    totalIdeas: state.ideas.length,
     style: preset,
     lang,
   });
