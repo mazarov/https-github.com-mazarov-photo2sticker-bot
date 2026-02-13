@@ -1721,9 +1721,12 @@ async function handleAvatarAutoGeneration(ctx: any, user: any, lang: string) {
     return false;
   }
 
-  // Use prompt_hint directly (skip LLM for preset styles)
+  // Generate prompt via prompt_generator agent (same as normal style flow)
   const userInput = preset.prompt_hint;
-  const avatarPrompt = userInput;
+  const promptResult = await generatePrompt(userInput);
+  const avatarPrompt = promptResult.ok && !promptResult.retry
+    ? promptResult.prompt || userInput
+    : userInput;
 
   console.log("[AvatarAuto] Style:", defaultStyleId, "prompt_hint:", userInput?.substring(0, 50));
 
@@ -2327,10 +2330,12 @@ bot.on("photo", async (ctx) => {
       if (upErr) console.error("Valentine photo update error:", upErr);
       await ctx.reply(await getText(lang, "photo.processing"));
       const userInput = preset.prompt_hint;
+      const promptResult = await generatePrompt(userInput);
+      const generatedPrompt = promptResult.ok && !promptResult.retry ? promptResult.prompt || userInput : userInput;
       Object.assign(session, { photos, current_photo_file_id: photo.file_id, state: "wait_style", selected_style_id: preset.id });
       await startGeneration(ctx, user, session, lang, {
         generationType: "style",
-        promptFinal: userInput,
+        promptFinal: generatedPrompt,
         userInput,
         selectedStyleId: preset.id,
       });
@@ -3120,13 +3125,24 @@ bot.action(/^style_(?!v2:|example|custom|group)([^:]+)$/, async (ctx) => {
     return;
   }
 
-  // Use prompt_hint directly (skip LLM for preset styles)
+  // Use prompt_hint as userInput
   const userInput = preset.prompt_hint;
+
+  // Generate prompt using LLM
   await ctx.reply(await getText(lang, "photo.processing"));
+
+  const promptResult = await generatePrompt(userInput);
+
+  if (!promptResult.ok || promptResult.retry) {
+    await ctx.reply(await getText(lang, "photo.invalid_style"));
+    return;
+  }
+
+    const generatedPrompt = promptResult.prompt || userInput;
 
     await startGeneration(ctx, user, session, lang, {
       generationType: "style",
-      promptFinal: userInput,
+      promptFinal: generatedPrompt,
       userInput,
       selectedStyleId: preset.id,
     });
@@ -3174,9 +3190,16 @@ bot.action(/^style_carousel_pick:(.+)$/, async (ctx) => {
     const userInput = preset.prompt_hint;
     await ctx.reply(await getText(lang, "photo.processing"));
 
+    const promptResult = await generatePrompt(userInput);
+    if (!promptResult.ok || promptResult.retry) {
+      await ctx.reply(await getText(lang, "photo.invalid_style"));
+      return;
+    }
+
+    const generatedPrompt = promptResult.prompt || userInput;
     await startGeneration(ctx, user, session, lang, {
       generationType: "style",
-      promptFinal: userInput,
+      promptFinal: generatedPrompt,
       userInput,
       selectedStyleId: preset.id,
     });
@@ -3274,13 +3297,21 @@ bot.action(/^style_v2:(.+)$/, async (ctx) => {
         .eq("id", session.id);
     }
 
-    // Use prompt_hint directly (skip LLM for preset styles)
+    // Use prompt_hint as userInput
     const userInput = preset.prompt_hint;
     await ctx.reply(await getText(lang, "photo.processing"));
 
+    const promptResult = await generatePrompt(userInput);
+    if (!promptResult.ok || promptResult.retry) {
+      await ctx.reply(await getText(lang, "photo.invalid_style"));
+      return;
+    }
+
+    const generatedPrompt = promptResult.prompt || userInput;
+
     await startGeneration(ctx, user, session, lang, {
       generationType: "style",
-      promptFinal: userInput,
+      promptFinal: generatedPrompt,
       userInput,
       selectedStyleId: preset.id,
     });
