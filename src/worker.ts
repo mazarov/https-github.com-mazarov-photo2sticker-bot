@@ -51,9 +51,9 @@ async function callRembg(imageBuffer: Buffer, rembgUrl: string | undefined, imag
   if (!rembgUrl) return undefined;
   
   try {
-    // Resize image for faster rembg processing (max 512px)
+    // Resize image for rembg processing (max 1024px — preserve quality)
     const rembgBuffer = await sharp(imageBuffer)
-      .resize(512, 512, { fit: "inside", withoutEnlargement: true })
+      .resize(1024, 1024, { fit: "inside", withoutEnlargement: true })
       .png()
       .toBuffer();
     const rembgSizeKb = Math.round(rembgBuffer.length / 1024);
@@ -407,7 +407,7 @@ async function runJob(job: any) {
       top: 10, bottom: 10, left: 10, right: 10,
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     })
-    .webp()
+    .webp({ quality: 95 })
     .toBuffer();
 
   await updateProgress(7);
