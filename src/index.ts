@@ -940,13 +940,12 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     .eq("is_active", true);
 
   // Create new session with assistant state
-  // If user has a photo from previous session, skip wait_photo
   const lastPhoto = user.last_photo_file_id || null;
   const { data: newSession, error: sessionError } = await supabase
     .from("sessions")
     .insert({
       user_id: user.id,
-      state: lastPhoto ? "assistant_chat" : "assistant_wait_photo",
+      state: lastPhoto ? "assistant_wait_idea" : "assistant_wait_photo",
       is_active: true,
       env: config.appEnv,
       current_photo_file_id: lastPhoto,
@@ -999,14 +998,14 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
 
   let greeting: string;
   if (lastPhoto) {
-    // Photo already available — skip "send photo" prompt
+    // Photo already available — ideas will be shown right after greeting
     greeting = isReturning
       ? (lang === "ru"
-        ? `С возвращением, ${firstName}! 👋\nФото уже есть — опиши какой стикер хочешь 🎨`
-        : `Welcome back, ${firstName}! 👋\nPhoto ready — describe what sticker you want 🎨`)
+        ? `С возвращением, ${firstName}! 👋`
+        : `Welcome back, ${firstName}! 👋`)
       : (lang === "ru"
-        ? `Привет, ${firstName}! 👋\nФото уже загружено — опиши стиль стикера или выбери из меню 🎨`
-        : `Hi, ${firstName}! 👋\nPhoto already loaded — describe the sticker style or pick from the menu 🎨`);
+        ? `Привет, ${firstName}! 👋`
+        : `Hi, ${firstName}! 👋`);
   } else {
     greeting = isReturning
       ? (lang === "ru"
@@ -1025,6 +1024,55 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
   await updateAssistantSession(aSession.id, { messages });
 
   await ctx.reply(greeting, getMainMenuKeyboard(lang));
+
+  // If photo already exists — show sticker ideas immediately
+  if (lastPhoto) {
+    console.log("startAssistantDialog: lastPhoto exists, showing sticker ideas");
+
+    // Pick random style
+    const activePresets = stylePresets.filter(p => p.is_active);
+    const randomStyle = activePresets[Math.floor(Math.random() * activePresets.length)];
+
+    const loadingMsg = await ctx.reply(
+      lang === "ru" ? "📸 Фото есть! Подбираю идеи для стикера..." : "📸 Photo ready! Picking sticker ideas..."
+    );
+
+    // Generate ideas via LLM
+    let ideas: StickerIdea[];
+    try {
+      ideas = await generateStickerIdeasFromPhoto({
+        photoFileId: lastPhoto,
+        stylePresetId: randomStyle.id,
+        lang,
+      });
+      console.log("[startAssistant_ideas] Generated", ideas.length, "ideas");
+    } catch (err: any) {
+      console.error("[startAssistant_ideas] Error:", err.message);
+      ideas = getDefaultIdeas(lang);
+    }
+
+    // Save ideas state
+    const ideasState = { styleId: randomStyle.id, ideaIndex: 0, ideas };
+    const { error: ideasErr } = await supabase
+      .from("sessions")
+      .update({
+        sticker_ideas_state: ideasState,
+        state: "assistant_wait_idea",
+        is_active: true,
+      })
+      .eq("id", newSession.id);
+    if (ideasErr) console.error("[startAssistant_ideas] save error:", ideasErr.message);
+
+    try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
+
+    await showStickerIdeaCard(ctx, {
+      idea: ideas[0],
+      ideaIndex: 0,
+      totalIdeas: ideas.length,
+      style: randomStyle,
+      lang,
+    });
+  }
 }
 
 /**
@@ -4583,6 +4631,7 @@ bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
   // Update index
   await supabase.from("sessions").update({
     sticker_ideas_state: { ...state, ideaIndex: nextIndex },
+    is_active: true,
   }).eq("id", session.id);
 
   const preset = await getStylePresetV2ById(state.styleId);
@@ -4699,6 +4748,7 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
   const newState = { ...state, styleId };
   await supabase.from("sessions").update({
     sticker_ideas_state: newState,
+    is_active: true,
   }).eq("id", session.id);
 
   try { await ctx.deleteMessage(); } catch {}
