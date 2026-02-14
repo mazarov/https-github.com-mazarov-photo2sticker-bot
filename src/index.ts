@@ -45,6 +45,13 @@ bot.catch((err: any, ctx: any) => {
   console.error("=== END ERROR ===");
 });
 
+// Map: adminTelegramId → pending reply info (for admin replying to outreach)
+const pendingAdminReplies = new Map<number, {
+  outreachId: string;
+  userTelegramId: number;
+  username: string;
+}>();
+
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 
@@ -2533,6 +2540,67 @@ bot.hears(["❓ Помощь", "❓ Help"], async (ctx) => {
 bot.on("text", async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
+
+  // === Admin reply to outreach: intercept text from admin ===
+  if (pendingAdminReplies.has(telegramId)) {
+    const replyText = ctx.message.text?.trim();
+
+    // Cancel command
+    if (replyText === "/cancel") {
+      pendingAdminReplies.delete(telegramId);
+      await ctx.reply("❌ Отменено");
+      return;
+    }
+
+    const pending = pendingAdminReplies.get(telegramId)!;
+    pendingAdminReplies.delete(telegramId);
+
+    if (!replyText) {
+      await ctx.reply("❌ Пустое сообщение, отменено");
+      return;
+    }
+
+    try {
+      // Send reply to user via main bot
+      await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+        chat_id: pending.userTelegramId,
+        text: replyText,
+      });
+
+      // Update outreach in DB
+      await supabase
+        .from("user_outreach")
+        .update({
+          admin_reply_text: replyText,
+          admin_replied_at: new Date().toISOString(),
+          status: "admin_replied",
+        })
+        .eq("id", pending.outreachId);
+
+      await ctx.reply(`✅ Ответ отправлен @${pending.username}`);
+
+      // Also post confirmation to alert channel
+      if (config.alertChannelId) {
+        const confirmText =
+          `✅ *Админ ответил на outreach*\n\n` +
+          `👤 @${escapeMarkdownForAlert(pending.username)}\n` +
+          `💬 "${escapeMarkdownForAlert(replyText.slice(0, 300))}"`;
+
+        await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+          chat_id: config.alertChannelId,
+          text: confirmText,
+          parse_mode: "Markdown",
+        }).catch(() => {});
+      }
+
+      console.log("[AdminReply] Sent to:", pending.userTelegramId, "text:", replyText.slice(0, 50));
+    } catch (err: any) {
+      console.error("[AdminReply] Failed to send:", err.response?.data || err.message);
+      const errMsg = err.response?.data?.description || err.message;
+      await ctx.reply(`❌ Не удалось отправить: ${errMsg}`);
+    }
+    return;
+  }
 
   if (ctx.message.text?.startsWith("/")) return;
 
@@ -5457,6 +5525,60 @@ bot.action(/^admin_regen_outreach:(.+)$/, async (ctx) => {
   } catch (err: any) {
     console.error("[Outreach] Regen failed:", err.response?.data || err.message);
     await ctx.answerCbQuery("❌ Ошибка перегенерации");
+  }
+});
+
+// Callback: admin_reply_outreach — admin wants to reply to user's outreach response
+bot.action(/^admin_reply_outreach:(.+)$/, async (ctx) => {
+  console.log("=== admin_reply_outreach callback ===");
+  safeAnswerCbQuery(ctx);
+  const adminTelegramId = ctx.from?.id;
+  if (!adminTelegramId || !config.adminIds.includes(adminTelegramId)) return;
+
+  const outreachId = ctx.match[1];
+
+  // Load outreach from DB
+  const { data: outreach } = await supabase
+    .from("user_outreach")
+    .select("*")
+    .eq("id", outreachId)
+    .single();
+
+  if (!outreach) {
+    await ctx.answerCbQuery("❌ Outreach не найден");
+    return;
+  }
+
+  const user = await getUser(outreach.telegram_id);
+  const uname = user?.username || String(outreach.telegram_id);
+
+  // Send prompt to admin's DM
+  try {
+    const promptText =
+      `✏️ *Напиши ответ для @${escapeMarkdownForAlert(uname)}:*\n\n` +
+      `📨 Outreach: "${escapeMarkdownForAlert((outreach.message_text || "").slice(0, 200))}"\n` +
+      `💬 Его ответ: "${escapeMarkdownForAlert((outreach.reply_text || "").slice(0, 300))}"\n\n` +
+      `Отправь следующее сообщение — оно уйдёт пользователю\\.\n` +
+      `Или /cancel для отмены\\.`;
+
+    await ctx.telegram.sendMessage(adminTelegramId, promptText, {
+      parse_mode: "MarkdownV2",
+    });
+
+    // Save pending state
+    pendingAdminReplies.set(adminTelegramId, {
+      outreachId,
+      userTelegramId: outreach.telegram_id,
+      username: uname,
+    });
+
+    console.log("[AdminReply] Waiting for admin reply, outreachId:", outreachId);
+  } catch (err: any) {
+    console.error("[AdminReply] Can't DM admin:", err.message);
+    // If bot can't write to admin DM, admin hasn't started the bot
+    try {
+      await ctx.answerCbQuery("❌ Сначала напиши /start боту в личку", { show_alert: true });
+    } catch {}
   }
 });
 

@@ -193,6 +193,11 @@ bot.on("text", async (ctx) => {
             chat_id: alertChannelId,
             text: alertText,
             parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [[
+                { text: "💬 Ответить", callback_data: `admin_reply_outreach:${outreachId}` },
+              ]],
+            },
           }),
         });
       } catch (err) {
