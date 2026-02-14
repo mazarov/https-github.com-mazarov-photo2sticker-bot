@@ -4862,9 +4862,58 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
   });
 });
 
-// Holiday noop (already active)
-bot.action("asst_idea_noop", async (ctx) => {
+// Holiday OFF — regenerate normal (non-holiday) ideas
+bot.action(/^asst_idea_holiday_off:(\d+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session?.sticker_ideas_state) {
+    await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
+    return;
+  }
+
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null };
+
+  try { await ctx.deleteMessage(); } catch {}
+  const loadingMsg = await ctx.reply(
+    lang === "ru" ? "🔄 Генерирую обычные идеи..." : "🔄 Generating regular ideas..."
+  );
+
+  let ideas: StickerIdea[];
+  try {
+    ideas = await generateStickerIdeasFromPhoto({
+      photoFileId: session.current_photo_file_id,
+      stylePresetId: state.styleId,
+      lang,
+    });
+    console.log("[asst_idea_holiday_off] Regenerated", ideas.length, "normal ideas");
+  } catch (err: any) {
+    console.error("[asst_idea_holiday_off] Error:", err.message);
+    ideas = getDefaultIdeas(lang);
+  }
+
+  const newState = { styleId: state.styleId, ideaIndex: 0, ideas, holidayId: null };
+  await supabase.from("sessions").update({
+    sticker_ideas_state: newState,
+    state: "assistant_wait_idea",
+    is_active: true,
+  }).eq("id", session.id);
+
+  try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
+
+  const preset = await getStylePresetV2ById(state.styleId);
+  if (!preset) return;
+
+  await showStickerIdeaCard(ctx, {
+    idea: ideas[0], ideaIndex: 0, totalIdeas: ideas.length, style: preset, lang,
+    currentHolidayId: null,
+  });
 });
 
 // Holiday theme — regenerate ideas with holiday modifier
@@ -5942,11 +5991,12 @@ async function showStickerIdeaCard(ctx: any, opts: {
   const holidayNextRow: any[] = [];
   if (holiday) {
     const isHolidayActive = currentHolidayId === holiday.id;
+    const holidayName = isRu ? holiday.name_ru : holiday.name_en;
     const holidayLabel = isHolidayActive
-      ? `${holiday.emoji} ✓`
-      : `${holiday.emoji} ${isRu ? holiday.name_ru : holiday.name_en}`;
+      ? `${holiday.emoji} ${holidayName}: on`
+      : `${holiday.emoji} ${holidayName}: off`;
     const holidayCallback = isHolidayActive
-      ? `asst_idea_noop`
+      ? `asst_idea_holiday_off:${ideaIndex}`
       : `asst_idea_holiday:${holiday.id}:${ideaIndex}`;
     holidayNextRow.push(Markup.button.callback(holidayLabel, holidayCallback));
   }
