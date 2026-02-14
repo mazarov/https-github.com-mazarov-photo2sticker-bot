@@ -406,24 +406,33 @@ async function sendStyleCarousel(ctx: any, lang: string, page: number = 0): Prom
 /**
  * Send style keyboard for assistant's "show examples" — same layout as sendStyleKeyboardFlat
  * but clicking a STYLE returns the choice to the assistant (not manual mode).
- * Clicking "Example" uses the standard style_example_v2 callback.
+ * Clicking opens a style preview with sticker + description, then assistant_pick_style on OK.
  */
 async function sendStyleExamplesKeyboard(ctx: any, lang: string) {
   const allPresets = await getStylePresetsV2();
-  const exampleText = await getText(lang, "btn.example");
   const isRu = lang === "ru";
 
-  const buttons: any[][] = allPresets.map(s => [
-    Markup.button.callback(
-      `${s.emoji} ${isRu ? s.name_ru : s.name_en}`,
-      `assistant_pick_style:${s.id}`
-    ),
-    Markup.button.callback(exampleText, `style_example_v2:${s.id}:${s.group_id}`)
-  ]);
+  // 2 styles per row, clicking opens preview card
+  const buttons: any[][] = [];
+  for (let i = 0; i < allPresets.length; i += 2) {
+    const row: any[] = [
+      Markup.button.callback(
+        `${allPresets[i].emoji} ${isRu ? allPresets[i].name_ru : allPresets[i].name_en}`,
+        `assistant_style_preview:${allPresets[i].id}`
+      ),
+    ];
+    if (allPresets[i + 1]) {
+      row.push(Markup.button.callback(
+        `${allPresets[i + 1].emoji} ${isRu ? allPresets[i + 1].name_ru : allPresets[i + 1].name_en}`,
+        `assistant_style_preview:${allPresets[i + 1].id}`
+      ));
+    }
+    buttons.push(row);
+  }
 
   const header = isRu
-    ? "Выбери стиль или нажми «Пример» чтобы посмотреть:"
-    : "Pick a style or tap «Example» to preview:";
+    ? "🎨 Выбери стиль:"
+    : "🎨 Choose a style:";
 
   await ctx.reply(header, Markup.inlineKeyboard(buttons));
 }
@@ -4614,6 +4623,108 @@ bot.action(/^toggle_border:(.+)$/, async (ctx) => {
 // ============================================
 
 // Callback: assistant picks a style from the examples keyboard
+// Assistant: style preview — show sticker + description + OK button
+bot.action(/^assistant_style_preview:(.+)$/, async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+    const lang = user.lang || "en";
+    const isRu = lang === "ru";
+
+    const styleId = ctx.match[1];
+    const preset = await getStylePresetV2ById(styleId);
+    if (!preset) return;
+
+    // Delete style list message
+    try { await ctx.deleteMessage(); } catch {}
+
+    // Send sticker example
+    let stickerMsgId = 0;
+    try {
+      const fileId = await getStyleStickerFileId(preset.id);
+      if (fileId) {
+        const stickerMsg = await ctx.replyWithSticker(fileId);
+        stickerMsgId = stickerMsg.message_id;
+      }
+    } catch (err: any) {
+      console.error("[assistant_style_preview] Failed to send sticker:", err.message);
+    }
+
+    // Show description + OK button
+    const styleName = isRu ? preset.name_ru : preset.name_en;
+    const description = preset.description_ru || preset.prompt_hint;
+    const text = `${preset.emoji} *${styleName}*\n\n${description}`;
+
+    const keyboard = {
+      inline_keyboard: [[
+        { text: "✅ ОК", callback_data: `assistant_style_preview_ok:${styleId}:${stickerMsgId}` },
+      ]],
+    };
+
+    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
+  } catch (err) {
+    console.error("[assistant_style_preview] error:", err);
+  }
+});
+
+// Assistant: style preview OK — apply style
+bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const styleId = ctx.match[1];
+  const stickerMsgId = parseInt(ctx.match[2], 10);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !styleId) return;
+
+  // Delete sticker preview
+  if (stickerMsgId > 0) {
+    await ctx.telegram.deleteMessage(ctx.chat!.id, stickerMsgId).catch(() => {});
+  }
+  // Delete description message
+  try { await ctx.deleteMessage(); } catch {}
+
+  // Delegate to existing assistant_pick_style logic
+  try {
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+    const lang = user.lang || "en";
+
+    const preset = await getStylePresetV2ById(styleId);
+    const styleName = preset
+      ? (lang === "ru" ? preset.name_ru : preset.name_en)
+      : styleId;
+
+    const aSession = await getActiveAssistantSession(user.id);
+    if (aSession) {
+      await updateAssistantSession(aSession.id, { style: styleName });
+      console.log("assistant_style_preview_ok:", styleId, "→", styleName, "aSession:", aSession.id);
+
+      const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
+      messages.push({ role: "user", content: `[User selected style: ${styleName}]` });
+
+      const systemPrompt = await getAssistantSystemPrompt(messages, { ...aSession, style: styleName } as AssistantSessionRow);
+      const result = await callAIChat(messages, systemPrompt);
+      messages.push({ role: "assistant", content: result.text });
+
+      await updateAssistantSession(aSession.id, { style: styleName, messages });
+
+      const replyText = result.text || (lang === "ru"
+        ? `Отлично, стиль: ${styleName}! Какую эмоцию хочешь передать?`
+        : `Great, style: ${styleName}! What emotion should the sticker express?`);
+      await ctx.reply(replyText, getMainMenuKeyboard(lang));
+    } else {
+      await ctx.reply(lang === "ru"
+        ? `Стиль: ${styleName}. Нажми 🤖 Помощник чтобы начать.`
+        : `Style: ${styleName}. Tap 🤖 Assistant to start.`);
+    }
+  } catch (err: any) {
+    console.error("assistant_style_preview_ok error:", err.message);
+  }
+});
+
 bot.action(/^assistant_pick_style:(.+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const styleId = ctx.match[1];
