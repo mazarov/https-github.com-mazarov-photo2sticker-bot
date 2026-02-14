@@ -175,6 +175,7 @@ interface StylePresetV2 {
   name_ru: string;
   name_en: string;
   prompt_hint: string;
+  description_ru: string | null;
   sort_order: number;
   is_active: boolean;
   show_in_onboarding: boolean;
@@ -264,17 +265,25 @@ async function getActiveHoliday(): Promise<HolidayTheme | null> {
 
 async function sendStyleKeyboardFlat(ctx: any, lang: string, messageId?: number) {
   const allPresets = await getStylePresetsV2();
-  const exampleText = await getText(lang, "btn.example");
   const customText = await getText(lang, "btn.custom_style");
 
-  // Style button + Example button in one row
-  const buttons: any[][] = allPresets.map(s => [
-    Markup.button.callback(
-      `${s.emoji} ${lang === "ru" ? s.name_ru : s.name_en}`,
-      `style_v2:${s.id}`
-    ),
-    Markup.button.callback(exampleText, `style_example_v2:${s.id}:${s.group_id}`)
-  ]);
+  // 2 styles per row, clicking opens preview card
+  const buttons: any[][] = [];
+  for (let i = 0; i < allPresets.length; i += 2) {
+    const row: any[] = [
+      {
+        text: `${allPresets[i].emoji} ${lang === "ru" ? allPresets[i].name_ru : allPresets[i].name_en}`,
+        callback_data: `style_preview:${allPresets[i].id}`,
+      },
+    ];
+    if (allPresets[i + 1]) {
+      row.push({
+        text: `${allPresets[i + 1].emoji} ${lang === "ru" ? allPresets[i + 1].name_ru : allPresets[i + 1].name_en}`,
+        callback_data: `style_preview:${allPresets[i + 1].id}`,
+      });
+    }
+    buttons.push(row);
+  }
 
   // Custom style button
   buttons.push([{ text: customText, callback_data: "style_custom_v2" }]);
@@ -375,7 +384,7 @@ async function sendStyleCarousel(ctx: any, lang: string, page: number = 0): Prom
   const selectButtons = pagePresets.map((preset, i) => {
     const num = i === 0 ? "1️⃣" : "2️⃣";
     const label = isRu ? "Выбрать" : "Select";
-    return { text: `${num} ${label}`, callback_data: `style_carousel_pick:${preset.id}` };
+    return { text: `${num} ${label}`, callback_data: `style_preview:${preset.id}` };
   });
 
   const prevPage = (safePage - 1 + totalPages) % totalPages;
@@ -3396,6 +3405,91 @@ bot.action(/^style_group:(.+)$/, async (ctx) => {
     await sendStyleKeyboardFlat(ctx, lang, ctx.callbackQuery?.message?.message_id);
   } catch (err) {
     console.error("Style group callback error:", err);
+  }
+});
+
+// Callback: style preview card — show example + description before generation
+bot.action(/^style_preview:(.+)$/, async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+
+    const lang = user.lang || "en";
+    const session = await getActiveSession(user.id);
+    if (!session?.id || session.state !== "wait_style") return;
+
+    const styleId = ctx.match[1];
+    console.log("[StylePreview] Showing preview for:", styleId);
+
+    const preset = await getStylePresetV2ById(styleId);
+    if (!preset) {
+      console.log("[StylePreview] Preset not found:", styleId);
+      return;
+    }
+
+    // Try to send sticker example
+    let stickerMsgId: number | null = null;
+    try {
+      const fileId = await getStyleStickerFileId(preset.id);
+      if (fileId) {
+        const stickerMsg = await ctx.replyWithSticker(fileId);
+        stickerMsgId = stickerMsg.message_id;
+      }
+    } catch (err: any) {
+      console.error("[StylePreview] Failed to send sticker:", err.message);
+    }
+
+    // Build description text
+    const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
+    const description = preset.description_ru || preset.prompt_hint;
+    const text = `${preset.emoji} *${styleName}*\n\n${description}`;
+
+    // Buttons: Apply style | Back
+    const applyText = lang === "ru" ? "✅ Применить стиль" : "✅ Apply style";
+    const backText = lang === "ru" ? "↩️ Назад" : "↩️ Back";
+
+    const keyboard = {
+      inline_keyboard: [[
+        { text: applyText, callback_data: `style_v2:${preset.id}` },
+        { text: backText, callback_data: `back_to_style_list:${stickerMsgId || 0}` },
+      ]],
+    };
+
+    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
+  } catch (err) {
+    console.error("[StylePreview] error:", err);
+  }
+});
+
+// Callback: back to style list from preview card
+bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
+  try {
+    safeAnswerCbQuery(ctx);
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+
+    const lang = user.lang || "en";
+
+    // Delete sticker preview message (if was sent)
+    const stickerMsgId = ctx.match[1] ? parseInt(ctx.match[1], 10) : 0;
+    if (stickerMsgId && stickerMsgId > 0) {
+      await ctx.telegram.deleteMessage(ctx.chat!.id, stickerMsgId).catch(() => {});
+    }
+
+    // Delete current message (the description + buttons)
+    await ctx.deleteMessage().catch(() => {});
+
+    // Show style list again
+    await sendStyleKeyboardFlat(ctx, lang);
+  } catch (err) {
+    console.error("[StylePreview] back_to_style_list error:", err);
   }
 });
 
