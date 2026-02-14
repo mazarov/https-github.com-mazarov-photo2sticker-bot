@@ -3430,18 +3430,6 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
       return;
     }
 
-    // Try to send sticker example
-    let stickerMsgId: number | null = null;
-    try {
-      const fileId = await getStyleStickerFileId(preset.id);
-      if (fileId) {
-        const stickerMsg = await ctx.replyWithSticker(fileId);
-        stickerMsgId = stickerMsg.message_id;
-      }
-    } catch (err: any) {
-      console.error("[StylePreview] Failed to send sticker:", err.message);
-    }
-
     // Build description text
     const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
     const description = preset.description_ru || preset.prompt_hint;
@@ -3454,11 +3442,12 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
     const keyboard = {
       inline_keyboard: [[
         { text: applyText, callback_data: `style_v2:${preset.id}` },
-        { text: backText, callback_data: `back_to_style_list:${stickerMsgId || 0}` },
+        { text: backText, callback_data: `back_to_style_list:0` },
       ]],
     };
 
-    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
+    // Edit the same message (replace style list with description)
+    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
   } catch (err) {
     console.error("[StylePreview] error:", err);
   }
@@ -3476,17 +3465,13 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
 
     const lang = user.lang || "en";
 
-    // Delete sticker preview message (if was sent)
-    const stickerMsgId = ctx.match[1] ? parseInt(ctx.match[1], 10) : 0;
-    if (stickerMsgId && stickerMsgId > 0) {
-      await ctx.telegram.deleteMessage(ctx.chat!.id, stickerMsgId).catch(() => {});
+    // Edit current message back to style list
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    if (messageId) {
+      await sendStyleKeyboardFlat(ctx, lang, messageId);
+    } else {
+      await sendStyleKeyboardFlat(ctx, lang);
     }
-
-    // Delete current message (the description + buttons)
-    await ctx.deleteMessage().catch(() => {});
-
-    // Show style list again
-    await sendStyleKeyboardFlat(ctx, lang);
   } catch (err) {
     console.error("[StylePreview] back_to_style_list error:", err);
   }
