@@ -2440,7 +2440,7 @@ bot.on("photo", async (ctx) => {
     console.error("Failed to update session to wait_style:", error);
   }
 
-  await sendStyleCarousel(ctx, lang);
+  await sendStyleKeyboardFlat(ctx, lang);
 });
 
 // ============================================
@@ -3379,7 +3379,7 @@ bot.action(/^style_carousel_next:(\d+):(.*)$/, async (ctx) => {
     // Delete the text+buttons message (current message)
     await ctx.deleteMessage().catch(() => {});
 
-    await sendStyleCarousel(ctx, lang, nextPage);
+    await sendStyleKeyboardFlat(ctx, lang);
   } catch (err) {
     console.error("[StyleCarousel] Next error:", err);
   }
@@ -3748,9 +3748,9 @@ bot.action(/^back_to_substyles_v2:(.+)$/, async (ctx) => {
 
     const lang = user.lang || "en";
 
-    // Delete current message and show style carousel
+    // Delete current message and show style list
     await ctx.deleteMessage().catch(() => {});
-    await sendStyleCarousel(ctx, lang);
+    await sendStyleKeyboardFlat(ctx, lang);
   } catch (err) {
     console.error("Back to styles from example error:", err);
   }
@@ -4153,7 +4153,7 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendStyleCarousel(ctx, lang);
+  await sendStyleKeyboardFlat(ctx, lang);
 });
 
 // Callback: change style (old format - fallback)
@@ -4182,7 +4182,7 @@ bot.action("change_style", async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendStyleCarousel(ctx, lang);
+  await sendStyleKeyboardFlat(ctx, lang);
 });
 
 // Callback: change emotion (new format with sticker ID)
@@ -7385,7 +7385,7 @@ bot.action("back_to_styles", async (ctx) => {
   // Delete current message
   await ctx.deleteMessage().catch(() => {});
 
-  await sendStyleCarousel(ctx, lang);
+  await sendStyleKeyboardFlat(ctx, lang);
 });
 
 // Callback: onboarding emotion selection
