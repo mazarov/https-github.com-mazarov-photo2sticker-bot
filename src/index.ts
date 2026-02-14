@@ -4980,7 +4980,55 @@ bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
 });
 
 // Restyle: change style, keep same ideas, show current idea with new style
+// Restyle: show style preview (sticker example + description + OK button)
 bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  const isRu = lang === "ru";
+
+  const styleId = ctx.match[1];
+  const ideaIndex = parseInt(ctx.match[2], 10);
+
+  const preset = await getStylePresetV2ById(styleId);
+  if (!preset) return;
+
+  // Delete the style list message
+  try { await ctx.deleteMessage(); } catch {}
+
+  // Send sticker example (if available)
+  let stickerMsgId = 0;
+  try {
+    const fileId = await getStyleStickerFileId(preset.id);
+    if (fileId) {
+      const stickerMsg = await ctx.replyWithSticker(fileId);
+      stickerMsgId = stickerMsg.message_id;
+    }
+  } catch (err: any) {
+    console.error("[asst_idea_restyle] Failed to send sticker:", err.message);
+  }
+
+  // Show description + OK button
+  const styleName = isRu ? preset.name_ru : preset.name_en;
+  const description = preset.description_ru || preset.prompt_hint;
+  const text = `${preset.emoji} *${styleName}*\n\n${description}`;
+
+  const okText = "✅ ОК";
+  const keyboard = {
+    inline_keyboard: [[
+      { text: okText, callback_data: `asst_idea_restyle_ok:${styleId}:${ideaIndex}:${stickerMsgId}` },
+    ]],
+  };
+
+  await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
+});
+
+// Restyle OK: apply selected style and return to idea card
+bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -4991,9 +5039,11 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
 
   const styleId = ctx.match[1];
   const ideaIndex = parseInt(ctx.match[2], 10);
+  const stickerMsgId = parseInt(ctx.match[3], 10);
+
   const session = await getActiveSession(user.id);
   if (!session?.sticker_ideas_state) {
-    console.error("[asst_idea_restyle] No sticker_ideas_state, session:", session?.id, "state:", session?.state);
+    console.error("[asst_idea_restyle_ok] No sticker_ideas_state, session:", session?.id);
     await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
     return;
   }
@@ -5003,15 +5053,22 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
 
   const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null };
 
-  // Update style only, keep same ideas and current idea index
+  // Update style in session
   const newState = { ...state, styleId };
   await supabase.from("sessions").update({
     sticker_ideas_state: newState,
     is_active: true,
   }).eq("id", session.id);
 
+  // Delete sticker preview
+  if (stickerMsgId > 0) {
+    await ctx.telegram.deleteMessage(ctx.chat!.id, stickerMsgId).catch(() => {});
+  }
+
+  // Delete description message (current message with OK button)
   try { await ctx.deleteMessage(); } catch {}
 
+  // Show idea card with new style
   await showStickerIdeaCard(ctx, {
     idea: state.ideas[ideaIndex],
     ideaIndex,
