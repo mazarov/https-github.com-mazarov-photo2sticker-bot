@@ -4862,6 +4862,11 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
   });
 });
 
+// Holiday noop (already active)
+bot.action("asst_idea_noop", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+});
+
 // Holiday theme — regenerate ideas with holiday modifier
 bot.action(/^asst_idea_holiday:([^:]+):(\d+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
@@ -5933,13 +5938,17 @@ async function showStickerIdeaCard(ctx: any, opts: {
 
   // Holiday button + Next idea
   const holiday = await getActiveHoliday();
-  console.log("[showStickerIdeaCard] holiday:", holiday?.id, "currentHolidayId:", currentHolidayId, "showButton:", holiday && currentHolidayId !== holiday.id);
+  console.log("[showStickerIdeaCard] holiday:", holiday?.id, "currentHolidayId:", currentHolidayId);
   const holidayNextRow: any[] = [];
-  if (holiday && currentHolidayId !== holiday.id) {
-    holidayNextRow.push(Markup.button.callback(
-      `${holiday.emoji} ${isRu ? holiday.name_ru : holiday.name_en}`,
-      `asst_idea_holiday:${holiday.id}:${ideaIndex}`
-    ));
+  if (holiday) {
+    const isHolidayActive = currentHolidayId === holiday.id;
+    const holidayLabel = isHolidayActive
+      ? `${holiday.emoji} ✓`
+      : `${holiday.emoji} ${isRu ? holiday.name_ru : holiday.name_en}`;
+    const holidayCallback = isHolidayActive
+      ? `asst_idea_noop`
+      : `asst_idea_holiday:${holiday.id}:${ideaIndex}`;
+    holidayNextRow.push(Markup.button.callback(holidayLabel, holidayCallback));
   }
   holidayNextRow.push(Markup.button.callback(
     isRu ? "➡️ Другая" : "➡️ Next",
