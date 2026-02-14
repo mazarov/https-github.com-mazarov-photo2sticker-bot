@@ -100,6 +100,37 @@ async function callRembg(imageBuffer: Buffer, rembgUrl: string | undefined, imag
   }
 }
 
+async function callPixian(imageBuffer: Buffer, imageSizeKb: number): Promise<Buffer | undefined> {
+  try {
+    console.log(`[Pixian] Starting request (${imageSizeKb} KB)`);
+    const pixianForm = new FormData();
+    pixianForm.append("image", imageBuffer, {
+      filename: "image.png",
+      contentType: "image/png",
+    });
+
+    const startTime = Date.now();
+    const pixianRes = await retryWithBackoff(
+      () => axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
+        auth: {
+          username: config.pixianUsername,
+          password: config.pixianPassword,
+        },
+        headers: pixianForm.getHeaders(),
+        responseType: "arraybuffer",
+        timeout: 60000,
+      }),
+      { maxAttempts: 3, baseDelayMs: 2000, name: "Pixian" }
+    );
+    const duration = Date.now() - startTime;
+    console.log(`[Pixian] SUCCESS (took ${duration}ms)`);
+    return Buffer.from(pixianRes.data);
+  } catch (err: any) {
+    console.error(`[Pixian] FAILED: ${err.response?.status || err.code || 'none'} — ${err.message}`);
+    return undefined;
+  }
+}
+
 async function runJob(job: any) {
   const { data: session } = await supabase
     .from("sessions")
@@ -325,67 +356,54 @@ async function runJob(job: any) {
 
   await updateProgress(5);
   // ============================================================
-  // Background removal — rembg directly on generated image
+  // Background removal — configurable primary service
+  // app_config key: bg_removal_primary = "rembg" | "pixian"
   // ============================================================
   const imageSizeKb = Math.round(generatedBuffer.length / 1024);
   const rembgUrl = process.env.REMBG_URL;
+  const bgPrimary = await getAppConfig("bg_removal_primary", "rembg");
   
   let noBgBuffer: Buffer | undefined;
   const startTime = Date.now();
 
-  console.log(`[bgRemoval] Calling rembg on generated image (${imageSizeKb} KB)`);
-  noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
-  
-  // If rembg also failed, fallback to Pixian
-  if (!noBgBuffer) {
-    console.log(`Calling Pixian to remove background... (image size: ${imageSizeKb} KB)`);
-    const pixianForm = new FormData();
-    pixianForm.append("image", generatedBuffer, {
-      filename: "image.png",
-      contentType: "image/png",
-    });
+  console.log(`[bgRemoval] Primary service: ${bgPrimary}, image size: ${imageSizeKb} KB`);
 
-    try {
-      const pixianRes = await retryWithBackoff(
-        () => axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
-          auth: {
-            username: config.pixianUsername,
-            password: config.pixianPassword,
-          },
-          headers: pixianForm.getHeaders(),
-          responseType: "arraybuffer",
-          timeout: 60000,
-        }),
-        { maxAttempts: 3, baseDelayMs: 2000, name: "Pixian" }
-      );
-      const duration = Date.now() - startTime;
-      console.log(`Pixian background removal successful (took ${duration}ms)`);
-      noBgBuffer = Buffer.from(pixianRes.data);
-    } catch (err: any) {
-      const duration = Date.now() - startTime;
-      
-      console.error("=== Background removal failed (all methods) ===");
-      console.error("Status:", err.response?.status || "no status");
-      console.error("Message:", err.message);
-      console.error("Code:", err.code);
-      console.error("Duration:", duration, "ms");
-      
-      await sendAlert({
-        type: "rembg_failed",
-        message: `Background removal failed: ${err.response?.status || err.code || "unknown"} ${err.message}`,
-        details: { 
-          user: `@${user?.username || telegramId}`,
-          sessionId: session.id,
-          generationType,
-          styleId: session.selected_style_id || "-",
-          imageSizeKb,
-          durationMs: duration,
-          errorCode: err.code,
-          rembgConfigured: !!rembgUrl,
-        },
-      });
-      throw new Error(`Background removal failed: ${err.message}`);
+  if (bgPrimary === "pixian") {
+    // Primary: Pixian, fallback: rembg
+    noBgBuffer = await callPixian(generatedBuffer, imageSizeKb);
+    if (!noBgBuffer) {
+      console.log(`[bgRemoval] Pixian failed, falling back to rembg`);
+      noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
     }
+  } else {
+    // Primary: rembg, fallback: Pixian
+    noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
+    if (!noBgBuffer) {
+      console.log(`[bgRemoval] rembg failed, falling back to Pixian`);
+      noBgBuffer = await callPixian(generatedBuffer, imageSizeKb);
+    }
+  }
+
+  if (!noBgBuffer) {
+    const duration = Date.now() - startTime;
+    console.error("=== Background removal failed (all methods) ===");
+    console.error("Duration:", duration, "ms");
+    
+    await sendAlert({
+      type: "rembg_failed",
+      message: `Background removal failed: all methods exhausted`,
+      details: { 
+        user: `@${user?.username || telegramId}`,
+        sessionId: session.id,
+        generationType,
+        styleId: session.selected_style_id || "-",
+        imageSizeKb,
+        durationMs: duration,
+        bgPrimary,
+        rembgConfigured: !!rembgUrl,
+      },
+    });
+    throw new Error(`Background removal failed: all methods exhausted`);
   }
 
   const bgDuration = Date.now() - startTime;
