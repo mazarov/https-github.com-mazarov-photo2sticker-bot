@@ -1,6 +1,7 @@
 import express from "express";
 import { Telegraf, Markup } from "telegraf";
 import axios from "axios";
+import sharp from "sharp";
 import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
@@ -1083,28 +1084,31 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     console.log("startAssistantDialog: lastPhoto exists, showing sticker ideas");
 
     // Pick style: user's last > default > random
-    const randomStyle = await pickStyleForIdeas(user);
+    const pickedStyle = await pickStyleForIdeas(user);
 
     const loadingMsg = await ctx.reply(
-      lang === "ru" ? "📸 Фото есть! Подбираю идеи для стикера..." : "📸 Photo ready! Picking sticker ideas..."
+      lang === "ru" ? "📸 Фото есть! Подбираю идею для стикера..." : "📸 Photo ready! Picking a sticker idea..."
     );
 
-    // Generate ideas via LLM
-    let ideas: StickerIdea[];
+    // Generate first idea with photo analysis
+    let idea: StickerIdea;
+    let photoDescription = "";
     try {
-      ideas = await generateStickerIdeasFromPhoto({
+      const result = await generateFirstIdeaWithPhoto({
         photoFileId: lastPhoto,
-        stylePresetId: randomStyle.id,
+        stylePresetId: pickedStyle.id,
         lang,
       });
-      console.log("[startAssistant_ideas] Generated", ideas.length, "ideas");
+      idea = result.idea;
+      photoDescription = result.photoDescription;
+      console.log("[startAssistant_ideas] Got first idea:", idea.titleEn);
     } catch (err: any) {
       console.error("[startAssistant_ideas] Error:", err.message);
-      ideas = getDefaultIdeas(lang);
+      idea = getDefaultIdeas(lang)[0];
     }
 
-    // Save ideas state
-    const ideasState = { styleId: randomStyle.id, ideaIndex: 0, ideas };
+    // Save ideas state with photoDescription
+    const ideasState = { styleId: pickedStyle.id, ideaIndex: 0, ideas: [idea], photoDescription, holidayId: null };
     const { error: ideasErr } = await supabase
       .from("sessions")
       .update({
@@ -1118,10 +1122,10 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
 
     await showStickerIdeaCard(ctx, {
-      idea: ideas[0],
+      idea,
       ideaIndex: 0,
-      totalIdeas: ideas.length,
-      style: randomStyle,
+      totalIdeas: 0, // unlimited
+      style: pickedStyle,
       lang,
     });
   }
@@ -2247,28 +2251,33 @@ bot.on("photo", async (ctx) => {
 
     // Show loading message
     const loadingMsg = await ctx.reply(
-      lang === "ru" ? "📸 Отличное фото! Подбираю идеи для стикера..." : "📸 Great photo! Picking sticker ideas..."
+      lang === "ru" ? "📸 Отличное фото! Подбираю идею для стикера..." : "📸 Great photo! Picking a sticker idea..."
     );
 
-    // Generate ideas via LLM
-    let ideas: StickerIdea[];
+    // Generate first idea with photo analysis
+    let idea: StickerIdea;
+    let photoDescription = "";
     try {
-      ideas = await generateStickerIdeasFromPhoto({
+      const result = await generateFirstIdeaWithPhoto({
         photoFileId: photo.file_id,
         stylePresetId: randomStyle.id,
         lang,
       });
-      console.log("[assistant_ideas] Generated", ideas.length, "ideas");
+      idea = result.idea;
+      photoDescription = result.photoDescription;
+      console.log("[assistant_ideas] Got first idea:", idea.titleEn);
     } catch (err: any) {
-      console.error("[assistant_ideas] generateStickerIdeasFromPhoto error:", err.message);
-      ideas = getDefaultIdeas(lang);
+      console.error("[assistant_ideas] generateFirstIdeaWithPhoto error:", err.message);
+      idea = getDefaultIdeas(lang)[0];
     }
 
-    // Save ideas state (single update with state + is_active to ensure consistency)
+    // Save ideas state with photoDescription
     const ideasState = {
       styleId: randomStyle.id,
       ideaIndex: 0,
-      ideas,
+      ideas: [idea],
+      photoDescription,
+      holidayId: null,
     };
     const { error: updateErr2 } = await supabase
       .from("sessions")
@@ -2285,9 +2294,9 @@ bot.on("photo", async (ctx) => {
 
     // Show first idea card
     await showStickerIdeaCard(ctx, {
-      idea: ideas[0],
+      idea,
       ideaIndex: 0,
-      totalIdeas: ideas.length,
+      totalIdeas: 0, // unlimited
       style: randomStyle,
       lang,
     });
@@ -4665,7 +4674,7 @@ bot.action(/^asst_idea_gen:(\d+)$/, async (ctx) => {
   });
 });
 
-// Next idea — regenerate new batch when all viewed
+// Next idea — always generate a new one via text-only LLM
 bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -4682,64 +4691,53 @@ bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
     return;
   }
 
-  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null };
-  const nextIndex = (parseInt(ctx.match[1], 10) + 1) % state.ideas.length;
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null; photoDescription?: string };
 
   const preset = await getStylePresetV2ById(state.styleId);
   if (!preset) return;
 
-  // If all ideas viewed — regenerate new batch
-  if (nextIndex === 0) {
-    try { await ctx.deleteMessage(); } catch {}
-    const loadingMsg = await ctx.reply(
-      lang === "ru" ? "🔄 Генерирую новые идеи..." : "🔄 Generating new ideas..."
-    );
+  try { await ctx.deleteMessage(); } catch {}
+  const loadingMsg = await ctx.reply(
+    lang === "ru" ? "💡 Придумываю идею..." : "💡 Coming up with an idea..."
+  );
 
-    let ideas: StickerIdea[];
-    try {
-      // Get holiday modifier if ideas were holiday-themed
-      let holidayMod: string | undefined;
-      if (state.holidayId) {
-        const { data: ht } = await supabase.from("holiday_themes").select("prompt_modifier").eq("id", state.holidayId).maybeSingle();
-        holidayMod = ht?.prompt_modifier;
-      }
-      ideas = await generateStickerIdeasFromPhoto({
-        photoFileId: session.current_photo_file_id,
-        stylePresetId: state.styleId,
-        lang,
-        holidayModifier: holidayMod,
-      });
-      console.log("[asst_idea_next] Regenerated", ideas.length, "ideas");
-    } catch (err: any) {
-      console.error("[asst_idea_next] Regen error:", err.message);
-      ideas = getDefaultIdeas(lang);
+  let newIdea: StickerIdea;
+  try {
+    // Get holiday modifier if ideas are holiday-themed
+    let holidayMod: string | undefined;
+    if (state.holidayId) {
+      const { data: ht } = await supabase.from("holiday_themes").select("prompt_modifier").eq("id", state.holidayId).maybeSingle();
+      holidayMod = ht?.prompt_modifier;
     }
 
-    const newState = { styleId: state.styleId, ideaIndex: 0, ideas, holidayId: state.holidayId || null };
-    await supabase.from("sessions").update({
-      sticker_ideas_state: newState, is_active: true,
-    }).eq("id", session.id);
-
-    try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
-
-    await showStickerIdeaCard(ctx, {
-      idea: ideas[0], ideaIndex: 0, totalIdeas: ideas.length, style: preset, lang,
-      currentHolidayId: state.holidayId,
+    const shownIdeas = state.ideas.map(i => i.titleEn);
+    newIdea = await generateNextIdea({
+      photoDescription: state.photoDescription || "",
+      stylePresetId: state.styleId,
+      lang,
+      shownIdeas,
+      holidayModifier: holidayMod,
     });
-    return;
+  } catch (err: any) {
+    console.error("[asst_idea_next] generateNextIdea error:", err.message);
+    const defaults = getDefaultIdeas(lang);
+    const shown = new Set(state.ideas.map(i => i.titleEn?.toLowerCase()));
+    newIdea = defaults.find(d => !shown.has(d.titleEn.toLowerCase())) || defaults[0];
   }
 
-  // Normal: show next idea
+  const newIdeas = [...state.ideas, newIdea];
+  const newIndex = newIdeas.length - 1;
+  const newState = { ...state, ideaIndex: newIndex, ideas: newIdeas };
   await supabase.from("sessions").update({
-    sticker_ideas_state: { ...state, ideaIndex: nextIndex },
-    is_active: true,
+    sticker_ideas_state: newState, is_active: true,
   }).eq("id", session.id);
 
-  try { await ctx.deleteMessage(); } catch {}
+  try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
+
   await showStickerIdeaCard(ctx, {
-    idea: state.ideas[nextIndex],
-    ideaIndex: nextIndex,
-    totalIdeas: state.ideas.length,
+    idea: newIdea,
+    ideaIndex: newIndex,
+    totalIdeas: 0, // unlimited
     style: preset,
     lang,
     currentHolidayId: state.holidayId,
@@ -4812,7 +4810,7 @@ bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
   await showStickerIdeaCard(ctx, {
     idea: state.ideas[ideaIndex],
     ideaIndex,
-    totalIdeas: state.ideas.length,
+    totalIdeas: 0,
     style: preset,
     lang,
     currentHolidayId: state.holidayId,
@@ -4855,14 +4853,14 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
   await showStickerIdeaCard(ctx, {
     idea: state.ideas[ideaIndex],
     ideaIndex,
-    totalIdeas: state.ideas.length,
+    totalIdeas: 0,
     style: preset,
     lang,
     currentHolidayId: state.holidayId,
   });
 });
 
-// Holiday OFF — regenerate normal (non-holiday) ideas
+// Holiday OFF — generate 1 normal idea, reset holiday, keep photoDescription
 bot.action(/^asst_idea_holiday_off:(\d+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -4878,27 +4876,28 @@ bot.action(/^asst_idea_holiday_off:(\d+)$/, async (ctx) => {
     return;
   }
 
-  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null };
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null; photoDescription?: string };
 
   try { await ctx.deleteMessage(); } catch {}
   const loadingMsg = await ctx.reply(
-    lang === "ru" ? "🔄 Генерирую обычные идеи..." : "🔄 Generating regular ideas..."
+    lang === "ru" ? "💡 Придумываю идею..." : "💡 Coming up with an idea..."
   );
 
-  let ideas: StickerIdea[];
+  let idea: StickerIdea;
   try {
-    ideas = await generateStickerIdeasFromPhoto({
-      photoFileId: session.current_photo_file_id,
+    idea = await generateNextIdea({
+      photoDescription: state.photoDescription || "",
       stylePresetId: state.styleId,
       lang,
+      shownIdeas: [], // fresh start without holiday
     });
-    console.log("[asst_idea_holiday_off] Regenerated", ideas.length, "normal ideas");
+    console.log("[asst_idea_holiday_off] Generated normal idea:", idea.titleEn);
   } catch (err: any) {
     console.error("[asst_idea_holiday_off] Error:", err.message);
-    ideas = getDefaultIdeas(lang);
+    idea = getDefaultIdeas(lang)[0];
   }
 
-  const newState = { styleId: state.styleId, ideaIndex: 0, ideas, holidayId: null };
+  const newState = { styleId: state.styleId, ideaIndex: 0, ideas: [idea], photoDescription: state.photoDescription, holidayId: null };
   await supabase.from("sessions").update({
     sticker_ideas_state: newState,
     state: "assistant_wait_idea",
@@ -4911,12 +4910,12 @@ bot.action(/^asst_idea_holiday_off:(\d+)$/, async (ctx) => {
   if (!preset) return;
 
   await showStickerIdeaCard(ctx, {
-    idea: ideas[0], ideaIndex: 0, totalIdeas: ideas.length, style: preset, lang,
+    idea, ideaIndex: 0, totalIdeas: 0, style: preset, lang,
     currentHolidayId: null,
   });
 });
 
-// Holiday theme — regenerate ideas with holiday modifier
+// Holiday theme ON — generate 1 holiday idea, keep photoDescription
 bot.action(/^asst_idea_holiday:([^:]+):(\d+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -4933,7 +4932,7 @@ bot.action(/^asst_idea_holiday:([^:]+):(\d+)$/, async (ctx) => {
     return;
   }
 
-  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null };
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null; photoDescription?: string };
 
   // Get holiday theme
   const { data: holiday } = await supabase.from("holiday_themes").select("*").eq("id", holidayId).maybeSingle();
@@ -4941,24 +4940,25 @@ bot.action(/^asst_idea_holiday:([^:]+):(\d+)$/, async (ctx) => {
 
   try { await ctx.deleteMessage(); } catch {}
   const loadingMsg = await ctx.reply(
-    lang === "ru" ? `${holiday.emoji} Генерирую праздничные идеи...` : `${holiday.emoji} Generating holiday ideas...`
+    lang === "ru" ? `${holiday.emoji} Придумываю праздничную идею...` : `${holiday.emoji} Coming up with a holiday idea...`
   );
 
-  let ideas: StickerIdea[];
+  let idea: StickerIdea;
   try {
-    ideas = await generateStickerIdeasFromPhoto({
-      photoFileId: session.current_photo_file_id,
+    idea = await generateNextIdea({
+      photoDescription: state.photoDescription || "",
       stylePresetId: state.styleId,
       lang,
+      shownIdeas: [], // fresh start for holiday
       holidayModifier: holiday.prompt_modifier,
     });
-    console.log("[asst_idea_holiday] Generated", ideas.length, "holiday ideas for", holidayId);
+    console.log("[asst_idea_holiday] Generated holiday idea:", idea.titleEn, "for", holidayId);
   } catch (err: any) {
     console.error("[asst_idea_holiday] Error:", err.message);
-    ideas = getDefaultIdeas(lang);
+    idea = getDefaultIdeas(lang)[0];
   }
 
-  const newState = { styleId: state.styleId, ideaIndex: 0, ideas, holidayId };
+  const newState = { styleId: state.styleId, ideaIndex: 0, ideas: [idea], photoDescription: state.photoDescription, holidayId };
   await supabase.from("sessions").update({
     sticker_ideas_state: newState,
     state: "assistant_wait_idea",
@@ -4971,7 +4971,7 @@ bot.action(/^asst_idea_holiday:([^:]+):(\d+)$/, async (ctx) => {
   if (!preset) return;
 
   await showStickerIdeaCard(ctx, {
-    idea: ideas[0], ideaIndex: 0, totalIdeas: ideas.length, style: preset, lang,
+    idea, ideaIndex: 0, totalIdeas: 0, style: preset, lang,
     currentHolidayId: holidayId,
   });
 });
@@ -5837,124 +5837,196 @@ function getDefaultIdeas(lang: string): StickerIdea[] {
 // Sticker Ideas from Photo — generate ideas before first sticker
 // ============================================================
 
-async function generateStickerIdeasFromPhoto(opts: {
+// Generate first idea WITH photo analysis — returns 1 idea + text description of person(s)
+async function generateFirstIdeaWithPhoto(opts: {
   photoFileId: string;
   stylePresetId: string;
   lang: string;
   holidayModifier?: string;
-}): Promise<StickerIdea[]> {
+}): Promise<{ idea: StickerIdea; photoDescription: string }> {
   const { photoFileId, stylePresetId, lang, holidayModifier } = opts;
 
-  try {
-    // Download user photo
-    const filePath = await getFilePath(photoFileId);
-    const fileBuffer = await downloadFile(filePath);
-    const base64 = fileBuffer.toString("base64");
-    const mimeType = filePath.endsWith(".png") ? "image/png" : "image/jpeg";
+  const preset = await getStylePresetV2ById(stylePresetId);
+  const styleName = preset ? preset.name_en : stylePresetId;
+  const styleHint = preset ? preset.prompt_hint : "";
+  const textLang = lang === "ru" ? "Russian" : "English";
 
-    // Get style info
-    const preset = await getStylePresetV2ById(stylePresetId);
-    const styleName = preset ? preset.name_en : stylePresetId;
-    const styleHint = preset ? preset.prompt_hint : "";
+  // Download and compress photo to 256px
+  const filePath = await getFilePath(photoFileId);
+  const fileBuffer = await downloadFile(filePath);
+  const resizedBuffer = await sharp(fileBuffer)
+    .resize(256, 256, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 80 })
+    .toBuffer();
+  const base64 = resizedBuffer.toString("base64");
+  console.log("[FirstIdea] Photo compressed:", fileBuffer.length, "->", resizedBuffer.length, "bytes");
 
-    const textLang = lang === "ru" ? "Russian" : "English";
+  const systemPrompt = `You are a professional sticker pack designer. Analyze the user's PHOTO.
 
-    const systemPrompt = `You are a professional sticker pack designer.
-Analyze the user's PHOTO (not a sticker) and suggest 8 unique sticker ideas in the style: ${styleName} (${styleHint}).
+1. Write a detailed DESCRIPTION of the person(s): face shape, skin tone, hair color/style, facial hair, glasses, clothing, accessories, body type, age range, vibe/energy.
+   If MULTIPLE people — describe each person and their relationship/interaction.
 
-For each idea — describe an expressive pose, emotion, or scene for the character.
-Match ideas to the person in the photo (their appearance, vibe, energy).
-If there are MULTIPLE people in the photo — ideas should include ALL of them together.
+2. Suggest 1 unique sticker idea in the style: ${styleName} (${styleHint}).
+   The idea should match the person's appearance and vibe.
+${holidayModifier ? `\nIMPORTANT THEME: ${holidayModifier}\n` : ''}
+Rules:
+- promptModification must describe what the character is DOING (emotion + pose + action). Do NOT describe the style.
+- promptModification must be in English, detailed enough for image generation
+- titleRu/descriptionRu in Russian, titleEn/descriptionEn in English
+- Be CREATIVE — avoid generic ideas
+- For text ideas: suggest short text (1-3 words) in ${textLang}
+
+Return JSON:
+{
+  "photoDescription": "detailed text description of person(s)...",
+  "idea": {
+    "emoji": "😂",
+    "titleRu": "Хохочет до слёз",
+    "titleEn": "Laughing hard",
+    "descriptionRu": "Персонаж смеётся, держась за живот",
+    "descriptionEn": "Character laughing hysterically, holding belly",
+    "promptModification": "laughing hysterically, holding belly, tears of joy, mouth wide open",
+    "hasText": false,
+    "textSuggestion": null,
+    "textPlacement": null,
+    "category": "emotion"
+  }
+}
+
+Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sarcasm, motivation, celebration`;
+
+  if (!config.openaiApiKey) {
+    console.log("[FirstIdea] No OpenAI key, using default");
+    const defaults = getDefaultIdeas(lang);
+    return { idea: defaults[0], photoDescription: "" };
+  }
+
+  const imageUrl = `data:image/jpeg;base64,${base64}`;
+  const response = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Analyze this photo. Return JSON with photoDescription and 1 sticker idea." },
+            { type: "image_url", image_url: { url: imageUrl } },
+          ],
+        },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 1500,
+      temperature: 1.0,
+    },
+    {
+      headers: {
+        "Authorization": `Bearer ${config.openaiApiKey}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 30_000,
+    }
+  );
+
+  const text = response.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("GPT returned no content");
+
+  const parsed = JSON.parse(text);
+  const photoDescription = parsed.photoDescription || parsed.photo_description || "";
+  const idea = parsed.idea || parsed;
+  console.log("[FirstIdea] Got description:", photoDescription.slice(0, 100), "...");
+  console.log("[FirstIdea] Got idea:", idea.titleEn);
+
+  return { idea, photoDescription };
+}
+
+// Generate next idea WITHOUT photo — text-only, fast (~2-4s)
+async function generateNextIdea(opts: {
+  photoDescription: string;
+  stylePresetId: string;
+  lang: string;
+  shownIdeas: string[];
+  holidayModifier?: string;
+}): Promise<StickerIdea> {
+  const { photoDescription, stylePresetId, lang, shownIdeas, holidayModifier } = opts;
+
+  const preset = await getStylePresetV2ById(stylePresetId);
+  const styleName = preset ? preset.name_en : stylePresetId;
+  const styleHint = preset ? preset.prompt_hint : "";
+  const textLang = lang === "ru" ? "Russian" : "English";
+
+  const systemPrompt = `You are a professional sticker pack designer.
+
+Person description (from photo analysis):
+${photoDescription}
+
+Style: ${styleName} (${styleHint})
+${holidayModifier ? `\nIMPORTANT THEME: ${holidayModifier}\n` : ''}
+Already shown ideas (DO NOT repeat similar):
+${shownIdeas.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+
+Suggest 1 NEW unique sticker idea, different from all shown above.
+Match the idea to the person's appearance and vibe described above.
 
 Rules:
-1. Each idea MUST be from a DIFFERENT category
-2. promptModification must describe what the character is DOING (emotion + pose + action). Do NOT describe the style — style comes from the preset.
-3. promptModification must be in English, detailed enough for image generation
-4. titleRu and descriptionRu in Russian, titleEn and descriptionEn in English
-5. Be CREATIVE — avoid generic ideas. Think of relatable micro-moments and surprising scenarios.
-6. For text ideas: suggest short text (1-3 words) in ${textLang}
+- promptModification must describe what the character is DOING (emotion + pose + action). Do NOT describe the style.
+- promptModification must be in English, detailed enough for image generation
+- titleRu/descriptionRu in Russian, titleEn/descriptionEn in English
+- Be CREATIVE — avoid generic ideas. Think of relatable micro-moments and surprising scenarios.
+- For text ideas: suggest short text (1-3 words) in ${textLang}
+- Pick a DIFFERENT category from what was already shown
 
-Return a JSON array of exactly 8 ideas:
-[{
+Return JSON:
+{
   "emoji": "😂",
-  "titleRu": "Хохочет до слёз",
-  "titleEn": "Laughing hard",
-  "descriptionRu": "Персонаж смеётся, держась за живот",
-  "descriptionEn": "Character laughing hysterically, holding belly",
-  "promptModification": "laughing hysterically, holding belly, tears of joy, mouth wide open",
+  "titleRu": "...",
+  "titleEn": "...",
+  "descriptionRu": "...",
+  "descriptionEn": "...",
+  "promptModification": "...",
   "hasText": false,
   "textSuggestion": null,
   "textPlacement": null,
   "category": "emotion"
-}]
+}
 
-Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sarcasm, motivation, celebration${holidayModifier ? `\n\nIMPORTANT THEME: ${holidayModifier}` : ''}`;
+Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sarcasm, motivation, celebration`;
 
-    if (config.openaiApiKey) {
-      const imageUrl = `data:${mimeType};base64,${base64}`;
-      const response = await axios.post(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: systemPrompt },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "Analyze this photo and generate 8 unique sticker ideas. Return a JSON array." },
-                { type: "image_url", image_url: { url: imageUrl } },
-              ],
-            },
-          ],
-          response_format: { type: "json_object" },
-          max_tokens: 4096,
-          temperature: 1.0,
-        },
-        {
-          headers: {
-            "Authorization": `Bearer ${config.openaiApiKey}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 30_000,
-        }
-      );
-
-      const text = response.data?.choices?.[0]?.message?.content;
-      if (!text) {
-        console.error("[StickerIdeas] GPT-4o-mini returned no content");
-        return getDefaultIdeas(lang);
-      }
-
-      const parsed = JSON.parse(text);
-      const ideas: StickerIdea[] = Array.isArray(parsed) ? parsed : parsed.ideas || parsed.stickers || [];
-      if (ideas.length === 0) {
-        console.error("[StickerIdeas] No ideas parsed");
-        return getDefaultIdeas(lang);
-      }
-
-      // Pad with defaults if fewer than 8
-      if (ideas.length < 8) {
-        const defaults = getDefaultIdeas(lang);
-        const existingTitles = new Set(ideas.map((i: any) => i.titleEn?.toLowerCase()));
-        for (const d of defaults) {
-          if (ideas.length >= 8) break;
-          if (!existingTitles.has(d.titleEn.toLowerCase())) {
-            ideas.push(d);
-          }
-        }
-      }
-
-      console.log("[StickerIdeas] Generated", ideas.length, "ideas from photo");
-      return ideas.slice(0, 8);
-    }
-
-    // Fallback: no OpenAI key
-    console.log("[StickerIdeas] No OpenAI key, using defaults");
-    return getDefaultIdeas(lang);
-  } catch (err: any) {
-    console.error("[StickerIdeas] Error:", err.response?.data || err.message);
-    return getDefaultIdeas(lang);
+  if (!config.openaiApiKey) {
+    const defaults = getDefaultIdeas(lang);
+    const shown = new Set(shownIdeas.map(t => t.toLowerCase()));
+    return defaults.find(d => !shown.has(d.titleEn.toLowerCase())) || defaults[0];
   }
+
+  const response = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: "Generate 1 new unique sticker idea. Return JSON." },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 800,
+      temperature: 1.1,
+    },
+    {
+      headers: {
+        "Authorization": `Bearer ${config.openaiApiKey}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 15_000,
+    }
+  );
+
+  const text = response.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("GPT returned no content");
+
+  const parsed = JSON.parse(text);
+  const idea = parsed.idea || parsed;
+  console.log("[NextIdea] Generated:", idea.titleEn, "category:", idea.category);
+  return idea;
 }
 
 // Show sticker idea card with inline buttons
@@ -5970,7 +6042,7 @@ async function showStickerIdeaCard(ctx: any, opts: {
   const isRu = lang === "ru";
 
   const text = [
-    `💡 ${isRu ? "Идея" : "Idea"} ${ideaIndex + 1}/${totalIdeas}`,
+    `💡 ${isRu ? "Идея" : "Idea"} ${ideaIndex + 1}`,
     ``,
     `🎨 ${isRu ? "Стиль" : "Style"}: ${style.emoji} ${isRu ? style.name_ru : style.name_en}`,
     `${idea.emoji} ${isRu ? idea.titleRu : idea.titleEn}`,
