@@ -51,13 +51,17 @@ async function callRembg(imageBuffer: Buffer, rembgUrl: string | undefined, imag
   if (!rembgUrl) return undefined;
   
   try {
+    // Configurable model via app_config: rembg_model (prod) / rembg_model_test (test)
+    const modelConfigKey = config.appEnv === "test" ? "rembg_model_test" : "rembg_model";
+    const rembgModel = await getAppConfig(modelConfigKey, "isnet-general-use");
+    
     // Resize image for rembg processing (max 1024px — preserve quality)
     const rembgBuffer = await sharp(imageBuffer)
       .resize(1024, 1024, { fit: "inside", withoutEnlargement: true })
       .png()
       .toBuffer();
     const rembgSizeKb = Math.round(rembgBuffer.length / 1024);
-    console.log(`[rembg] Starting request to ${rembgUrl} (resized: ${rembgSizeKb} KB, original: ${imageSizeKb} KB)`);
+    console.log(`[rembg] Starting request to ${rembgUrl} model=${rembgModel} (resized: ${rembgSizeKb} KB, original: ${imageSizeKb} KB)`);
     
     // Health check
     try {
@@ -73,13 +77,15 @@ async function callRembg(imageBuffer: Buffer, rembgUrl: string | undefined, imag
       filename: "image.png",
       contentType: "image/png",
     });
+    // Pass model as form field (supported by rembg HTTP server)
+    rembgForm.append("model", rembgModel);
     
     let attemptNum = 0;
     const rembgRes = await retryWithBackoff(
       () => {
         attemptNum++;
         const attemptStart = Date.now();
-        console.log(`[rembg] Attempt ${attemptNum}/2 starting...`);
+        console.log(`[rembg] Attempt ${attemptNum}/2 starting... model=${rembgModel}`);
         return axios.post(`${rembgUrl}/remove-background`, rembgForm, {
           headers: rembgForm.getHeaders(),
           responseType: "arraybuffer",
@@ -357,11 +363,13 @@ async function runJob(job: any) {
   await updateProgress(5);
   // ============================================================
   // Background removal — configurable primary service
-  // app_config key: bg_removal_primary = "rembg" | "pixian"
+  // app_config key: bg_removal_primary (prod) / bg_removal_primary_test (test)
+  // Values: "rembg" | "pixian"
   // ============================================================
   const imageSizeKb = Math.round(generatedBuffer.length / 1024);
   const rembgUrl = process.env.REMBG_URL;
-  const bgPrimary = await getAppConfig("bg_removal_primary", "rembg");
+  const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
+  const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
   
   let noBgBuffer: Buffer | undefined;
   const startTime = Date.now();
