@@ -231,11 +231,208 @@ async function getActiveHoliday(): Promise<HolidayTheme | null> {
 
 ---
 
+## 4. Ускорение генерации идей: 1 идея за раз + кэш описания фото
+
+### Проблема
+Текущая генерация 8 идей через GPT-4o-mini vision занимает ~25 секунд. Пользователь ждёт слишком долго.
+
+### Новый подход
+Генерировать **по 1 идее за раз**. Первый запрос — с фото (получаем идею + текстовое описание персонажа). Все последующие — **без фото**, только по сохранённому описанию.
+
+### Тайминги
+
+| Момент | Было | Стало |
+|---|---|---|
+| Первая идея (с фото) | ~25с (8 идей + vision) | ~8-12с (1 идея + описание + фото 256px) |
+| Каждая следующая идея | 0с (кэш) / 25с (regen на 9-й) | ~2-4с (text-only, 1 идея) |
+
+### Изменения в `sticker_ideas_state`
+
+```typescript
+{
+  styleId: string;
+  ideaIndex: number;
+  ideas: StickerIdea[];           // накопленные идеи (растёт по 1)
+  holidayId?: string | null;
+  photoDescription?: string;      // NEW — текстовое описание персонажа с фото
+}
+```
+
+### Новая функция: `generateFirstIdeaWithPhoto`
+
+Первый вызов — отправляем фото (сжатое до 256px) + просим 1 идею и описание персонажа.
+
+```typescript
+async function generateFirstIdeaWithPhoto(opts: {
+  photoFileId: string;
+  stylePresetId: string;
+  lang: string;
+  holidayModifier?: string;
+}): Promise<{ idea: StickerIdea; photoDescription: string }> {
+  // 1. Скачать фото
+  // 2. Сжать до 256px через sharp
+  // 3. Отправить в GPT-4o-mini vision
+  // 4. Промпт: "Analyze photo, return JSON { photoDescription, idea }"
+  // 5. Вернуть идею + описание
+}
+```
+
+**Системный промпт (первый вызов):**
+```
+You are a sticker pack designer. Analyze the user's PHOTO.
+
+1. Write a detailed DESCRIPTION of the person(s): face shape, skin tone, hair color/style,
+   facial hair, glasses, clothing, accessories, body type, age range, vibe/energy.
+   If MULTIPLE people — describe each person and their relationship/interaction.
+
+2. Suggest 1 unique sticker idea in the style: ${styleName} (${styleHint}).
+   ${holidayModifier ? `IMPORTANT THEME: ${holidayModifier}` : ''}
+
+Return JSON:
+{
+  "photoDescription": "detailed text description of person(s)...",
+  "idea": {
+    "emoji": "😂",
+    "titleRu": "...", "titleEn": "...",
+    "descriptionRu": "...", "descriptionEn": "...",
+    "promptModification": "...",
+    "hasText": false, "textSuggestion": null, "textPlacement": null,
+    "category": "emotion"
+  }
+}
+```
+
+**Параметры запроса:**
+- `max_tokens`: 1500 (вместо 4096)
+- Фото: сжато до **256px** перед base64 (меньше токенов vision)
+
+### Новая функция: `generateNextIdea`
+
+Последующие вызовы — **без фото**, только текст.
+
+```typescript
+async function generateNextIdea(opts: {
+  photoDescription: string;
+  stylePresetId: string;
+  lang: string;
+  shownIdeas: string[];        // titleEn уже показанных идей
+  holidayModifier?: string;
+}): Promise<StickerIdea> {
+  // 1. Отправить text-only запрос в GPT-4o-mini (НЕ vision)
+  // 2. Вернуть 1 идею
+}
+```
+
+**Системный промпт (последующие):**
+```
+You are a sticker pack designer.
+
+Person description (from photo analysis):
+${photoDescription}
+
+Style: ${styleName} (${styleHint})
+${holidayModifier ? `IMPORTANT THEME: ${holidayModifier}` : ''}
+
+Already shown ideas (DO NOT repeat similar):
+${shownIdeas.map((t, i) => `${i+1}. ${t}`).join('\n')}
+
+Suggest 1 NEW unique sticker idea, different from all shown above.
+
+Return JSON:
+{
+  "emoji": "😂",
+  "titleRu": "...", "titleEn": "...",
+  "descriptionRu": "...", "descriptionEn": "...",
+  "promptModification": "...",
+  "hasText": false, "textSuggestion": null, "textPlacement": null,
+  "category": "emotion"
+}
+
+Categories: emotion, reaction, action, scene, text_meme, greeting, farewell,
+sarcasm, motivation, celebration
+```
+
+**Параметры запроса:**
+- `max_tokens`: 800
+- Модель: `gpt-4o-mini` (text-only, без vision — быстрее и дешевле)
+
+### Изменения в обработчиках
+
+**`assistant_wait_photo` и `startAssistantDialog`:**
+```typescript
+// Было: generateStickerIdeasFromPhoto → 8 идей, ~25с
+// Стало:
+const { idea, photoDescription } = await generateFirstIdeaWithPhoto({
+  photoFileId, stylePresetId, lang
+});
+
+const ideasState = {
+  styleId, ideaIndex: 0,
+  ideas: [idea],
+  photoDescription,   // сохраняем описание для следующих идей
+  holidayId: null,
+};
+```
+
+**`asst_idea_next`:**
+```typescript
+// Всегда генерируем новую идею (не циклим)
+const shownIdeas = state.ideas.map(i => i.titleEn);
+
+let holidayMod: string | undefined;
+if (state.holidayId) {
+  const { data: ht } = await supabase.from("holiday_themes")
+    .select("prompt_modifier").eq("id", state.holidayId).maybeSingle();
+  holidayMod = ht?.prompt_modifier;
+}
+
+const newIdea = await generateNextIdea({
+  photoDescription: state.photoDescription,
+  stylePresetId: state.styleId,
+  lang,
+  shownIdeas,
+  holidayModifier: holidayMod,
+});
+
+const newIdeas = [...state.ideas, newIdea];
+const newState = { ...state, ideaIndex: newIdeas.length - 1, ideas: newIdeas };
+```
+
+**`asst_idea_holiday` и `asst_idea_holiday_off`:**
+При переключении праздника — генерируем 1 новую идею через `generateNextIdea` с/без `holidayModifier`, сбрасываем список идей но **сохраняем `photoDescription`**.
+
+### Сжатие фото (256px)
+
+В `generateFirstIdeaWithPhoto` перед base64:
+```typescript
+const resizedBuffer = await sharp(fileBuffer)
+  .resize(256, 256, { fit: "inside", withoutEnlargement: true })
+  .jpeg({ quality: 80 })
+  .toBuffer();
+const base64 = resizedBuffer.toString("base64");
+```
+
+### UI: карточка показывает "N" вместо "N/8"
+
+Поскольку количество идей не фиксировано:
+```
+💡 Идея 3          (было: Идея 3/8)
+```
+
+---
+
 ## Порядок реализации
 
+### Фаза 1 (✅ выполнено)
 1. **SQL миграция 072**: `is_default` в styles, `last_style_id` в users, таблица `holiday_themes`
 2. **pickStyleForIdeas()**: функция выбора стиля + сохранение last_style_id
 3. **asst_idea_next**: перегенерация на последней идее
-4. **holiday_themes**: getActiveHoliday, кнопка в карточке, handler, holidayModifier в generateStickerIdeasFromPhoto
-5. **Тест**: проверить все три фичи
-6. **Deploy на прод**
+4. **holiday_themes**: getActiveHoliday, кнопка-toggle в карточке, handler on/off, holidayModifier
+
+### Фаза 2 (TODO)
+5. **generateFirstIdeaWithPhoto()**: 1 идея + photoDescription, фото 256px
+6. **generateNextIdea()**: text-only, 1 идея по описанию
+7. **Обновить обработчики**: assistant_wait_photo, startAssistantDialog, asst_idea_next, asst_idea_holiday
+8. **UI**: убрать "/totalIdeas" из заголовка карточки
+9. **Тест**: проверить скорость и качество
+10. **Deploy на прод**
