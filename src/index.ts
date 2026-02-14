@@ -3434,6 +3434,18 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
       return;
     }
 
+    // Send sticker example (separate message above)
+    let stickerMsgId: number = 0;
+    try {
+      const fileId = await getStyleStickerFileId(preset.id);
+      if (fileId) {
+        const stickerMsg = await ctx.replyWithSticker(fileId);
+        stickerMsgId = stickerMsg.message_id;
+      }
+    } catch (err: any) {
+      console.error("[StylePreview] Failed to send sticker:", err.message);
+    }
+
     // Build description text
     const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
     const description = preset.description_ru || preset.prompt_hint;
@@ -3446,7 +3458,7 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
     const keyboard = {
       inline_keyboard: [[
         { text: applyText, callback_data: `style_v2:${preset.id}` },
-        { text: backText, callback_data: `back_to_style_list:0` },
+        { text: backText, callback_data: `back_to_style_list:${stickerMsgId}` },
       ]],
     };
 
@@ -3468,6 +3480,12 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
+
+    // Delete sticker preview message if exists
+    const stickerMsgId = ctx.match[1] ? parseInt(ctx.match[1], 10) : 0;
+    if (stickerMsgId > 0) {
+      await ctx.telegram.deleteMessage(ctx.chat!.id, stickerMsgId).catch(() => {});
+    }
 
     // Edit current message back to style list
     const messageId = ctx.callbackQuery?.message?.message_id;
