@@ -220,26 +220,37 @@ async function pickStyleForIdeas(user: any): Promise<StylePresetV2> {
   // 1. User's last style
   if (user.last_style_id) {
     const last = active.find(p => p.id === user.last_style_id);
-    if (last) return last;
+    if (last) {
+      console.log("[pickStyleForIdeas] Using last style:", last.id, last.name_en);
+      return last;
+    }
   }
 
   // 2. Default style from DB
-  const def = active.find(p => p.is_default);
-  if (def) return def;
+  console.log("[pickStyleForIdeas] Checking is_default. Sample:", active.slice(0, 3).map(p => ({ id: p.id, is_default: (p as any).is_default })));
+  const def = active.find(p => (p as any).is_default);
+  if (def) {
+    console.log("[pickStyleForIdeas] Using default style:", def.id, def.name_en);
+    return def;
+  }
 
   // 3. Random fallback
-  return active[Math.floor(Math.random() * active.length)];
+  const rand = active[Math.floor(Math.random() * active.length)];
+  console.log("[pickStyleForIdeas] Using random style:", rand.id, rand.name_en);
+  return rand;
 }
 
 // Get first active holiday theme
 async function getActiveHoliday(): Promise<HolidayTheme | null> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("holiday_themes")
     .select("*")
     .eq("is_active", true)
     .order("sort_order")
     .limit(1)
     .maybeSingle();
+  if (error) console.error("[getActiveHoliday] error:", error.message);
+  console.log("[getActiveHoliday] result:", data?.id || "none", "is_active:", data?.is_active);
   return data;
 }
 
@@ -5922,6 +5933,7 @@ async function showStickerIdeaCard(ctx: any, opts: {
 
   // Holiday button + Next idea
   const holiday = await getActiveHoliday();
+  console.log("[showStickerIdeaCard] holiday:", holiday?.id, "currentHolidayId:", currentHolidayId, "showButton:", holiday && currentHolidayId !== holiday.id);
   const holidayNextRow: any[] = [];
   if (holiday && currentHolidayId !== holiday.id) {
     holidayNextRow.push(Markup.button.callback(
