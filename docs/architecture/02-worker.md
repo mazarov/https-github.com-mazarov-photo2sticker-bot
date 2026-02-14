@@ -24,17 +24,13 @@ sequenceDiagram
     W->>TG: Обновить progress-сообщение
 
     W->>TG: Download source photo
-    W->>G: Generate image (Gemini 2.5 Flash Image)
+    W->>G: Generate image (Gemini)
     G-->>W: Generated image (PNG)
 
-    W->>W: Check green pixel ratio
-    alt Green > 5%
-        W->>W: Chroma key (удалить зелёный фон)
-    end
     W->>R: Remove background (rembg)
     R-->>W: Image without background
 
-    W->>W: Trim + resize to 512x512
+    W->>W: Trim + resize to 482px (+ 15px extend → 512px)
     W->>W: Convert to WebP
 
     W->>DB: Save sticker record
@@ -61,11 +57,11 @@ sequenceDiagram
 - Скачивание через Telegram Bot API → Buffer
 
 ### 4. Генерация изображения (Gemini)
-- Модель: `gemini-2.5-flash-image`
+- Модель: настраивается через `app_config` (по умолчанию: style → `gemini-3-pro-image-preview`, emotion/motion → `gemini-2.5-flash-image`)
 - Входные данные: исходное фото + промпт
 - Промпт содержит:
   - Инструкцию по стилю (из style preset или кастомный)
-  - Требование зелёного фона `#00FF00`
+  - Требование фона: "flat uniform single color, highly contrasting"
   - Требования к композиции (не обрезать, оставить padding)
   - Требования к качеству (без водяных знаков, текста и т.д.)
 - Retry с exponential backoff (3 попытки)
@@ -78,26 +74,19 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    IMG[Сгенерированное изображение] --> GREEN{Green ratio > 5%?}
-    GREEN -->|Да| CHROMA[Chroma Key<br/>Удалить зелёные пиксели]
-    GREEN -->|Нет| REMBG
-
-    CHROMA --> REMBG[rembg<br/>self-hosted, port 5000]
+    IMG[Сгенерированное изображение] --> RESIZE[Resize 1024x1024<br/>fit: inside, withoutEnlargement]
+    RESIZE --> REMBG[rembg<br/>self-hosted, port 5000]
     REMBG --> CHECK{Успех?}
-    CHECK -->|Да| RESULT[PNG с прозрачным фоном]
+    CHECK -->|Да| PAD[Safety padding 5%<br/>прозрачная рамка]
     CHECK -->|Нет| PIXIAN[Pixian API<br/>fallback]
-    PIXIAN --> RESULT
-
-    RESULT --> CHROMA2{Green ratio > 5%<br/>после rembg?}
-    CHROMA2 -->|Да| CLEANUP[Дополнительная очистка<br/>зелёных пикселей]
-    CHROMA2 -->|Нет| FINAL[Готово]
-    CLEANUP --> FINAL
+    PIXIAN --> PAD
+    PAD --> RESULT[PNG с прозрачным фоном]
 ```
 
 **rembg** (основной):
 - Self-hosted сервис на `http://p2s-rembg:5000`
 - Модель: isnet-general-use (ранее u2net — обновлено 2026-02-13)
-- Изображение ресайзится перед отправкой (экономия трафика)
+- Вход: изображение ресайзится до 1024x1024 (fit: inside, withoutEnlargement) перед отправкой
 - 2 попытки
 - Health check перед каждым запросом
 
@@ -107,9 +96,10 @@ flowchart TD
 - Авторизация через username/password
 
 ### 7. Финализация изображения
+- Safety padding: после rembg добавляется 5% прозрачная рамка (`safetyPad = Math.round(Math.max(width, height) * 0.05)`)
 - Trim пустого пространства (sharp)
-- Resize до 512x512 (вписать, сохранить пропорции)
-- Конвертация в WebP
+- Resize до 482px (вписать, сохранить пропорции), затем extend +15px с каждой стороны → 512x512
+- Конвертация в WebP (quality: 95%)
 
 ### 8. Сохранение и отправка
 - INSERT в `stickers` таблицу
@@ -172,7 +162,7 @@ const savedSourcePhotoFileId = sourceFileId;
 |----------|---------|----------|
 | `JOB_POLL_INTERVAL_MS` | 2000 | Интервал опроса очереди |
 | `APP_ENV` | prod | Окружение (фильтр заданий) |
-| Gemini model | gemini-2.5-flash-image | Модель генерации |
+| Gemini model | app_config (style: gemini-3-pro-image-preview, emotion/motion: gemini-2.5-flash-image) | Модель генерации |
 | rembg URL | http://p2s-rembg:5000 | Адрес сервиса удаления фона |
 
 ## Обработка ошибок
@@ -181,5 +171,5 @@ const savedSourcePhotoFileId = sourceFileId;
 - Retry rembg (2 попытки)
 - Fallback на Pixian при сбое rembg
 - Alert в канал при критических ошибках
-- Job помечается как `failed` при исчерпании попыток
+- Job помечается как `error` при исчерпании попыток
 - Сообщение пользователю об ошибке
