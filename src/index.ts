@@ -267,19 +267,14 @@ async function sendStyleKeyboardFlat(ctx: any, lang: string, messageId?: number)
   const allPresets = await getStylePresetsV2();
   const customText = await getText(lang, "btn.custom_style");
 
-  // 2 styles per row, clicking opens preview card
+  // 3 styles per row (unified layout with ideas flow)
   const buttons: any[][] = [];
-  for (let i = 0; i < allPresets.length; i += 2) {
-    const row: any[] = [
-      {
-        text: `${allPresets[i].emoji} ${lang === "ru" ? allPresets[i].name_ru : allPresets[i].name_en}`,
-        callback_data: `style_preview:${allPresets[i].id}`,
-      },
-    ];
-    if (allPresets[i + 1]) {
+  for (let i = 0; i < allPresets.length; i += 3) {
+    const row: any[] = [];
+    for (let j = i; j < Math.min(i + 3, allPresets.length); j++) {
       row.push({
-        text: `${allPresets[i + 1].emoji} ${lang === "ru" ? allPresets[i + 1].name_ru : allPresets[i + 1].name_en}`,
-        callback_data: `style_preview:${allPresets[i + 1].id}`,
+        text: `${allPresets[j].emoji} ${lang === "ru" ? allPresets[j].name_ru : allPresets[j].name_en}`,
+        callback_data: `style_preview:${allPresets[j].id}`,
       });
     }
     buttons.push(row);
@@ -412,19 +407,14 @@ async function sendStyleExamplesKeyboard(ctx: any, lang: string) {
   const allPresets = await getStylePresetsV2();
   const isRu = lang === "ru";
 
-  // 2 styles per row, clicking opens preview card
+  // 3 styles per row (unified layout)
   const buttons: any[][] = [];
-  for (let i = 0; i < allPresets.length; i += 2) {
-    const row: any[] = [
-      Markup.button.callback(
-        `${allPresets[i].emoji} ${isRu ? allPresets[i].name_ru : allPresets[i].name_en}`,
-        `assistant_style_preview:${allPresets[i].id}`
-      ),
-    ];
-    if (allPresets[i + 1]) {
+  for (let i = 0; i < allPresets.length; i += 3) {
+    const row: any[] = [];
+    for (let j = i; j < Math.min(i + 3, allPresets.length); j++) {
       row.push(Markup.button.callback(
-        `${allPresets[i + 1].emoji} ${isRu ? allPresets[i + 1].name_ru : allPresets[i + 1].name_en}`,
-        `assistant_style_preview:${allPresets[i + 1].id}`
+        `${allPresets[j].emoji} ${isRu ? allPresets[j].name_ru : allPresets[j].name_en}`,
+        `assistant_style_preview:${allPresets[j].id}`
       ));
     }
     buttons.push(row);
@@ -2525,8 +2515,8 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
     .update(sessionUpdate)
     .eq("id", session.id);
 
-  // Show style carousel (manual mode)
-  await sendStyleCarousel(ctx, lang);
+  // Show flat style list (unified with ideas flow)
+  await sendStyleKeyboardFlat(ctx, lang);
 });
 
 // Menu: 💰 Баланс — show balance + credit packs
