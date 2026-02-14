@@ -3434,7 +3434,10 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
       return;
     }
 
-    // Send sticker example (separate message above)
+    // Delete style list message
+    try { await ctx.deleteMessage(); } catch {}
+
+    // Send sticker example (above description)
     let stickerMsgId: number = 0;
     try {
       const fileId = await getStyleStickerFileId(preset.id);
@@ -3451,19 +3454,19 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
     const description = preset.description_ru || preset.prompt_hint;
     const text = `${preset.emoji} *${styleName}*\n\n${description}`;
 
-    // Buttons: Apply style | Back
-    const applyText = lang === "ru" ? "✅ Применить стиль" : "✅ Apply style";
+    // Buttons: Back | Apply (unified with assistant flow)
+    const applyText = lang === "ru" ? "✅ Применить" : "✅ Apply";
     const backText = lang === "ru" ? "↩️ Назад" : "↩️ Back";
 
     const keyboard = {
       inline_keyboard: [[
-        { text: applyText, callback_data: `style_v2:${preset.id}` },
         { text: backText, callback_data: `back_to_style_list:${stickerMsgId}` },
+        { text: applyText, callback_data: `style_v2:${preset.id}` },
       ]],
     };
 
-    // Edit the same message (replace style list with description)
-    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: keyboard });
+    // Send description as new message (below sticker)
+    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: keyboard });
   } catch (err) {
     console.error("[StylePreview] error:", err);
   }
@@ -3487,13 +3490,11 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
       await ctx.telegram.deleteMessage(ctx.chat!.id, stickerMsgId).catch(() => {});
     }
 
-    // Edit current message back to style list
-    const messageId = ctx.callbackQuery?.message?.message_id;
-    if (messageId) {
-      await sendStyleKeyboardFlat(ctx, lang, messageId);
-    } else {
-      await sendStyleKeyboardFlat(ctx, lang);
-    }
+    // Delete description message (current message with buttons)
+    try { await ctx.deleteMessage(); } catch {}
+
+    // Send fresh style list
+    await sendStyleKeyboardFlat(ctx, lang);
   } catch (err) {
     console.error("[StylePreview] back_to_style_list error:", err);
   }
