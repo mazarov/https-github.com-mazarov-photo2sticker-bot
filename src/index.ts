@@ -170,6 +170,17 @@ interface StylePresetV2 {
   sort_order: number;
   is_active: boolean;
   show_in_onboarding: boolean;
+  is_default?: boolean;
+}
+
+interface HolidayTheme {
+  id: string;
+  emoji: string;
+  name_ru: string;
+  name_en: string;
+  prompt_modifier: string;
+  is_active: boolean;
+  sort_order: number;
 }
 
 // Cache for style_presets_v2
@@ -199,6 +210,37 @@ async function getStylePresetsV2(groupId?: string): Promise<StylePresetV2[]> {
 async function getStylePresetV2ById(id: string): Promise<StylePresetV2 | null> {
   const presets = await getStylePresetsV2();
   return presets.find(p => p.id === id) || null;
+}
+
+// Pick style for ideas: user's last style > default > random
+async function pickStyleForIdeas(user: any): Promise<StylePresetV2> {
+  const allPresets = await getStylePresetsV2();
+  const active = allPresets.filter(p => p.is_active);
+
+  // 1. User's last style
+  if (user.last_style_id) {
+    const last = active.find(p => p.id === user.last_style_id);
+    if (last) return last;
+  }
+
+  // 2. Default style from DB
+  const def = active.find(p => p.is_default);
+  if (def) return def;
+
+  // 3. Random fallback
+  return active[Math.floor(Math.random() * active.length)];
+}
+
+// Get first active holiday theme
+async function getActiveHoliday(): Promise<HolidayTheme | null> {
+  const { data } = await supabase
+    .from("holiday_themes")
+    .select("*")
+    .eq("is_active", true)
+    .order("sort_order")
+    .limit(1)
+    .maybeSingle();
+  return data;
 }
 
 async function sendStyleKeyboardFlat(ctx: any, lang: string, messageId?: number) {
@@ -1029,9 +1071,8 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
   if (lastPhoto) {
     console.log("startAssistantDialog: lastPhoto exists, showing sticker ideas");
 
-    // Pick random style
-    const activePresets = stylePresets.filter(p => p.is_active);
-    const randomStyle = activePresets[Math.floor(Math.random() * activePresets.length)];
+    // Pick style: user's last > default > random
+    const randomStyle = await pickStyleForIdeas(user);
 
     const loadingMsg = await ctx.reply(
       lang === "ru" ? "📸 Фото есть! Подбираю идеи для стикера..." : "📸 Photo ready! Picking sticker ideas..."
@@ -2178,10 +2219,8 @@ bot.on("photo", async (ctx) => {
     // === NEW: Show sticker ideas immediately after photo ===
     console.log("Assistant photo: showing sticker ideas flow");
 
-    // Pick random style
-    const allPresets = await getStylePresetsV2();
-    const activePresets = allPresets.filter(p => p.is_active);
-    const randomStyle = activePresets[Math.floor(Math.random() * activePresets.length)];
+    // Pick style: user's last > default > random
+    const randomStyle = await pickStyleForIdeas(user);
 
     // Save photo and move to assistant_wait_idea
     const { error: updateErr1 } = await supabase
@@ -4604,6 +4643,9 @@ bot.action(/^asst_idea_gen:(\d+)$/, async (ctx) => {
     : `${preset.prompt_hint}. ${idea.promptModification}`;
   console.log("[asst_idea_gen] promptFinal:", promptFinal);
 
+  // Save last used style for future ideas
+  await supabase.from("users").update({ last_style_id: state.styleId }).eq("id", user.id);
+
   await startGeneration(ctx, user, session, lang, {
     generationType: "style",
     promptFinal,
@@ -4612,7 +4654,7 @@ bot.action(/^asst_idea_gen:(\d+)$/, async (ctx) => {
   });
 });
 
-// Next idea (circular)
+// Next idea — regenerate new batch when all viewed
 bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -4629,19 +4671,59 @@ bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
     return;
   }
 
-  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[] };
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null };
   const nextIndex = (parseInt(ctx.match[1], 10) + 1) % state.ideas.length;
 
-  // Update index
+  const preset = await getStylePresetV2ById(state.styleId);
+  if (!preset) return;
+
+  // If all ideas viewed — regenerate new batch
+  if (nextIndex === 0) {
+    try { await ctx.deleteMessage(); } catch {}
+    const loadingMsg = await ctx.reply(
+      lang === "ru" ? "🔄 Генерирую новые идеи..." : "🔄 Generating new ideas..."
+    );
+
+    let ideas: StickerIdea[];
+    try {
+      // Get holiday modifier if ideas were holiday-themed
+      let holidayMod: string | undefined;
+      if (state.holidayId) {
+        const { data: ht } = await supabase.from("holiday_themes").select("prompt_modifier").eq("id", state.holidayId).maybeSingle();
+        holidayMod = ht?.prompt_modifier;
+      }
+      ideas = await generateStickerIdeasFromPhoto({
+        photoFileId: session.current_photo_file_id,
+        stylePresetId: state.styleId,
+        lang,
+        holidayModifier: holidayMod,
+      });
+      console.log("[asst_idea_next] Regenerated", ideas.length, "ideas");
+    } catch (err: any) {
+      console.error("[asst_idea_next] Regen error:", err.message);
+      ideas = getDefaultIdeas(lang);
+    }
+
+    const newState = { styleId: state.styleId, ideaIndex: 0, ideas, holidayId: state.holidayId || null };
+    await supabase.from("sessions").update({
+      sticker_ideas_state: newState, is_active: true,
+    }).eq("id", session.id);
+
+    try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
+
+    await showStickerIdeaCard(ctx, {
+      idea: ideas[0], ideaIndex: 0, totalIdeas: ideas.length, style: preset, lang,
+      currentHolidayId: state.holidayId,
+    });
+    return;
+  }
+
+  // Normal: show next idea
   await supabase.from("sessions").update({
     sticker_ideas_state: { ...state, ideaIndex: nextIndex },
     is_active: true,
   }).eq("id", session.id);
 
-  const preset = await getStylePresetV2ById(state.styleId);
-  if (!preset) return;
-
-  // Delete previous message and show next idea
   try { await ctx.deleteMessage(); } catch {}
   await showStickerIdeaCard(ctx, {
     idea: state.ideas[nextIndex],
@@ -4649,6 +4731,7 @@ bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
     totalIdeas: state.ideas.length,
     style: preset,
     lang,
+    currentHolidayId: state.holidayId,
   });
 });
 
@@ -4703,7 +4786,7 @@ bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const session = await getActiveSession(user.id);
-  const state = session?.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[] } | null;
+  const state = session?.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null } | null;
   if (!state?.ideas?.length) {
     try { await ctx.deleteMessage(); } catch {}
     await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
@@ -4721,6 +4804,7 @@ bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
     totalIdeas: state.ideas.length,
     style: preset,
     lang,
+    currentHolidayId: state.holidayId,
   });
 });
 
@@ -4746,7 +4830,7 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
   const preset = await getStylePresetV2ById(styleId);
   if (!preset) return;
 
-  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[] };
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null };
 
   // Update style only, keep same ideas and current idea index
   const newState = { ...state, styleId };
@@ -4763,6 +4847,67 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
     totalIdeas: state.ideas.length,
     style: preset,
     lang,
+    currentHolidayId: state.holidayId,
+  });
+});
+
+// Holiday theme — regenerate ideas with holiday modifier
+bot.action(/^asst_idea_holiday:([^:]+):(\d+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const holidayId = ctx.match[1];
+  const session = await getActiveSession(user.id);
+  if (!session?.sticker_ideas_state) {
+    await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
+    return;
+  }
+
+  const state = session.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null };
+
+  // Get holiday theme
+  const { data: holiday } = await supabase.from("holiday_themes").select("*").eq("id", holidayId).maybeSingle();
+  if (!holiday) return;
+
+  try { await ctx.deleteMessage(); } catch {}
+  const loadingMsg = await ctx.reply(
+    lang === "ru" ? `${holiday.emoji} Генерирую праздничные идеи...` : `${holiday.emoji} Generating holiday ideas...`
+  );
+
+  let ideas: StickerIdea[];
+  try {
+    ideas = await generateStickerIdeasFromPhoto({
+      photoFileId: session.current_photo_file_id,
+      stylePresetId: state.styleId,
+      lang,
+      holidayModifier: holiday.prompt_modifier,
+    });
+    console.log("[asst_idea_holiday] Generated", ideas.length, "holiday ideas for", holidayId);
+  } catch (err: any) {
+    console.error("[asst_idea_holiday] Error:", err.message);
+    ideas = getDefaultIdeas(lang);
+  }
+
+  const newState = { styleId: state.styleId, ideaIndex: 0, ideas, holidayId };
+  await supabase.from("sessions").update({
+    sticker_ideas_state: newState,
+    state: "assistant_wait_idea",
+    is_active: true,
+  }).eq("id", session.id);
+
+  try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
+
+  const preset = await getStylePresetV2ById(state.styleId);
+  if (!preset) return;
+
+  await showStickerIdeaCard(ctx, {
+    idea: ideas[0], ideaIndex: 0, totalIdeas: ideas.length, style: preset, lang,
+    currentHolidayId: holidayId,
   });
 });
 
@@ -5631,8 +5776,9 @@ async function generateStickerIdeasFromPhoto(opts: {
   photoFileId: string;
   stylePresetId: string;
   lang: string;
+  holidayModifier?: string;
 }): Promise<StickerIdea[]> {
-  const { photoFileId, stylePresetId, lang } = opts;
+  const { photoFileId, stylePresetId, lang, holidayModifier } = opts;
 
   try {
     // Download user photo
@@ -5677,7 +5823,7 @@ Return a JSON array of exactly 8 ideas:
   "category": "emotion"
 }]
 
-Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sarcasm, motivation, celebration`;
+Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sarcasm, motivation, celebration${holidayModifier ? `\n\nIMPORTANT THEME: ${holidayModifier}` : ''}`;
 
     if (config.openaiApiKey) {
       const imageUrl = `data:${mimeType};base64,${base64}`;
@@ -5753,8 +5899,9 @@ async function showStickerIdeaCard(ctx: any, opts: {
   totalIdeas: number;
   style: StylePresetV2;
   lang: string;
+  currentHolidayId?: string | null;
 }) {
-  const { idea, ideaIndex, totalIdeas, style, lang } = opts;
+  const { idea, ideaIndex, totalIdeas, style, lang, currentHolidayId } = opts;
   const isRu = lang === "ru";
 
   const text = [
@@ -5765,30 +5912,45 @@ async function showStickerIdeaCard(ctx: any, opts: {
     `${isRu ? idea.descriptionRu : idea.descriptionEn}`,
   ].join("\n");
 
-  await ctx.reply(text, Markup.inlineKeyboard([
-    [Markup.button.callback(
-      isRu ? `🎨 Сгенерить (1💎)` : `🎨 Generate (1💎)`,
-      `asst_idea_gen:${ideaIndex}`
-    )],
-    [
-      Markup.button.callback(
-        isRu ? "🔄 Другой стиль" : "🔄 Change style",
-        `asst_idea_style:${ideaIndex}`
-      ),
-      Markup.button.callback(
-        isRu ? "➡️ Другая" : "➡️ Next",
-        `asst_idea_next:${ideaIndex}`
-      ),
-    ],
-    [Markup.button.callback(
-      isRu ? "✏️ Своя идея" : "✏️ Custom idea",
-      "asst_idea_custom"
-    )],
-    [Markup.button.callback(
-      isRu ? "⏭️ Пропустить" : "⏭️ Skip",
-      "asst_idea_skip"
-    )],
-  ]));
+  // Build keyboard rows
+  const rows: any[][] = [];
+
+  rows.push([Markup.button.callback(
+    isRu ? `🎨 Сгенерить (1💎)` : `🎨 Generate (1💎)`,
+    `asst_idea_gen:${ideaIndex}`
+  )]);
+
+  // Holiday button + Next idea
+  const holiday = await getActiveHoliday();
+  const holidayNextRow: any[] = [];
+  if (holiday && currentHolidayId !== holiday.id) {
+    holidayNextRow.push(Markup.button.callback(
+      `${holiday.emoji} ${isRu ? holiday.name_ru : holiday.name_en}`,
+      `asst_idea_holiday:${holiday.id}:${ideaIndex}`
+    ));
+  }
+  holidayNextRow.push(Markup.button.callback(
+    isRu ? "➡️ Другая" : "➡️ Next",
+    `asst_idea_next:${ideaIndex}`
+  ));
+  rows.push(holidayNextRow);
+
+  rows.push([Markup.button.callback(
+    isRu ? "🔄 Другой стиль" : "🔄 Change style",
+    `asst_idea_style:${ideaIndex}`
+  )]);
+
+  rows.push([Markup.button.callback(
+    isRu ? "✏️ Своя идея" : "✏️ Custom idea",
+    "asst_idea_custom"
+  )]);
+
+  rows.push([Markup.button.callback(
+    isRu ? "⏭️ Пропустить" : "⏭️ Skip",
+    "asst_idea_skip"
+  )]);
+
+  await ctx.reply(text, Markup.inlineKeyboard(rows));
 }
 
 async function generateCustomIdea(opts: {
