@@ -7738,7 +7738,7 @@ app.post(config.webhookPath, async (req, res) => {
 
 app.get("/health", (_, res) => res.status(200).send("OK"));
 
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`API running on :${config.port}`);
 });
 
@@ -8015,6 +8015,19 @@ process.on("unhandledRejection", async (reason: any) => {
   });
 });
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+// Graceful shutdown for webhook mode (bot.stop() is for polling only)
+function gracefulShutdown(signal: string) {
+  console.log(`${signal} received, shutting down gracefully...`);
+  server.close(() => {
+    console.log("HTTP server closed");
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.log("Forced shutdown after timeout");
+    process.exit(1);
+  }, 10_000);
+}
+
+process.once("SIGINT", () => gracefulShutdown("SIGINT"));
+process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
 
