@@ -18,10 +18,15 @@ RUN pip install --no-cache-dir \
     pymatting \
     scipy
 
-# Pre-download the model (faster startup)
+# Pre-download models (faster startup)
 RUN python -c "from rembg import new_session; new_session('isnet-general-use')" || true
+RUN python -c "from rembg import new_session; new_session('isnet-anime')" || true
 
 COPY rembg_server.py .
+
+# Model is configured via REMBG_MODEL env variable at runtime
+# Default: isnet-general-use, override with: docker run -e REMBG_MODEL=isnet-anime ...
+ENV REMBG_MODEL=isnet-general-use
 
 EXPOSE 5000
 

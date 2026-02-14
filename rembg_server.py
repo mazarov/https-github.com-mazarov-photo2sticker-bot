@@ -1,11 +1,13 @@
 """
 rembg API Server
 Simple Flask server for background removal using rembg
+Model is configured via REMBG_MODEL env variable (default: isnet-general-use)
 """
 
 from flask import Flask, request, Response, jsonify
 from rembg import remove, new_session
 import io
+import os
 import time
 import logging
 
@@ -15,16 +17,19 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Read model from environment variable
+MODEL_NAME = os.environ.get("REMBG_MODEL", "isnet-general-use")
+
 # Pre-load model on startup
-logger.info("Loading rembg model...")
-session = new_session("isnet-general-use")
-logger.info("Model loaded successfully")
+logger.info(f"Loading rembg model: {MODEL_NAME}")
+session = new_session(MODEL_NAME)
+logger.info(f"Model {MODEL_NAME} loaded successfully")
 
 
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
-    return jsonify({'status': 'ok', 'model': 'isnet-general-use'})
+    return jsonify({'status': 'ok', 'model': MODEL_NAME})
 
 
 @app.route('/remove-background', methods=['POST'])
@@ -54,7 +59,7 @@ def remove_background():
         
         # Remove background
         process_start = time.time()
-        logger.info(f"[{request_id}] Starting rembg processing...")
+        logger.info(f"[{request_id}] Starting rembg processing with model={MODEL_NAME}...")
         output_data = remove(
             input_data,
             session=session,
@@ -96,8 +101,8 @@ def index():
     """Root endpoint with API info"""
     return jsonify({
         'service': 'rembg-api',
-        'version': '1.0.0',
-        'model': 'isnet-general-use',
+        'version': '1.1.0',
+        'model': MODEL_NAME,
         'endpoints': {
             '/health': 'GET - Health check',
             '/remove-background': 'POST - Remove background (multipart/form-data with image file)',
