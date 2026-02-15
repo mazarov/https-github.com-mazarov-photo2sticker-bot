@@ -3082,12 +3082,13 @@ bot.action("pack_regenerate", async (ctx) => {
     })
     .eq("id", session.pack_batch_id);
 
-  // Update session
+  // Update session (clear sheet so new preview gets its own; pack_sheet_cleaned set by worker)
   await supabase
     .from("sessions")
     .update({
       state: "generating_pack_preview",
       pack_sheet_file_id: null,
+      pack_sheet_cleaned: false,
       is_active: true,
     })
     .eq("id", session.id);
