@@ -2183,7 +2183,8 @@ bot.on("photo", async (ctx) => {
   }
 
   // === AI Assistant: re-route to assistant_wait_photo if assistant is active after generation ===
-  if (!session.state?.startsWith("assistant_") && !["processing", "processing_emotion", "processing_motion", "processing_text"].includes(session.state)) {
+  // Skip re-route for pack flow states — pack handles photos independently
+  if (!session.state?.startsWith("assistant_") && !session.state?.startsWith("wait_pack_") && !["processing", "processing_emotion", "processing_motion", "processing_text", "generating_pack_preview", "processing_pack"].includes(session.state)) {
     const activeAssistant = await getActiveAssistantSession(user.id);
     if (activeAssistant && activeAssistant.status === "active") {
       console.log("Assistant photo re-route: state was", session.state, "→ switching to assistant_wait_photo");
@@ -3086,6 +3087,16 @@ bot.on("text", async (ctx) => {
 
   if (ctx.message.text?.startsWith("/")) return;
 
+  // Skip menu button texts — they are handled by bot.hears() above
+  const menuButtons = [
+    "🤖 Помощник", "🤖 Assistant",
+    "🎨 Стили", "🎨 Styles",
+    "📦 Сделать пак", "📦 Make a pack",
+    "💰 Баланс", "💰 Balance",
+    "❓ Помощь", "❓ Help",
+  ];
+  if (menuButtons.includes(ctx.message.text?.trim())) return;
+
   const user = await getUser(telegramId);
   if (!user?.id) return;
 
@@ -3093,6 +3104,11 @@ bot.on("text", async (ctx) => {
   const session = await getActiveSession(user.id);
   if (!session?.id) {
     await ctx.reply(await getText(lang, "start.need_start"));
+    return;
+  }
+
+  // === Pack states: ignore text input during pack flow ===
+  if (session.state?.startsWith("wait_pack_") || session.state === "generating_pack_preview" || session.state === "processing_pack") {
     return;
   }
 
