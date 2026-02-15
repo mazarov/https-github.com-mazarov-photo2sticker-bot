@@ -263,17 +263,29 @@ async function getActiveHoliday(): Promise<HolidayTheme | null> {
   return data;
 }
 
-async function sendStyleKeyboardFlat(ctx: any, lang: string, messageId?: number) {
+async function sendStyleKeyboardFlat(
+  ctx: any,
+  lang: string,
+  messageId?: number,
+  options?: {
+    includeCustom?: boolean;
+    extraButtons?: any[][];
+    headerText?: string;
+    selectedStyleId?: string | null;
+  }
+) {
   const allPresets = await getStylePresetsV2();
   const customText = await getText(lang, "btn.custom_style");
+  const includeCustom = options?.includeCustom !== false;
 
   // 3 styles per row (unified layout with ideas flow)
   const buttons: any[][] = [];
   for (let i = 0; i < allPresets.length; i += 3) {
     const row: any[] = [];
     for (let j = i; j < Math.min(i + 3, allPresets.length); j++) {
+      const isSelected = options?.selectedStyleId && options.selectedStyleId === allPresets[j].id;
       row.push({
-        text: `${allPresets[j].emoji} ${lang === "ru" ? allPresets[j].name_ru : allPresets[j].name_en}`,
+        text: `${isSelected ? "✅ " : ""}${allPresets[j].emoji} ${lang === "ru" ? allPresets[j].name_ru : allPresets[j].name_en}`,
         callback_data: `style_preview:${allPresets[j].id}`,
       });
     }
@@ -281,9 +293,14 @@ async function sendStyleKeyboardFlat(ctx: any, lang: string, messageId?: number)
   }
 
   // Custom style button
-  buttons.push([{ text: customText, callback_data: "style_custom_v2" }]);
+  if (includeCustom) {
+    buttons.push([{ text: customText, callback_data: "style_custom_v2" }]);
+  }
+  if (options?.extraButtons?.length) {
+    buttons.push(...options.extraButtons);
+  }
 
-  const text = await getText(lang, "photo.ask_style");
+  const text = options?.headerText || await getText(lang, "photo.ask_style");
 
   if (messageId) {
     await ctx.telegram.editMessageText(
@@ -403,7 +420,7 @@ async function sendStyleCarousel(ctx: any, lang: string, page: number = 0): Prom
  * but clicking a STYLE returns the choice to the assistant (not manual mode).
  * Clicking opens a style preview with sticker + description, then assistant_pick_style on OK.
  */
-async function sendStyleExamplesKeyboard(ctx: any, lang: string) {
+async function sendStyleExamplesKeyboard(ctx: any, lang: string, selectedStyleId?: string | null) {
   const allPresets = await getStylePresetsV2();
   const isRu = lang === "ru";
 
@@ -412,8 +429,9 @@ async function sendStyleExamplesKeyboard(ctx: any, lang: string) {
   for (let i = 0; i < allPresets.length; i += 3) {
     const row: any[] = [];
     for (let j = i; j < Math.min(i + 3, allPresets.length); j++) {
+      const isSelected = selectedStyleId && selectedStyleId === allPresets[j].id;
       row.push(Markup.button.callback(
-        `${allPresets[j].emoji} ${isRu ? allPresets[j].name_ru : allPresets[j].name_en}`,
+        `${isSelected ? "✅ " : ""}${allPresets[j].emoji} ${isRu ? allPresets[j].name_ru : allPresets[j].name_en}`,
         `assistant_style_preview:${allPresets[j].id}`
       ));
     }
@@ -1421,7 +1439,7 @@ async function handleShowStyleExamples(ctx: any, styleId: string | undefined | n
     }
   } else {
     // Show full style keyboard — style clicks go to assistant, example clicks use standard flow
-    await sendStyleExamplesKeyboard(ctx, lang);
+    await sendStyleExamplesKeyboard(ctx, lang, styleId || null);
   }
 }
 
@@ -2451,14 +2469,8 @@ bot.on("photo", async (ctx) => {
       })
       .eq("id", session.id);
 
-    // Send style selector + preview offer
-    const keyboard = await buildPackStylePreviewKeyboard(lang, session.selected_style_id);
-    const stylePrompt = await getPackStylePrompt(lang, session.selected_style_id);
-    await ctx.reply(`${await getText(lang, "pack.preview_offer")}\n\n${stylePrompt}`, {
-      reply_markup: {
-        inline_keyboard: keyboard,
-      },
-    });
+    // Send style selector + preview offer (reuses shared style menu)
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
     return;
   }
 
@@ -2503,7 +2515,7 @@ bot.on("photo", async (ctx) => {
     console.error("Failed to update session to wait_style:", error);
   }
 
-  await sendStyleKeyboardFlat(ctx, lang);
+  await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
 });
 
 // ============================================
@@ -2583,7 +2595,7 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
     .eq("id", session.id);
 
   // Show flat style list (unified with ideas flow)
-  await sendStyleKeyboardFlat(ctx, lang);
+  await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
 });
 
 // Menu: 💰 Баланс — show balance + credit packs
@@ -2615,33 +2627,6 @@ bot.hears(["❓ Помощь", "❓ Help"], async (ctx) => {
 // "Сделать пак" flow
 // ============================================
 
-async function buildPackStylePreviewKeyboard(lang: string, selectedStyleId?: string | null) {
-  const allPresets = await getStylePresetsV2();
-  const activePresets = allPresets.filter(p => p.is_active).slice(0, 8);
-  const previewBtn = await getText(lang, "btn.preview_pack");
-  const cancelBtn = await getText(lang, "btn.cancel_pack");
-
-  const styleButtons = activePresets.map((preset) => {
-    const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
-    const selected = preset.id === selectedStyleId;
-    return {
-      text: `${selected ? "✅ " : ""}${preset.emoji} ${styleName}`,
-      callback_data: `pack_style:${preset.id}`,
-    };
-  });
-
-  const styleRows: Array<Array<{ text: string; callback_data: string }>> = [];
-  for (let i = 0; i < styleButtons.length; i += 2) {
-    styleRows.push(styleButtons.slice(i, i + 2));
-  }
-
-  return [
-    ...styleRows,
-    [{ text: previewBtn, callback_data: "pack_preview_pay" }],
-    [{ text: cancelBtn, callback_data: "pack_cancel" }],
-  ];
-}
-
 async function getPackStylePrompt(lang: string, selectedStyleId?: string | null) {
   if (!selectedStyleId) {
     return lang === "ru"
@@ -2653,6 +2638,22 @@ async function getPackStylePrompt(lang: string, selectedStyleId?: string | null)
   return lang === "ru"
     ? `Выбери стиль пака и нажми «Посмотреть превью»\nТекущий стиль: ${styleName}`
     : `Choose a pack style and tap “See preview”\nCurrent style: ${styleName}`;
+}
+
+async function sendPackStyleSelectionStep(ctx: any, lang: string, selectedStyleId?: string | null, messageId?: number) {
+  const previewOffer = await getText(lang, "pack.preview_offer");
+  const stylePrompt = await getPackStylePrompt(lang, selectedStyleId);
+  const previewBtn = await getText(lang, "btn.preview_pack");
+  const cancelBtn = await getText(lang, "btn.cancel_pack");
+
+  return sendStyleKeyboardFlat(ctx, lang, messageId, {
+    includeCustom: false,
+    headerText: `${previewOffer}\n\n${stylePrompt}`,
+    extraButtons: [
+      [{ text: previewBtn, callback_data: "pack_preview_pay" }],
+      [{ text: cancelBtn, callback_data: "pack_cancel" }],
+    ],
+  });
 }
 
 // Menu: 📦 Сделать пак / Make a pack — show template CTA screen
@@ -2797,53 +2798,11 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
 
   if (existingPhoto) {
     // Photo already available — skip to style selection + preview payment
-    const keyboard = await buildPackStylePreviewKeyboard(lang, session.selected_style_id);
-    const stylePrompt = await getPackStylePrompt(lang, session.selected_style_id);
-    await ctx.reply(`${await getText(lang, "pack.preview_offer")}\n\n${stylePrompt}`, {
-      reply_markup: {
-        inline_keyboard: keyboard,
-      },
-    });
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
   } else {
     // No photo — ask user to send one
     await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
   }
-});
-
-// Callback: pack_style — choose style preset for pack preview generation
-bot.action(/^pack_style:(.+)$/, async (ctx) => {
-  const telegramId = ctx.from?.id;
-  if (!telegramId) return;
-
-  const user = await getUser(telegramId);
-  if (!user) return;
-  const lang = user.lang || "en";
-
-  const session = await getActiveSession(user.id);
-  if (!session || session.state !== "wait_pack_preview_payment") {
-    await ctx.answerCbQuery(lang === "ru" ? "Сессия неактуальна" : "Session is not active");
-    return;
-  }
-
-  const styleId = ctx.match[1];
-  const preset = await getStylePresetV2ById(styleId);
-  if (!preset || !preset.is_active) {
-    await ctx.answerCbQuery(lang === "ru" ? "Стиль недоступен" : "Style is unavailable");
-    return;
-  }
-
-  await supabase
-    .from("sessions")
-    .update({ selected_style_id: styleId, is_active: true })
-    .eq("id", session.id);
-
-  const keyboard = await buildPackStylePreviewKeyboard(lang, styleId);
-  try {
-    await ctx.editMessageReplyMarkup({ inline_keyboard: keyboard });
-  } catch {}
-
-  const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
-  await ctx.answerCbQuery(lang === "ru" ? `Стиль: ${styleName}` : `Style: ${styleName}`);
 });
 
 // Callback: pack_preview_pay — user pays 1 credit for preview
@@ -3949,7 +3908,8 @@ bot.action(/^style_carousel_pick:(.+)$/, async (ctx) => {
 
     const lang = user.lang || "en";
     const session = await getActiveSession(user.id);
-    if (!session?.id || session.state !== "wait_style") return;
+    const session = await getActiveSession(user.id);
+    if (!session?.id || !["wait_style", "wait_pack_preview_payment"].includes(session.state)) return;
 
     const styleId = ctx.match[1];
     console.log("[StyleCarousel] Pick:", styleId);
@@ -4037,7 +3997,10 @@ bot.action(/^style_group:(.+)$/, async (ctx) => {
     const user = await getUser(telegramId);
     if (!user?.id) return;
     const lang = user.lang || "en";
-    await sendStyleKeyboardFlat(ctx, lang, ctx.callbackQuery?.message?.message_id);
+    const session = await getActiveSession(user.id);
+    await sendStyleKeyboardFlat(ctx, lang, ctx.callbackQuery?.message?.message_id, {
+      selectedStyleId: session?.selected_style_id || null,
+    });
   } catch (err) {
     console.error("Style group callback error:", err);
   }
@@ -4055,7 +4018,7 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
 
     const lang = user.lang || "en";
     const session = await getActiveSession(user.id);
-    if (!session?.id || session.state !== "wait_style") return;
+    if (!session?.id || !["wait_style", "wait_pack_preview_payment"].includes(session.state)) return;
 
     const styleId = ctx.match[1];
     console.log("[StylePreview] Showing preview for:", styleId);
@@ -4090,10 +4053,11 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
     const applyText = lang === "ru" ? "✅ Применить" : "✅ Apply";
     const backText = lang === "ru" ? "↩️ Назад" : "↩️ Back";
 
+    const applyCallback = session.state === "wait_pack_preview_payment" ? `style_v2:${preset.id}` : `style_v2:${preset.id}`;
     const keyboard = {
       inline_keyboard: [[
         { text: backText, callback_data: `back_to_style_list:${stickerMsgId}` },
-        { text: applyText, callback_data: `style_v2:${preset.id}` },
+        { text: applyText, callback_data: applyCallback },
       ]],
     };
 
@@ -4126,7 +4090,11 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
     try { await ctx.deleteMessage(); } catch {}
 
     // Send fresh style list
-    await sendStyleKeyboardFlat(ctx, lang);
+    if (session?.state === "wait_pack_preview_payment") {
+      await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
+    } else {
+      await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session?.selected_style_id || null });
+    }
   } catch (err) {
     console.error("[StylePreview] back_to_style_list error:", err);
   }
@@ -4152,6 +4120,17 @@ bot.action(/^style_v2:(.+)$/, async (ctx) => {
     const preset = await getStylePresetV2ById(styleId);
     if (!preset) {
       console.log("[Styles v2] Preset not found:", styleId);
+      return;
+    }
+
+    // Pack flow: save selected style and stay on preview-payment step
+    if (session.state === "wait_pack_preview_payment") {
+      await supabase
+        .from("sessions")
+        .update({ selected_style_id: preset.id, is_active: true })
+        .eq("id", session.id);
+      try { await ctx.deleteMessage(); } catch {}
+      await sendPackStyleSelectionStep(ctx, lang, preset.id);
       return;
     }
 
@@ -4202,7 +4181,10 @@ bot.action(/^style_groups_back(:.*)?$/, async (ctx) => {
     const user = await getUser(telegramId);
     if (!user?.id) return;
     const lang = user.lang || "en";
-    await sendStyleKeyboardFlat(ctx, lang, ctx.callbackQuery?.message?.message_id);
+    const session = await getActiveSession(user.id);
+    await sendStyleKeyboardFlat(ctx, lang, ctx.callbackQuery?.message?.message_id, {
+      selectedStyleId: session?.selected_style_id || null,
+    });
   } catch (err) {
     console.error("Style groups back callback error:", err);
   }
