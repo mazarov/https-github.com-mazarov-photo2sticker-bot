@@ -4097,6 +4097,7 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
+    const session = await getActiveSession(user.id);
 
     // Delete sticker preview message if exists
     const stickerMsgId = ctx.match[1] ? parseInt(ctx.match[1], 10) : 0;
