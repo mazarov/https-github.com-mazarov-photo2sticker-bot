@@ -472,6 +472,9 @@ async function runPackAssembleJob(job: any) {
   const sheetW = sheetMeta.width || 1024;
   const sheetH = sheetMeta.height || 1024;
   const stickerCount = template.sticker_count || 4;
+  // User already paid 1 credit for preview, so on assemble failure
+  // we refund only the second payment (N-1 credits).
+  const assembleRefundAmount = Math.max(0, stickerCount - 1);
   const cols = Math.ceil(Math.sqrt(stickerCount));
   const rows = Math.ceil(stickerCount / cols);
   const cellW = Math.floor(sheetW / cols);
@@ -514,7 +517,7 @@ async function runPackAssembleJob(job: any) {
 
   if (successCells.length === 0) {
     // Total failure — refund all credits
-    const refundAmount = batch.credits_spent || stickerCount;
+    const refundAmount = assembleRefundAmount;
     await supabase.from("users").update({ credits: (user.credits || 0) + refundAmount }).eq("id", session.user_id);
     await supabase.from("pack_batches").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", batch.id);
     await supabase.from("sessions").update({ state: "canceled", is_active: false, progress_message_id: null, progress_chat_id: null }).eq("id", session.id);
@@ -583,7 +586,7 @@ async function runPackAssembleJob(job: any) {
   console.log(`[PackAssemble] Processed ${stickerBuffers.length} stickers`);
 
   if (stickerBuffers.length === 0) {
-    const refundAmount = batch.credits_spent || stickerCount;
+    const refundAmount = assembleRefundAmount;
     await supabase.from("users").update({ credits: (user.credits || 0) + refundAmount }).eq("id", session.user_id);
     await supabase.from("pack_batches").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", batch.id);
     await supabase.from("sessions").update({ state: "canceled", is_active: false, progress_message_id: null, progress_chat_id: null }).eq("id", session.id);
@@ -663,7 +666,7 @@ async function runPackAssembleJob(job: any) {
     }
   } catch (createErr: any) {
     console.error("[PackAssemble] Failed to create sticker set:", createErr.response?.data || createErr.message);
-    const refundAmount = batch.credits_spent || stickerCount;
+    const refundAmount = assembleRefundAmount;
     await supabase.from("users").update({ credits: (user.credits || 0) + refundAmount }).eq("id", session.user_id);
     await supabase.from("pack_batches").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", batch.id);
     await supabase.from("sessions").update({ state: "canceled", is_active: false, progress_message_id: null, progress_chat_id: null }).eq("id", session.id);
