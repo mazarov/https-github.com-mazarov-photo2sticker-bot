@@ -2610,7 +2610,7 @@ bot.hears(["📦 Сделать пак", "📦 Make a pack"], async (ctx) => {
   // Close any active assistant session to prevent ideas from showing
   const activeAssistant = await getActiveAssistantSession(user.id);
   if (activeAssistant) {
-    await updateAssistantSession(activeAssistant.id, { status: "closed" });
+    await updateAssistantSession(activeAssistant.id, { status: "completed" });
   }
 
   // Get first active template
