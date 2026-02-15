@@ -1,0 +1,38 @@
+# AI Photo Bot (aiphoto/) — Submodule Rules
+
+## Репозиторий
+
+`aiphoto/` — git submodule, **отдельный репо**: `https://github.com/mazarov/aiphoto`
+
+## Правила push (КРИТИЧНО)
+
+### Работа с aiphoto/
+- **Коммиты** делаются ВНУТРИ `aiphoto/` (cd aiphoto && git add && git commit)
+- **Push** ТОЛЬКО в `https://github.com/mazarov/aiphoto` — НЕ в photo2sticker-bot
+- После push aiphoto — обновить ссылку в родительском репо:
+  ```bash
+  cd /Users/azarovmaxim/photo2sticker-bot
+  git add aiphoto
+  git commit -m "chore: update aiphoto submodule ref"
+  git push origin main
+  ```
+
+### Работа с photo2sticker-bot (родитель)
+- **Push** в `https://github.com/mazarov/https-github.com-mazarov-photo2sticker-bot`
+- НЕ пушить код aiphoto сюда
+
+### Если не уверен — СПРОСИ пользователя куда пушить
+
+## Структура проекта aiphoto
+
+Базируется на photo2sticker-bot, но:
+- **Нет** rembg, chromaKey, Pixian, удаления фона
+- **Нет** стикер-специфики (sendSticker, 512x512, WebP, стикерпаки)
+- **Есть** выбор модели, формата (aspect ratio), качества
+- Результат — **фото** (sendPhoto), не стикер
+- Supabase — та же инстанция, таблицы с префиксом `photo_`
+- Dockhost — 3 контейнера (api, worker, support), без rembg
+
+## Документация
+
+Требования: `docs/13-02-aiphoto-new-project.md` (в родительском репо)

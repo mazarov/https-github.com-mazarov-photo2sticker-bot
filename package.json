@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "deploy:test": "bash scripts/deploy-to-test.sh",
     "dev:api": "tsx src/index.ts",
     "dev:worker": "tsx src/worker.ts",
     "dev:test:api": "DOTENV_CONFIG_PATH=.env.test npx tsx src/index.ts",
