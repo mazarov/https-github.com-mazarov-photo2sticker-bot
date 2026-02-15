@@ -292,9 +292,10 @@ ${packTaskBlock}`
   }
   imageParts.push({ inlineData: { mimeType: photoMime, data: photoBase64 } });
 
-  // Call Gemini
+  // Call Gemini (model and output resolution from app_config)
   const model = await getAppConfig("gemini_model_pack", "gemini-2.5-flash-image");
-  console.log("[PackPreview] Using model:", model);
+  const imageSize = await getAppConfig("gemini_image_size_pack", "1K");
+  console.log("[PackPreview] Using model:", model, "imageSize:", imageSize);
 
   let geminiRes;
   try {
@@ -310,7 +311,7 @@ ${packTaskBlock}`
         }],
         generationConfig: {
           responseModalities: ["IMAGE"],
-          imageConfig: { aspectRatio: "1:1" },
+          imageConfig: { aspectRatio: "1:1", imageSize },
         },
       },
       {
