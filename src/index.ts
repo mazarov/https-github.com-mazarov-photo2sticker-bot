@@ -688,6 +688,9 @@ async function sendProgressStart(ctx: any, sessionId: string, lang: string) {
   }
 }
 
+// Shared composition/background rules — same for single sticker and pack (unified prompt flow)
+const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. The COMPLETE character (including all limbs, hands, fingers, elbows, hair) must be fully visible with nothing cropped by image edges.\n3. Leave at least 15% empty space on EVERY side of the character.\n4. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n5. Do NOT add any border, outline, stroke, or contour around the character. Clean raw edges only.`;
+
 async function startGeneration(
   ctx: any,
   user: any,
@@ -706,9 +709,7 @@ async function startGeneration(
 ) {
   const creditsNeeded = 1;
 
-  // Append composition & background suffix to every prompt for better quality
-  const compositionSuffix = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. The COMPLETE character (including all limbs, hands, fingers, elbows, hair) must be fully visible with nothing cropped by image edges.\n3. Leave at least 15% empty space on EVERY side of the character.\n4. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n5. Do NOT add any border, outline, stroke, or contour around the character. Clean raw edges only.`;
-  options.promptFinal = options.promptFinal + compositionSuffix;
+  options.promptFinal = options.promptFinal + COMPOSITION_SUFFIX;
 
   console.log("=== startGeneration ===");
   console.log("user.id:", user?.id);
@@ -2821,8 +2822,7 @@ bot.action("pack_preview_pay", async (ctx) => {
     return;
   }
 
-  // Build pack style prompt through shared prompt_generator agent
-  // so pack flow uses the same style interpretation as assistant/styles flow.
+  // Same prompt as single sticker: agent + composition suffix (unified flow)
   let packPromptFinal: string | null = null;
   let packStyleUserInput: string | null = null;
   if (session.selected_style_id) {
@@ -2830,10 +2830,11 @@ bot.action("pack_preview_pay", async (ctx) => {
     if (preset?.prompt_hint) {
       packStyleUserInput = preset.prompt_hint;
       const promptResult = await generatePrompt(packStyleUserInput);
-      packPromptFinal =
+      const stylePart =
         promptResult.ok && !promptResult.retry
           ? (promptResult.prompt || packStyleUserInput)
           : packStyleUserInput;
+      packPromptFinal = stylePart + COMPOSITION_SUFFIX;
     }
   }
 
@@ -3118,6 +3119,27 @@ bot.action("pack_regenerate", async (ctx) => {
       batchId: session.pack_batch_id,
     },
   }).catch(console.error);
+});
+
+// Callback: pack_back — from preview back to style selection (no cancel)
+bot.action("pack_back", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session || session.state !== "wait_pack_approval") return;
+
+  await supabase
+    .from("sessions")
+    .update({ state: "wait_pack_preview_payment", is_active: true })
+    .eq("id", session.id);
+  try { await ctx.deleteMessage(); } catch {}
+  await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
 });
 
 // Callback: pack_cancel — user cancels pack
