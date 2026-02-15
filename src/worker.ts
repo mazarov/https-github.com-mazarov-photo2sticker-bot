@@ -9,6 +9,7 @@ import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
+import { addWhiteBorder, addTextToSticker } from "./lib/image-utils";
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
@@ -580,7 +581,7 @@ async function runPackAssembleJob(job: any) {
   // Update progress: adding labels
   await updatePackProgress(await getText(lang, "pack.progress_finishing"));
 
-  // Process each cell: trim, resize, white border via Pixian clean output, overlay text
+  // Process each cell: white border (same as single sticker), then label via addTextToSticker
   const labels: string[] = (lang === "ru" ? template.labels : (template.labels_en || template.labels)) || [];
   const stickerBuffers: Buffer[] = [];
 
@@ -589,43 +590,14 @@ async function runPackAssembleJob(job: any) {
     if (!cellBuf) continue;
 
     try {
-      // Trim → resize to 512x512 → WebP
-      let processed = await sharp(cellBuf)
-        .trim({ threshold: 2 })
-        .resize(512, 512, {
-          fit: "contain",
-          background: { r: 0, g: 0, b: 0, alpha: 0 },
-        })
-        .png()
-        .toBuffer();
-
-      // Overlay text label if available
-      const label = labels[i] || "";
+      // 1) White border programmatically (same as single-sticker toggle_border)
+      let processed = await addWhiteBorder(cellBuf);
+      // 2) Label overlay via addTextToSticker (same font/badge as "add text" for single sticker)
+      const label = (labels[i] || "").trim();
       if (label) {
-        const escapedLabel = label
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
-        const svgText = `<svg width="512" height="512">
-  <defs>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.7"/>
-    </filter>
-  </defs>
-  <text x="256" y="480" text-anchor="middle" font-size="36" font-weight="bold" fill="white" filter="url(#shadow)" font-family="Arial, Helvetica, sans-serif">${escapedLabel}</text>
-</svg>`;
-        processed = await sharp(processed)
-          .composite([{ input: Buffer.from(svgText), top: 0, left: 0 }])
-          .png()
-          .toBuffer();
+        processed = await addTextToSticker(processed, label, "bottom");
       }
-
-      // Final WebP
-      const webpBuf = await sharp(processed)
-        .webp({ quality: 95 })
-        .toBuffer();
-
-      stickerBuffers.push(webpBuf);
+      stickerBuffers.push(processed);
     } catch (procErr: any) {
       console.error(`[PackAssemble] Error processing cell ${i}:`, procErr.message);
     }
