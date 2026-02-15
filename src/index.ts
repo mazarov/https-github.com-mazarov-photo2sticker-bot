@@ -2649,6 +2649,7 @@ async function sendPackStyleSelectionStep(ctx: any, lang: string, selectedStyleI
   return sendStyleKeyboardFlat(ctx, lang, messageId, {
     includeCustom: false,
     headerText: `${previewOffer}\n\n${stylePrompt}`,
+    selectedStyleId: selectedStyleId ?? undefined,
     extraButtons: [
       [{ text: previewBtn, callback_data: "pack_preview_pay" }],
       [{ text: cancelBtn, callback_data: "pack_cancel" }],
@@ -4131,7 +4132,8 @@ bot.action(/^style_v2:(.+)$/, async (ctx) => {
 
     const lang = user.lang || "en";
     const session = await getActiveSession(user.id);
-    if (!session?.id || session.state !== "wait_style") return;
+    if (!session?.id) return;
+    if (session.state !== "wait_style" && session.state !== "wait_pack_preview_payment") return;
 
     const styleId = ctx.match[1];
     console.log("[Styles v2] Substyle selected:", styleId);
