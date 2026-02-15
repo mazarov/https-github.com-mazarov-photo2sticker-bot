@@ -2888,17 +2888,26 @@ bot.action("pack_preview_pay", async (ctx) => {
     return;
   }
 
-  // Update session
-  await supabase
+  // Update session (must set prompt_final so worker uses correct style)
+  const sessionUpdate = {
+    state: "generating_pack_preview",
+    pack_batch_id: batch.id,
+    prompt_final: packPromptFinal,
+    user_input: packStyleUserInput,
+    is_active: true,
+  };
+  const { error: updateErr } = await supabase
     .from("sessions")
-    .update({
-      state: "generating_pack_preview",
-      pack_batch_id: batch.id,
-      prompt_final: packPromptFinal,
-      user_input: packStyleUserInput,
-      is_active: true,
-    })
+    .update(sessionUpdate)
     .eq("id", session.id);
+  if (updateErr) {
+    console.error("[pack_preview_pay] Session update failed:", updateErr.message);
+    const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
+    await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    return;
+  }
+  console.log("[pack_preview_pay] session.prompt_final saved, length:", (packPromptFinal || "").length, "preview:", (packPromptFinal || "").slice(0, 120));
 
   // Enqueue pack_preview job
   await supabase.from("jobs").insert({
