@@ -4,7 +4,7 @@ import FormData from "form-data";
 import sharp from "sharp";
 import { config } from "./config";
 import { supabase } from "./lib/supabase";
-import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage } from "./lib/telegram";
+import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
@@ -42,6 +42,22 @@ async function retryWithBackoff<T>(
 
 const WORKER_ID = `${os.hostname()}-${process.pid}-${Date.now()}`;
 console.log(`Worker started: ${WORKER_ID}`);
+
+let workerBotUsernameCache: string | null = null;
+async function getWorkerBotUsername(): Promise<string> {
+  if (workerBotUsernameCache) return workerBotUsernameCache;
+  try {
+    const me = await getMe();
+    if (me?.username) {
+      workerBotUsernameCache = me.username;
+      return workerBotUsernameCache;
+    }
+  } catch (e: any) {
+    console.warn("[Worker] getMe failed, fallback to BOT_USERNAME:", e.message);
+  }
+  workerBotUsernameCache = config.botUsername || "sticq_bot";
+  return workerBotUsernameCache;
+}
 
 /**
  * Call rembg HTTP API to remove background.
@@ -605,7 +621,7 @@ async function runPackAssembleJob(job: any) {
   // - only [a-z0-9_]
   // - must end with `_by_<bot_username>`
   // - max length 64 chars
-  const rawBotUsername = (config.botUsername || "sticq_bot").toLowerCase();
+  const rawBotUsername = (await getWorkerBotUsername()).toLowerCase();
   const normalizedBotUsername = rawBotUsername.replace(/^@/, "").replace(/[^a-z0-9_]/g, "") || "sticq_bot";
   const suffix = `_by_${normalizedBotUsername}`;
   const rawPrefix = `p2s_pack_${String(telegramId)}_${Math.floor(Date.now() / 1000)}`.toLowerCase().replace(/[^a-z0-9_]/g, "");
