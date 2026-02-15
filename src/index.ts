@@ -2820,6 +2820,22 @@ bot.action("pack_preview_pay", async (ctx) => {
     return;
   }
 
+  // Build pack style prompt through shared prompt_generator agent
+  // so pack flow uses the same style interpretation as assistant/styles flow.
+  let packPromptFinal: string | null = null;
+  let packStyleUserInput: string | null = null;
+  if (session.selected_style_id) {
+    const preset = await getStylePresetV2ById(session.selected_style_id);
+    if (preset?.prompt_hint) {
+      packStyleUserInput = preset.prompt_hint;
+      const promptResult = await generatePrompt(packStyleUserInput);
+      packPromptFinal =
+        promptResult.ok && !promptResult.retry
+          ? (promptResult.prompt || packStyleUserInput)
+          : packStyleUserInput;
+    }
+  }
+
   // Load template to get sticker_count
   const { data: packTemplate } = await supabase
     .from("pack_templates")
@@ -2877,6 +2893,8 @@ bot.action("pack_preview_pay", async (ctx) => {
     .update({
       state: "generating_pack_preview",
       pack_batch_id: batch.id,
+      prompt_final: packPromptFinal,
+      user_input: packStyleUserInput,
       is_active: true,
     })
     .eq("id", session.id);
