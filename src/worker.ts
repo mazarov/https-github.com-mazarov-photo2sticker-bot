@@ -598,9 +598,18 @@ async function runPackAssembleJob(job: any) {
   // Update progress: creating sticker set
   await updatePackProgress(await getText(lang, "pack.progress_assembling_set"));
 
-  // Create Telegram sticker set
-  const botUsername = config.botUsername || "sticq_bot";
-  const setName = `p2s_pack_${telegramId}_${Date.now()}_by_${botUsername}`.toLowerCase();
+  // Create Telegram sticker set name according to Bot API constraints:
+  // - only [a-z0-9_]
+  // - must end with `_by_<bot_username>`
+  // - max length 64 chars
+  const rawBotUsername = (config.botUsername || "sticq_bot").toLowerCase();
+  const normalizedBotUsername = rawBotUsername.replace(/^@/, "").replace(/[^a-z0-9_]/g, "") || "sticq_bot";
+  const suffix = `_by_${normalizedBotUsername}`;
+  const rawPrefix = `p2s_pack_${String(telegramId)}_${Math.floor(Date.now() / 1000)}`.toLowerCase().replace(/[^a-z0-9_]/g, "");
+  const maxPrefixLen = Math.max(1, 64 - suffix.length);
+  const prefix = rawPrefix.slice(0, maxPrefixLen);
+  const setName = `${prefix}${suffix}`;
+  console.log("[PackAssemble] Sticker set name:", setName, "len:", setName.length);
   const packTitle = lang === "ru" ? `${template.name_ru} — Stickers` : `${template.name_en} — Stickers`;
 
   try {
