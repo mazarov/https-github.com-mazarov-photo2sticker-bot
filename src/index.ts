@@ -2182,6 +2182,13 @@ bot.on("photo", async (ctx) => {
     console.log("last_photo_file_id updated for user:", user.id);
   }
 
+  // Reactivate pack sessions found via fallback (is_active may be false)
+  if (session.state === "wait_pack_photo" && !session.is_active) {
+    console.log("Pack photo: reactivating fallback session:", session.id);
+    await supabase.from("sessions").update({ is_active: true }).eq("id", session.id);
+    session.is_active = true;
+  }
+
   // === AI Assistant: re-route to assistant_wait_photo if assistant is active after generation ===
   // Skip re-route for pack flow states — pack handles photos independently
   if (!session.state?.startsWith("assistant_") && !session.state?.startsWith("wait_pack_") && !["processing", "processing_emotion", "processing_motion", "processing_text", "generating_pack_preview", "processing_pack"].includes(session.state)) {
@@ -2677,9 +2684,9 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
     return;
   }
 
-  // Check if user already has a photo from current/recent session
+  // Check if user already has a photo (session or user-level last_photo)
   const existingSession = await getActiveSession(user.id);
-  const existingPhoto = existingSession?.current_photo_file_id || null;
+  const existingPhoto = existingSession?.current_photo_file_id || user.last_photo_file_id || null;
 
   // Deactivate old sessions
   await supabase
