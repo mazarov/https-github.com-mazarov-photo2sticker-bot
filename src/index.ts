@@ -2607,6 +2607,12 @@ bot.hears(["📦 Сделать пак", "📦 Make a pack"], async (ctx) => {
   }
   const lang = user.lang || "en";
 
+  // Close any active assistant session to prevent ideas from showing
+  const activeAssistant = await getActiveAssistantSession(user.id);
+  if (activeAssistant) {
+    await updateAssistantSession(activeAssistant.id, { status: "closed" });
+  }
+
   // Get first active template
   const { data: template } = await supabase
     .from("pack_templates")

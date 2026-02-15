@@ -271,7 +271,7 @@ CRITICAL RULES:
   imageParts.push({ inlineData: { mimeType: photoMime, data: photoBase64 } });
 
   // Call Gemini
-  const model = await getAppConfig("gemini_model_pack", "gemini-2.5-flash-preview-04-17");
+  const model = await getAppConfig("gemini_model_pack", "gemini-2.5-flash-image");
 
   let geminiRes;
   try {
