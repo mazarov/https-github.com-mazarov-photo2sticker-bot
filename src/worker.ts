@@ -392,22 +392,39 @@ ${packTaskBlock}`
   const sheetBuffer = Buffer.from(imageBase64, "base64");
   console.log("[PackPreview] Sheet generated, size:", Math.round(sheetBuffer.length / 1024), "KB");
 
-  // One rembg on full sheet: user sees preview without chroma key; assemble will skip per-cell rembg
+  // One BG removal on full sheet (respects bg_removal_primary): user sees preview without chroma key
   const rembgUrl = process.env.REMBG_URL;
   const sheetSizeKb = Math.round(sheetBuffer.length / 1024);
+  const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
+  const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
   let bufferToSend = sheetBuffer;
   let sheetCleaned = false;
-  if (rembgUrl) {
-    const cleanedBuffer = await callRembg(sheetBuffer, rembgUrl, sheetSizeKb);
-    if (cleanedBuffer) {
-      bufferToSend = cleanedBuffer;
-      sheetCleaned = true;
-      console.log("[PackPreview] Sheet background removed (one rembg), size:", Math.round(cleanedBuffer.length / 1024), "KB");
-    } else {
-      console.log("[PackPreview] rembg failed, sending raw sheet; assemble will do per-cell rembg");
+  let cleanedBuffer: Buffer | undefined;
+  if (bgPrimary === "pixian") {
+    console.log("[PackPreview] BG primary: pixian (full sheet)");
+    cleanedBuffer = await callPixian(sheetBuffer, sheetSizeKb);
+    if (!cleanedBuffer && rembgUrl) {
+      console.log("[PackPreview] Pixian failed, fallback to rembg");
+      cleanedBuffer = await callRembg(sheetBuffer, rembgUrl, sheetSizeKb);
     }
   } else {
-    console.log("[PackPreview] REMBG_URL not set, sending raw sheet; assemble will do per-cell rembg");
+    if (!rembgUrl) {
+      console.log("[PackPreview] REMBG_URL not set, sending raw sheet; assemble will do per-cell rembg");
+    } else {
+      console.log("[PackPreview] BG primary: rembg (full sheet)");
+      cleanedBuffer = await callRembg(sheetBuffer, rembgUrl, sheetSizeKb);
+      if (!cleanedBuffer) {
+        console.log("[PackPreview] rembg failed, fallback to Pixian");
+        cleanedBuffer = await callPixian(sheetBuffer, sheetSizeKb);
+      }
+    }
+  }
+  if (cleanedBuffer) {
+    bufferToSend = cleanedBuffer;
+    sheetCleaned = true;
+    console.log("[PackPreview] Sheet background removed (one pass), size:", Math.round(cleanedBuffer.length / 1024), "KB");
+  } else {
+    console.log("[PackPreview] BG removal failed, sending raw sheet; assemble will do per-cell rembg");
   }
 
   // Clear progress message
