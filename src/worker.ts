@@ -294,6 +294,7 @@ ${packTaskBlock}`
 
   // Call Gemini
   const model = await getAppConfig("gemini_model_pack", "gemini-2.5-flash-image");
+  console.log("[PackPreview] Using model:", model);
 
   let geminiRes;
   try {
