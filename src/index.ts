@@ -3926,7 +3926,6 @@ bot.action(/^style_carousel_pick:(.+)$/, async (ctx) => {
 
     const lang = user.lang || "en";
     const session = await getActiveSession(user.id);
-    const session = await getActiveSession(user.id);
     if (!session?.id || !["wait_style", "wait_pack_preview_payment"].includes(session.state)) return;
 
     const styleId = ctx.match[1];
@@ -3978,6 +3977,7 @@ bot.action(/^style_carousel_next:(\d+):(.*)$/, async (ctx) => {
     const user = await getUser(telegramId);
     if (!user?.id) return;
     const lang = user.lang || "en";
+    const session = await getActiveSession(user.id);
 
     const nextPage = parseInt(ctx.match[1], 10);
     const stickerMsgIds = ctx.match[2].split(",").filter(Boolean).map(Number);
