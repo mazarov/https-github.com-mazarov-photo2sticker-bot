@@ -2723,6 +2723,14 @@ bot.action("pack_preview_pay", async (ctx) => {
     return;
   }
 
+  // Load template to get sticker_count
+  const { data: packTemplate } = await supabase
+    .from("pack_templates")
+    .select("sticker_count")
+    .eq("id", session.pack_template_id)
+    .maybeSingle();
+  const packSize = packTemplate?.sticker_count || 4;
+
   // Check credits
   if ((user.credits || 0) < 1) {
     await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
@@ -2749,7 +2757,7 @@ bot.action("pack_preview_pay", async (ctx) => {
       session_id: session.id,
       user_id: user.id,
       template_id: session.pack_template_id,
-      size: 4, // will be read from template
+      size: packSize,
       status: "preview",
       credits_spent: 1,
       env: config.appEnv,

@@ -184,8 +184,29 @@ async function runPackPreviewJob(job: any) {
 
   const filePath = await getFilePath(photoFileId);
   const photoBuffer = await downloadFile(filePath);
-  const base64 = photoBuffer.toString("base64");
-  const mimeType = filePath.endsWith(".png") ? "image/png" : "image/jpeg";
+  const photoBase64 = photoBuffer.toString("base64");
+  const photoMime = filePath.endsWith(".png") ? "image/png" : "image/jpeg";
+
+  // Download collage/style reference image if available
+  let collageBase64: string | null = null;
+  let collageMime = "image/png";
+  if (template.collage_file_id || template.collage_url) {
+    try {
+      let collageBuf: Buffer;
+      if (template.collage_file_id) {
+        const collagePath = await getFilePath(template.collage_file_id);
+        collageBuf = await downloadFile(collagePath);
+      } else {
+        const resp = await axios.get(template.collage_url, { responseType: "arraybuffer", timeout: 15000 });
+        collageBuf = Buffer.from(resp.data);
+      }
+      collageBase64 = collageBuf.toString("base64");
+      collageMime = template.collage_url?.endsWith(".png") ? "image/png" : "image/jpeg";
+      console.log("[PackPreview] Collage loaded, size:", Math.round(collageBuf.length / 1024), "KB");
+    } catch (collageErr: any) {
+      console.warn("[PackPreview] Failed to load collage, proceeding without:", collageErr.message);
+    }
+  }
 
   // Build prompt
   const stickerCount = template.sticker_count || 4;
@@ -196,7 +217,33 @@ async function runPackPreviewJob(job: any) {
     .map((desc: string, i: number) => `${i + 1}. ${desc}`)
     .join("\n");
 
-  const prompt = `Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total).
+  const hasCollage = !!collageBase64;
+  const prompt = hasCollage
+    ? `[REFERENCE STYLE]
+The first image is a reference sticker pack. Match the exact visual style:
+rendering technique, white outline, proportions, color palette, overall vibe.
+
+[STYLE DESCRIPTION]
+${template.style_prompt_base}
+
+[TASK]
+Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total) of the person(s) from the photo.
+Each cell = ONE sticker with a SPECIFIC scene:
+
+${sceneList}
+
+[FORMAT RULES]
+- Grid: exactly ${rows} rows × ${cols} columns, equal cell size
+- Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF) in EVERY cell
+- NO text drawn on the image — text will be added programmatically
+- Each sticker: character(s) with white outline/border
+- Characters clearly recognizable from the reference photo
+- Each sticker self-contained within its cell
+- Clear separation between cells
+- Leave at least 10% padding in each cell around the character
+- Style must be IDENTICAL across all cells
+- No watermarks, no text, no labels on the image`
+    : `Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total).
 
 Each cell is one sticker with a DISTINCT pose/emotion from the list below.
 The character(s) must look EXACTLY like the person(s) in the reference photo.
@@ -214,7 +261,14 @@ CRITICAL RULES:
 5. Style must be IDENTICAL across all cells — same art style, proportions, colors.
 6. Do NOT add any text, labels, or captions to the stickers.`;
 
-  console.log("[PackPreview] Prompt:", prompt.substring(0, 200));
+  console.log("[PackPreview] Prompt:", prompt.substring(0, 200), hasCollage ? "(with collage ref)" : "(no collage)");
+
+  // Build image parts for Gemini
+  const imageParts: any[] = [];
+  if (collageBase64) {
+    imageParts.push({ inlineData: { mimeType: collageMime, data: collageBase64 } });
+  }
+  imageParts.push({ inlineData: { mimeType: photoMime, data: photoBase64 } });
 
   // Call Gemini
   const model = await getAppConfig("gemini_model_pack", "gemini-2.5-flash-preview-04-17");
@@ -228,7 +282,7 @@ CRITICAL RULES:
           role: "user",
           parts: [
             { text: prompt },
-            { inlineData: { mimeType, data: base64 } },
+            ...imageParts,
           ],
         }],
         generationConfig: {
