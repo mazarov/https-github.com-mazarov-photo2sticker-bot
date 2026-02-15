@@ -516,12 +516,17 @@ async function runPackAssembleJob(job: any) {
   // Update progress: removing background
   await updatePackProgress(await getText(lang, "pack.progress_removing_bg"));
 
-  // Parallel Pixian background removal for all cells
+  const rembgUrl = process.env.REMBG_URL;
+  if (!rembgUrl) {
+    console.warn("[PackAssemble] REMBG_URL is not configured; pack background removal will fail");
+  }
+
+  // Parallel rembg background removal for all cells
   const noBgCells: (Buffer | null)[] = await Promise.all(
     cells.map(async (cellBuf, i) => {
       const sizeKb = Math.round(cellBuf.length / 1024);
-      console.log(`[PackAssemble] Pixian cell ${i + 1}/${cells.length} (${sizeKb} KB)`);
-      const result = await callPixian(cellBuf, sizeKb);
+      console.log(`[PackAssemble] rembg cell ${i + 1}/${cells.length} (${sizeKb} KB)`);
+      const result = await callRembg(cellBuf, rembgUrl, sizeKb);
       return result || null;
     })
   );
