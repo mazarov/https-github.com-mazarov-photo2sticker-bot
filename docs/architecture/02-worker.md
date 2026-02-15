@@ -124,7 +124,10 @@ flowchart TD
 
 - `runPackAssembleJob`:
   - скачивает `pack_sheet_file_id`, режет на ячейки
-  - удаление фона для пака: **rembg-only**
+  - удаление фона для пака: **конфигурируемо через app_config**
+    - ключ: `bg_removal_primary` (prod) / `bg_removal_primary_test` (test)
+    - значения: `rembg` или `pixian`
+    - fallback: если primary упал, используется второй провайдер
   - накладывает labels (`pack_templates.labels` / `labels_en`)
   - собирает Telegram sticker set (`createNewStickerSet` + `addStickerToSet`)
 

@@ -548,16 +548,35 @@ async function runPackAssembleJob(job: any) {
   await updatePackProgress(await getText(lang, "pack.progress_removing_bg"));
 
   const rembgUrl = process.env.REMBG_URL;
-  if (!rembgUrl) {
-    console.warn("[PackAssemble] REMBG_URL is not configured; pack background removal will fail");
+  const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
+  const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
+  console.log(`[PackAssemble] BG primary service: ${bgPrimary}`);
+  if (!rembgUrl && bgPrimary !== "pixian") {
+    console.warn("[PackAssemble] REMBG_URL is not configured; rembg primary may fail");
   }
 
-  // Parallel rembg background removal for all cells
+  // Parallel background removal for all cells (configurable via app_config)
   const noBgCells: (Buffer | null)[] = await Promise.all(
     cells.map(async (cellBuf, i) => {
       const sizeKb = Math.round(cellBuf.length / 1024);
-      console.log(`[PackAssemble] rembg cell ${i + 1}/${cells.length} (${sizeKb} KB)`);
-      const result = await callRembg(cellBuf, rembgUrl, sizeKb);
+      let result: Buffer | undefined;
+
+      if (bgPrimary === "pixian") {
+        console.log(`[PackAssemble] Pixian cell ${i + 1}/${cells.length} (${sizeKb} KB)`);
+        result = await callPixian(cellBuf, sizeKb);
+        if (!result) {
+          console.log(`[PackAssemble] Pixian failed for cell ${i + 1}, fallback to rembg`);
+          result = await callRembg(cellBuf, rembgUrl, sizeKb);
+        }
+      } else {
+        console.log(`[PackAssemble] rembg cell ${i + 1}/${cells.length} (${sizeKb} KB)`);
+        result = await callRembg(cellBuf, rembgUrl, sizeKb);
+        if (!result) {
+          console.log(`[PackAssemble] rembg failed for cell ${i + 1}, fallback to Pixian`);
+          result = await callPixian(cellBuf, sizeKb);
+        }
+      }
+
       return result || null;
     })
   );
