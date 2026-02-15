@@ -194,6 +194,23 @@ async function runPackPreviewJob(job: any) {
     .maybeSingle();
   if (!template) throw new Error("Pack template not found");
 
+  // Optional style preset from style_presets_v2 selected in pack flow
+  let selectedStyleHint = "";
+  let selectedStyleName = "";
+  if (session.selected_style_id) {
+    const { data: stylePreset } = await supabase
+      .from("style_presets_v2")
+      .select("id,name_ru,name_en,prompt_hint,is_active")
+      .eq("id", session.selected_style_id)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (stylePreset) {
+      selectedStyleHint = stylePreset.prompt_hint || "";
+      selectedStyleName = lang === "ru" ? stylePreset.name_ru : stylePreset.name_en;
+      console.log("[PackPreview] Using selected style preset:", stylePreset.id, selectedStyleName);
+    }
+  }
+
   // Download user photo
   const photoFileId = session.current_photo_file_id;
   if (!photoFileId) throw new Error("No photo in session");
@@ -232,6 +249,16 @@ async function runPackPreviewJob(job: any) {
   const sceneList = sceneDescriptions
     .map((desc: string, i: number) => `${i + 1}. ${desc}`)
     .join("\n");
+  const stylePresetBlock = selectedStyleHint
+    ? `\n[SELECTED STYLE PRESET]\n${selectedStyleHint}\n`
+    : "";
+  const identityBlock = `
+[IDENTITY PRESERVATION]
+- Keep EXACT facial identity from the user photo (eyes, nose, mouth, face shape, hairline).
+- Do not redesign or replace the person with a generic character.
+- Preserve key personal features and age impression.
+- Stylize gently: identity first, style second.
+`;
 
   const hasCollage = !!collageBase64;
   const prompt = hasCollage
@@ -241,6 +268,8 @@ rendering technique, white outline, proportions, color palette, overall vibe.
 
 [STYLE DESCRIPTION]
 ${template.style_prompt_base}
+${stylePresetBlock}
+${identityBlock}
 
 [TASK]
 Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total) of the person(s) from the photo.
@@ -265,6 +294,8 @@ Each cell is one sticker with a DISTINCT pose/emotion from the list below.
 The character(s) must look EXACTLY like the person(s) in the reference photo.
 
 ${template.style_prompt_base}
+${stylePresetBlock}
+${identityBlock}
 
 Scenes (one per cell, left-to-right, top-to-bottom):
 ${sceneList}

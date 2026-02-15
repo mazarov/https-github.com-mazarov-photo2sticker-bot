@@ -114,6 +114,20 @@ flowchart TD
 - Нотификация в алерт-канал (новый стикер)
 - Инкремент `total_generations` у пользователя
 
+## Pack flow в Worker (preview + assemble)
+
+- `runPackPreviewJob`:
+  - берёт `pack_templates.scene_descriptions` и `style_prompt_base`
+  - добавляет выбранный пользователем `sessions.selected_style_id` (`style_presets_v2.prompt_hint`) в промпт
+  - включает блок `identity preservation` (сохранение facial identity)
+  - генерирует лист NxN и сохраняет `pack_sheet_file_id`
+
+- `runPackAssembleJob`:
+  - скачивает `pack_sheet_file_id`, режет на ячейки
+  - удаление фона для пака: **rembg-only**
+  - накладывает labels (`pack_templates.labels` / `labels_en`)
+  - собирает Telegram sticker set (`createNewStickerSet` + `addStickerToSet`)
+
 ## Цепочка генерации (бизнес-логика)
 
 ```

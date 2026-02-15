@@ -2451,15 +2451,12 @@ bot.on("photo", async (ctx) => {
       })
       .eq("id", session.id);
 
-    // Send confirmation + preview offer with inline button
-    const previewBtn = await getText(lang, "btn.preview_pack");
-    const cancelBtn = await getText(lang, "btn.cancel_pack");
-    await ctx.reply(await getText(lang, "pack.preview_offer"), {
+    // Send style selector + preview offer
+    const keyboard = await buildPackStylePreviewKeyboard(lang, session.selected_style_id);
+    const stylePrompt = await getPackStylePrompt(lang, session.selected_style_id);
+    await ctx.reply(`${await getText(lang, "pack.preview_offer")}\n\n${stylePrompt}`, {
       reply_markup: {
-        inline_keyboard: [
-          [{ text: previewBtn, callback_data: "pack_preview_pay" }],
-          [{ text: cancelBtn, callback_data: "pack_cancel" }],
-        ],
+        inline_keyboard: keyboard,
       },
     });
     return;
@@ -2618,6 +2615,46 @@ bot.hears(["❓ Помощь", "❓ Help"], async (ctx) => {
 // "Сделать пак" flow
 // ============================================
 
+async function buildPackStylePreviewKeyboard(lang: string, selectedStyleId?: string | null) {
+  const allPresets = await getStylePresetsV2();
+  const activePresets = allPresets.filter(p => p.is_active).slice(0, 8);
+  const previewBtn = await getText(lang, "btn.preview_pack");
+  const cancelBtn = await getText(lang, "btn.cancel_pack");
+
+  const styleButtons = activePresets.map((preset) => {
+    const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
+    const selected = preset.id === selectedStyleId;
+    return {
+      text: `${selected ? "✅ " : ""}${preset.emoji} ${styleName}`,
+      callback_data: `pack_style:${preset.id}`,
+    };
+  });
+
+  const styleRows: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (let i = 0; i < styleButtons.length; i += 2) {
+    styleRows.push(styleButtons.slice(i, i + 2));
+  }
+
+  return [
+    ...styleRows,
+    [{ text: previewBtn, callback_data: "pack_preview_pay" }],
+    [{ text: cancelBtn, callback_data: "pack_cancel" }],
+  ];
+}
+
+async function getPackStylePrompt(lang: string, selectedStyleId?: string | null) {
+  if (!selectedStyleId) {
+    return lang === "ru"
+      ? "Выбери стиль пака и нажми «Посмотреть превью»"
+      : "Choose a pack style and tap “See preview”";
+  }
+  const preset = await getStylePresetV2ById(selectedStyleId);
+  const styleName = preset ? (lang === "ru" ? preset.name_ru : preset.name_en) : selectedStyleId;
+  return lang === "ru"
+    ? `Выбери стиль пака и нажми «Посмотреть превью»\nТекущий стиль: ${styleName}`
+    : `Choose a pack style and tap “See preview”\nCurrent style: ${styleName}`;
+}
+
 // Menu: 📦 Сделать пак / Make a pack — show template CTA screen
 bot.hears(["📦 Сделать пак", "📦 Make a pack"], async (ctx) => {
   const telegramId = ctx.from?.id;
@@ -2726,6 +2763,15 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
     .eq("is_active", true)
     .eq("env", config.appEnv);
 
+  // Pick default style from style_presets_v2 for pack preview
+  let selectedPackStyleId: string | null = null;
+  try {
+    const defaultPackStyle = await pickStyleForIdeas(user);
+    selectedPackStyleId = defaultPackStyle?.id || null;
+  } catch (e: any) {
+    console.warn("Pack style preselect failed:", e.message);
+  }
+
   // Create new session for pack flow
   const initialState = existingPhoto ? "wait_pack_preview_payment" : "wait_pack_photo";
   const { data: session, error: sessErr } = await supabase
@@ -2735,6 +2781,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
       state: initialState,
       is_active: true,
       pack_template_id: templateId,
+      selected_style_id: selectedPackStyleId,
       current_photo_file_id: existingPhoto,
       photos: existingPhoto ? [existingPhoto] : [],
       env: config.appEnv,
@@ -2749,21 +2796,54 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
   }
 
   if (existingPhoto) {
-    // Photo already available — skip to preview payment
-    const previewBtn = await getText(lang, "btn.preview_pack");
-    const cancelBtn = await getText(lang, "btn.cancel_pack");
-    await ctx.reply(await getText(lang, "pack.preview_offer"), {
+    // Photo already available — skip to style selection + preview payment
+    const keyboard = await buildPackStylePreviewKeyboard(lang, session.selected_style_id);
+    const stylePrompt = await getPackStylePrompt(lang, session.selected_style_id);
+    await ctx.reply(`${await getText(lang, "pack.preview_offer")}\n\n${stylePrompt}`, {
       reply_markup: {
-        inline_keyboard: [
-          [{ text: previewBtn, callback_data: "pack_preview_pay" }],
-          [{ text: cancelBtn, callback_data: "pack_cancel" }],
-        ],
+        inline_keyboard: keyboard,
       },
     });
   } else {
     // No photo — ask user to send one
     await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
   }
+});
+
+// Callback: pack_style — choose style preset for pack preview generation
+bot.action(/^pack_style:(.+)$/, async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session || session.state !== "wait_pack_preview_payment") {
+    await ctx.answerCbQuery(lang === "ru" ? "Сессия неактуальна" : "Session is not active");
+    return;
+  }
+
+  const styleId = ctx.match[1];
+  const preset = await getStylePresetV2ById(styleId);
+  if (!preset || !preset.is_active) {
+    await ctx.answerCbQuery(lang === "ru" ? "Стиль недоступен" : "Style is unavailable");
+    return;
+  }
+
+  await supabase
+    .from("sessions")
+    .update({ selected_style_id: styleId, is_active: true })
+    .eq("id", session.id);
+
+  const keyboard = await buildPackStylePreviewKeyboard(lang, styleId);
+  try {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: keyboard });
+  } catch {}
+
+  const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
+  await ctx.answerCbQuery(lang === "ru" ? `Стиль: ${styleName}` : `Style: ${styleName}`);
 });
 
 // Callback: pack_preview_pay — user pays 1 credit for preview
