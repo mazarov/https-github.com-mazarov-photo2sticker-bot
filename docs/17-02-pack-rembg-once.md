@@ -4,6 +4,8 @@
 **Проект:** photo2sticker-bot  
 **Связано:** [15-02-pack-flow-requirements.md](15-02-pack-flow-requirements.md)
 
+**Статус: отменено (17.02.2026).** Реализацию убрали: превью снова отправляет сырую сетку (с ресайзом при >10 MB), сборка пака — поячейковый rembg/Pixian по-прежнему. Документ оставлен как описание идеи на будущее.
+
 ---
 
 ## 1. Суть идеи
@@ -53,10 +55,10 @@
 
 ---
 
-## 6. Реализация (17.02.2026)
+## 6. Реализация (17.02.2026) — откат
 
-- **Миграция:** `sql/079_pack_sheet_cleaned.sql` — в `sessions` добавлено поле `pack_sheet_cleaned` (boolean, default false).
-- **Превью (worker runPackPreviewJob):** после получения сетки от Gemini вызывается один проход BG removal (rembg или Pixian по `bg_removal_primary` / `bg_removal_primary_test`) на весь лист. При успехе пользователю отправляется очищенное изображение, в сессию пишется `pack_sheet_file_id` и `pack_sheet_cleaned: true`. Очищенный PNG дополнительно загружается в Supabase Storage (`pack_sheets/<batch_id>.png`), путь сохраняется в `pack_batches.cleaned_sheet_storage_path`. При ошибке rembg/Pixian отправляется сырая сетка, `pack_sheet_cleaned: false` — при сборке выполняется поячейковый rembg.
-- **Сборка (worker runPackAssembleJob):** если у batch задан `cleaned_sheet_storage_path`, лист скачивается из Storage (сохраняется прозрачность). Иначе — скачивание по `pack_sheet_file_id` из Telegram. Если `session.pack_sheet_cleaned === true`, rembg по ячейкам не вызывается; иначе — прежняя логика (rembg/Pixian по каждой ячейке).
-- **Регенерация превью (index pack_regenerate):** при сбросе `pack_sheet_file_id` также выставляется `pack_sheet_cleaned: false`.
-- **Миграция:** `sql/080_pack_cleaned_sheet_storage.sql` — в `pack_batches` добавлено поле `cleaned_sheet_storage_path` (text, путь в Storage для очищенного листа).
+Идея была реализована, затем **откачена**. Текущее поведение:
+
+- **Превью:** отправляется сырая сетка от Gemini (с ресайзом при размере >10 MB под лимит Telegram). `pack_sheet_cleaned` всегда false.
+- **Сборка:** лист всегда скачивается по `pack_sheet_file_id` из Telegram, для каждой ячейки выполняется rembg/Pixian (как раньше).
+- Миграции 079 и 080 в БД остаются (колонки не мешают); код их не использует для логики «один rembg + Storage».

@@ -15,30 +15,24 @@ async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-/** Telegram sendPhoto limit: 10 MB */
+/** Telegram sendPhoto limit: 10 MB. Resize pack preview if over limit. */
 const TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 
-/** Preview for Telegram only: aggressive shrink (max 1536px) + PNG compression. Full-quality original stays in Storage for pack assembly. */
-async function makePackPreviewForTelegram(buffer: Buffer): Promise<Buffer> {
+async function resizeBufferUnderMax(buffer: Buffer, maxBytes: number): Promise<Buffer> {
+  if (buffer.length <= maxBytes) return buffer;
   const meta = await sharp(buffer).metadata();
   const w = meta.width || 1024;
   const h = meta.height || 1024;
-  const maxDim = 1536; // preview is for viewing only
-  const scale = Math.min(maxDim / w, maxDim / h, 1);
-  const outW = Math.round(w * scale);
-  const outH = Math.round(h * scale);
-  let out = await sharp(buffer)
-    .resize(outW, outH)
-    .png({ compressionLevel: 9 })
-    .toBuffer();
-  if (out.length > TELEGRAM_PHOTO_MAX_BYTES) {
-    const scale2 = Math.sqrt(TELEGRAM_PHOTO_MAX_BYTES / out.length);
-    out = await sharp(buffer)
-      .resize(Math.round(outW * scale2), Math.round(outH * scale2))
-      .png({ compressionLevel: 9 })
+  let scale = 0.9;
+  for (let i = 0; i < 12; i++) {
+    const out = await sharp(buffer)
+      .resize(Math.round(w * scale), Math.round(h * scale), { fit: "inside" })
+      .png()
       .toBuffer();
+    if (out.length <= maxBytes) return out;
+    scale *= 0.85;
   }
-  return out;
+  return buffer;
 }
 
 // Retry helper with exponential backoff
@@ -418,62 +412,27 @@ ${packTaskBlock}`
   const sheetBuffer = Buffer.from(imageBase64, "base64");
   console.log("[PackPreview] Sheet generated, size:", Math.round(sheetBuffer.length / 1024), "KB");
 
-  // One BG removal on full sheet (respects bg_removal_primary): user sees preview without chroma key
-  const rembgUrl = process.env.REMBG_URL;
-  const sheetSizeKb = Math.round(sheetBuffer.length / 1024);
-  const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
-  const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
+  // Send raw sheet as preview (no full-sheet rembg). Assemble will do per-cell rembg.
   let bufferToSend = sheetBuffer;
-  let sheetCleaned = false;
-  let cleanedBuffer: Buffer | undefined;
-  if (bgPrimary === "pixian") {
-    console.log("[PackPreview] BG primary: pixian (full sheet)");
-    cleanedBuffer = await callPixian(sheetBuffer, sheetSizeKb);
-    if (!cleanedBuffer && rembgUrl) {
-      console.log("[PackPreview] Pixian failed, fallback to rembg");
-      cleanedBuffer = await callRembg(sheetBuffer, rembgUrl, sheetSizeKb);
-    }
-  } else {
-    if (!rembgUrl) {
-      console.log("[PackPreview] REMBG_URL not set, sending raw sheet; assemble will do per-cell rembg");
-    } else {
-      console.log("[PackPreview] BG primary: rembg (full sheet)");
-      cleanedBuffer = await callRembg(sheetBuffer, rembgUrl, sheetSizeKb);
-      if (!cleanedBuffer) {
-        console.log("[PackPreview] rembg failed, fallback to Pixian");
-        cleanedBuffer = await callPixian(sheetBuffer, sheetSizeKb);
-      }
-    }
-  }
-  if (cleanedBuffer) {
-    bufferToSend = cleanedBuffer;
-    sheetCleaned = true;
-    console.log("[PackPreview] Sheet background removed (one pass), size:", Math.round(cleanedBuffer.length / 1024), "KB");
-  } else {
-    console.log("[PackPreview] BG removal failed, sending raw sheet; assemble will do per-cell rembg");
+  if (sheetBuffer.length > TELEGRAM_PHOTO_MAX_BYTES) {
+    bufferToSend = await resizeBufferUnderMax(sheetBuffer, TELEGRAM_PHOTO_MAX_BYTES);
+    console.log("[PackPreview] Resized for Telegram limit, size:", Math.round(bufferToSend.length / 1024), "KB");
   }
 
-  // Clear progress message
   if (session.progress_message_id && session.progress_chat_id) {
     try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
   }
 
-  // Telegram: small preview for viewing only (max 1536px, PNG compression). Storage keeps full-quality for pack assembly.
-  const previewForTelegram = await makePackPreviewForTelegram(bufferToSend);
-  console.log("[PackPreview] Preview for Telegram:", Math.round(previewForTelegram.length / 1024), "KB (original:", Math.round(bufferToSend.length / 1024), "KB)");
-
-  // Send preview photo to user (shrunk for Telegram)
   const remainingCredits = stickerCount - 1;
   const caption = await getText(lang, "pack.preview_caption", {
     count: stickerCount,
     price: remainingCredits,
   });
-
   const approveBtn = await getText(lang, "btn.approve_pack", { price: remainingCredits });
   const regenerateBtn = await getText(lang, "btn.regenerate_pack");
   const backBtn = await getText(lang, "btn.back_to_styles");
 
-  const previewResult = await sendPhoto(telegramId, previewForTelegram, caption, {
+  const previewResult = await sendPhoto(telegramId, bufferToSend, caption, {
     inline_keyboard: [
       [{ text: approveBtn, callback_data: "pack_approve" }],
       [
@@ -483,39 +442,15 @@ ${packTaskBlock}`
     ],
   });
 
-  // Save file_id from sent photo for later download (cleaned or raw)
   const sheetFileId = previewResult?.file_id || "";
-  console.log("[PackPreview] Preview sent, file_id:", sheetFileId?.substring(0, 30), "cleaned:", sheetCleaned);
+  console.log("[PackPreview] Preview sent, file_id:", sheetFileId?.substring(0, 30));
 
-  // When we sent cleaned sheet: upload PNG to Storage so assemble uses it (keeps transparency; Telegram re-encodes and drops alpha)
-  let cleanedSheetStoragePath: string | null = null;
-  if (sheetCleaned && cleanedBuffer) {
-    const storagePath = `pack_sheets/${batch.id}.png`;
-    const { error: uploadErr } = await supabase.storage
-      .from(config.supabaseStorageBucket)
-      .upload(storagePath, cleanedBuffer, { contentType: "image/png", upsert: true });
-    if (!uploadErr) {
-      cleanedSheetStoragePath = storagePath;
-      console.log("[PackPreview] Cleaned sheet uploaded to Storage:", storagePath);
-    } else {
-      console.warn("[PackPreview] Storage upload failed, assemble will use Telegram file_id:", uploadErr.message);
-    }
-  }
-
-  if (cleanedSheetStoragePath) {
-    await supabase
-      .from("pack_batches")
-      .update({ cleaned_sheet_storage_path: cleanedSheetStoragePath, updated_at: new Date().toISOString() })
-      .eq("id", batch.id);
-  }
-
-  // Update session with sheet file_id and cleaned flag (assemble skips rembg when true)
   await supabase
     .from("sessions")
     .update({
       state: "wait_pack_approval",
       pack_sheet_file_id: sheetFileId,
-      pack_sheet_cleaned: sheetCleaned,
+      pack_sheet_cleaned: false,
       pack_batch_id: batch.id,
       is_active: true,
       progress_message_id: null,
@@ -572,31 +507,11 @@ async function runPackAssembleJob(job: any) {
     } catch {}
   }
 
-  // Prefer Storage (keeps transparency); fallback to Telegram file_id
-  let sheetBuffer: Buffer;
-  const storagePath = batch.cleaned_sheet_storage_path;
-  if (storagePath) {
-    const { data: blob, error: dlErr } = await supabase.storage
-      .from(config.supabaseStorageBucket)
-      .download(storagePath);
-    if (!dlErr && blob) {
-      sheetBuffer = Buffer.from(await blob.arrayBuffer());
-      console.log("[PackAssemble] Sheet from Storage:", storagePath, "size:", Math.round(sheetBuffer.length / 1024), "KB");
-    } else {
-      console.warn("[PackAssemble] Storage download failed, fallback to Telegram:", dlErr?.message);
-      const sheetFileId = session.pack_sheet_file_id;
-      if (!sheetFileId) throw new Error("No sheet file_id in session");
-      const sheetPath = await getFilePath(sheetFileId);
-      sheetBuffer = await downloadFile(sheetPath);
-      console.log("[PackAssemble] Sheet from Telegram, size:", Math.round(sheetBuffer.length / 1024), "KB");
-    }
-  } else {
-    const sheetFileId = session.pack_sheet_file_id;
-    if (!sheetFileId) throw new Error("No sheet file_id in session");
-    const sheetPath = await getFilePath(sheetFileId);
-    sheetBuffer = await downloadFile(sheetPath);
-    console.log("[PackAssemble] Sheet from Telegram, size:", Math.round(sheetBuffer.length / 1024), "KB");
-  }
+  const sheetFileId = session.pack_sheet_file_id;
+  if (!sheetFileId) throw new Error("No sheet file_id in session");
+  const sheetPath = await getFilePath(sheetFileId);
+  const sheetBuffer = await downloadFile(sheetPath);
+  console.log("[PackAssemble] Sheet downloaded, size:", Math.round(sheetBuffer.length / 1024), "KB");
 
   // Get sheet dimensions and calculate cell sizes
   const sheetMeta = await sharp(sheetBuffer).metadata();
@@ -628,55 +543,35 @@ async function runPackAssembleJob(job: any) {
   }
   console.log(`[PackAssemble] Cut ${cells.length} cells`);
 
-  // When preview was sent with one rembg on full sheet, cells are already clean — skip per-cell rembg
-  const sheetAlreadyCleaned = session.pack_sheet_cleaned === true;
-  let noBgCells: (Buffer | null)[];
-  if (sheetAlreadyCleaned) {
-    console.log("[PackAssemble] Sheet was cleaned at preview, skipping per-cell rembg");
-    noBgCells = cells.map(c => c);
-  } else {
-    // Update progress: removing background
-    await updatePackProgress(await getText(lang, "pack.progress_removing_bg"));
+  await updatePackProgress(await getText(lang, "pack.progress_removing_bg"));
 
-    const rembgUrl = process.env.REMBG_URL;
-    const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
-    const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
-    console.log(`[PackAssemble] BG primary service: ${bgPrimary}`);
-    if (!rembgUrl && bgPrimary !== "pixian") {
-      console.warn("[PackAssemble] REMBG_URL is not configured; rembg primary may fail");
-    }
-
-    // Parallel background removal for all cells (configurable via app_config)
-    noBgCells = await Promise.all(
-      cells.map(async (cellBuf, i) => {
-        const sizeKb = Math.round(cellBuf.length / 1024);
-        let result: Buffer | undefined;
-
-        if (bgPrimary === "pixian") {
-          console.log(`[PackAssemble] Pixian cell ${i + 1}/${cells.length} (${sizeKb} KB)`);
-          result = await callPixian(cellBuf, sizeKb);
-          if (!result) {
-            console.log(`[PackAssemble] Pixian failed for cell ${i + 1}, fallback to rembg`);
-            result = await callRembg(cellBuf, rembgUrl, sizeKb);
-          }
-        } else {
-          console.log(`[PackAssemble] rembg cell ${i + 1}/${cells.length} (${sizeKb} KB)`);
-          result = await callRembg(cellBuf, rembgUrl, sizeKb);
-          if (!result) {
-            console.log(`[PackAssemble] rembg failed for cell ${i + 1}, fallback to Pixian`);
-            result = await callPixian(cellBuf, sizeKb);
-          }
-        }
-
-        return result || null;
-      })
-    );
+  const rembgUrl = process.env.REMBG_URL;
+  const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
+  const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
+  console.log(`[PackAssemble] BG primary service: ${bgPrimary}`);
+  if (!rembgUrl && bgPrimary !== "pixian") {
+    console.warn("[PackAssemble] REMBG_URL is not configured; rembg primary may fail");
   }
+
+  const noBgCells = await Promise.all(
+    cells.map(async (cellBuf, i) => {
+      const sizeKb = Math.round(cellBuf.length / 1024);
+      let result: Buffer | undefined;
+      if (bgPrimary === "pixian") {
+        result = await callPixian(cellBuf, sizeKb);
+        if (!result && rembgUrl) result = await callRembg(cellBuf, rembgUrl, sizeKb);
+      } else {
+        result = await callRembg(cellBuf, rembgUrl, sizeKb);
+        if (!result) result = await callPixian(cellBuf, sizeKb);
+      }
+      return result || null;
+    })
+  );
 
   // Count successes
   const successCells = noBgCells.filter(b => b !== null) as Buffer[];
   const failedCount = noBgCells.filter(b => b === null).length;
-  console.log(`[PackAssemble] BG removal done: ${successCells.length} success, ${failedCount} failed (sheetAlreadyCleaned: ${sheetAlreadyCleaned})`);
+  console.log(`[PackAssemble] BG removal done: ${successCells.length} success, ${failedCount} failed`);
 
   if (successCells.length === 0) {
     // Total failure — refund all credits
