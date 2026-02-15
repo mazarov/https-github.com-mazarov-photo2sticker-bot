@@ -2677,6 +2677,10 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
     return;
   }
 
+  // Check if user already has a photo from current/recent session
+  const existingSession = await getActiveSession(user.id);
+  const existingPhoto = existingSession?.current_photo_file_id || null;
+
   // Deactivate old sessions
   await supabase
     .from("sessions")
@@ -2686,13 +2690,16 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
     .eq("env", config.appEnv);
 
   // Create new session for pack flow
+  const initialState = existingPhoto ? "wait_pack_preview_payment" : "wait_pack_photo";
   const { data: session, error: sessErr } = await supabase
     .from("sessions")
     .insert({
       user_id: user.id,
-      state: "wait_pack_photo",
+      state: initialState,
       is_active: true,
       pack_template_id: templateId,
+      current_photo_file_id: existingPhoto,
+      photos: existingPhoto ? [existingPhoto] : [],
       env: config.appEnv,
     })
     .select()
@@ -2704,8 +2711,22 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
     return;
   }
 
-  // Ask user to send a photo
-  await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
+  if (existingPhoto) {
+    // Photo already available — skip to preview payment
+    const previewBtn = await getText(lang, "btn.preview_pack");
+    const cancelBtn = await getText(lang, "btn.cancel_pack");
+    await ctx.reply(await getText(lang, "pack.preview_offer"), {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: previewBtn, callback_data: "pack_preview_pay" }],
+          [{ text: cancelBtn, callback_data: "pack_cancel" }],
+        ],
+      },
+    });
+  } else {
+    // No photo — ask user to send one
+    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
+  }
 });
 
 // Callback: pack_preview_pay — user pays 1 credit for preview
