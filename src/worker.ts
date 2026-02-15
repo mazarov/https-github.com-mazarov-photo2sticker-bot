@@ -4,7 +4,7 @@ import FormData from "form-data";
 import sharp from "sharp";
 import { config } from "./config";
 import { supabase } from "./lib/supabase";
-import { getFilePath, downloadFile, sendMessage, sendSticker, editMessageText, deleteMessage } from "./lib/telegram";
+import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage } from "./lib/telegram";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
@@ -137,7 +137,574 @@ async function callPixian(imageBuffer: Buffer, imageSizeKb: number): Promise<Buf
   }
 }
 
+// ============================================
+// Pack generation functions
+// ============================================
+
+/**
+ * Generate a sticker sheet via Gemini and send preview to user.
+ */
+async function runPackPreviewJob(job: any) {
+  console.log("[PackPreview] Starting job:", job.id, "batch:", job.pack_batch_id);
+
+  const { data: session } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("id", job.session_id)
+    .maybeSingle();
+  if (!session) throw new Error("Session not found");
+
+  const { data: user } = await supabase
+    .from("users")
+    .select("telegram_id, lang, username, credits")
+    .eq("id", session.user_id)
+    .maybeSingle();
+  if (!user?.telegram_id) throw new Error("User telegram_id not found");
+
+  const lang = user.lang || "en";
+  const telegramId = user.telegram_id;
+
+  const { data: batch } = await supabase
+    .from("pack_batches")
+    .select("*")
+    .eq("id", job.pack_batch_id)
+    .maybeSingle();
+  if (!batch) throw new Error("Pack batch not found");
+
+  const { data: template } = await supabase
+    .from("pack_templates")
+    .select("*")
+    .eq("id", batch.template_id)
+    .maybeSingle();
+  if (!template) throw new Error("Pack template not found");
+
+  // Download user photo
+  const photoFileId = session.current_photo_file_id;
+  if (!photoFileId) throw new Error("No photo in session");
+
+  const filePath = await getFilePath(photoFileId);
+  const photoBuffer = await downloadFile(filePath);
+  const base64 = photoBuffer.toString("base64");
+  const mimeType = filePath.endsWith(".png") ? "image/png" : "image/jpeg";
+
+  // Build prompt
+  const stickerCount = template.sticker_count || 4;
+  const cols = Math.ceil(Math.sqrt(stickerCount));
+  const rows = Math.ceil(stickerCount / cols);
+  const sceneDescriptions: string[] = template.scene_descriptions || [];
+  const sceneList = sceneDescriptions
+    .map((desc: string, i: number) => `${i + 1}. ${desc}`)
+    .join("\n");
+
+  const prompt = `Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total).
+
+Each cell is one sticker with a DISTINCT pose/emotion from the list below.
+The character(s) must look EXACTLY like the person(s) in the reference photo.
+
+${template.style_prompt_base}
+
+Scenes (one per cell, left-to-right, top-to-bottom):
+${sceneList}
+
+CRITICAL RULES:
+1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF) in EVERY cell.
+2. Each character must be fully visible within its cell with nothing cropped.
+3. Leave at least 10% padding in each cell around the character.
+4. All ${stickerCount} cells must be clearly separated with thin lines.
+5. Style must be IDENTICAL across all cells — same art style, proportions, colors.
+6. Do NOT add any text, labels, or captions to the stickers.`;
+
+  console.log("[PackPreview] Prompt:", prompt.substring(0, 200));
+
+  // Call Gemini
+  const model = await getAppConfig("gemini_model_pack", "gemini-2.5-flash-preview-04-17");
+
+  let geminiRes;
+  try {
+    geminiRes = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        contents: [{
+          role: "user",
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType, data: base64 } },
+          ],
+        }],
+        generationConfig: {
+          responseModalities: ["IMAGE"],
+          imageConfig: { aspectRatio: "1:1" },
+        },
+      },
+      {
+        headers: { "x-goog-api-key": config.geminiApiKey },
+        timeout: 120000,
+      }
+    );
+  } catch (err: any) {
+    const errorMsg = err.response?.data?.error?.message || err.message;
+    console.error("[PackPreview] Gemini error:", errorMsg);
+
+    // Refund 1 credit
+    await supabase
+      .from("users")
+      .update({ credits: (user.credits || 0) + 1 })
+      .eq("id", session.user_id);
+
+    await supabase
+      .from("pack_batches")
+      .update({ status: "failed", credits_spent: 0, updated_at: new Date().toISOString() })
+      .eq("id", batch.id);
+
+    await supabase
+      .from("sessions")
+      .update({ state: "canceled", is_active: false, progress_message_id: null, progress_chat_id: null })
+      .eq("id", session.id);
+
+    // Clear progress
+    if (session.progress_message_id && session.progress_chat_id) {
+      try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
+    }
+
+    await sendMessage(telegramId, await getText(lang, "pack.preview_failed"));
+
+    await sendAlert({
+      type: "pack_preview_failed",
+      message: `Pack preview Gemini error: ${errorMsg}`,
+      details: {
+        user: `@${user.username || telegramId}`,
+        batchId: batch.id,
+        model,
+      },
+    });
+    return; // graceful exit, not throwing
+  }
+
+  // Check block
+  const blockReason = geminiRes.data?.promptFeedback?.blockReason;
+  if (blockReason) {
+    console.error("[PackPreview] Gemini blocked:", blockReason);
+    await supabase.from("users").update({ credits: (user.credits || 0) + 1 }).eq("id", session.user_id);
+    await supabase.from("pack_batches").update({ status: "failed", credits_spent: 0, updated_at: new Date().toISOString() }).eq("id", batch.id);
+    await supabase.from("sessions").update({ state: "canceled", is_active: false, progress_message_id: null, progress_chat_id: null }).eq("id", session.id);
+    if (session.progress_message_id && session.progress_chat_id) {
+      try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
+    }
+    await sendMessage(telegramId, await getText(lang, "pack.preview_failed"));
+    await sendAlert({ type: "pack_preview_failed", message: `Gemini blocked: ${blockReason}`, details: { user: `@${user.username || telegramId}`, batchId: batch.id } });
+    return;
+  }
+
+  // Extract image
+  const imageBase64 = geminiRes.data?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data || null;
+  if (!imageBase64) {
+    console.error("[PackPreview] Gemini returned no image");
+    await supabase.from("users").update({ credits: (user.credits || 0) + 1 }).eq("id", session.user_id);
+    await supabase.from("pack_batches").update({ status: "failed", credits_spent: 0, updated_at: new Date().toISOString() }).eq("id", batch.id);
+    await supabase.from("sessions").update({ state: "canceled", is_active: false, progress_message_id: null, progress_chat_id: null }).eq("id", session.id);
+    if (session.progress_message_id && session.progress_chat_id) {
+      try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
+    }
+    await sendMessage(telegramId, await getText(lang, "pack.preview_failed"));
+    await sendAlert({ type: "pack_preview_failed", message: "Gemini returned no image", details: { user: `@${user.username || telegramId}`, batchId: batch.id } });
+    return;
+  }
+
+  const sheetBuffer = Buffer.from(imageBase64, "base64");
+  console.log("[PackPreview] Sheet generated, size:", Math.round(sheetBuffer.length / 1024), "KB");
+
+  // Clear progress message
+  if (session.progress_message_id && session.progress_chat_id) {
+    try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
+  }
+
+  // Send preview photo to user
+  const remainingCredits = stickerCount - 1;
+  const caption = await getText(lang, "pack.preview_caption", {
+    count: stickerCount,
+    price: remainingCredits,
+  });
+
+  const approveBtn = await getText(lang, "btn.approve_pack", { price: remainingCredits });
+  const regenerateBtn = await getText(lang, "btn.regenerate_pack");
+  const cancelBtn = await getText(lang, "btn.cancel_pack");
+
+  const previewResult = await sendPhoto(telegramId, sheetBuffer, caption, {
+    inline_keyboard: [
+      [{ text: approveBtn, callback_data: "pack_approve" }],
+      [
+        { text: regenerateBtn, callback_data: "pack_regenerate" },
+        { text: cancelBtn, callback_data: "pack_cancel" },
+      ],
+    ],
+  });
+
+  // Save file_id from sent photo for later download
+  const sheetFileId = previewResult?.file_id || "";
+  console.log("[PackPreview] Preview sent, file_id:", sheetFileId?.substring(0, 30));
+
+  // Update session with sheet file_id
+  await supabase
+    .from("sessions")
+    .update({
+      state: "wait_pack_approval",
+      pack_sheet_file_id: sheetFileId,
+      pack_batch_id: batch.id,
+      is_active: true,
+      progress_message_id: null,
+      progress_chat_id: null,
+    })
+    .eq("id", session.id);
+
+  console.log("[PackPreview] Job complete, waiting for user approval");
+}
+
+/**
+ * Download the previously generated sheet, cut into cells,
+ * remove background, overlay text labels, and assemble Telegram sticker set.
+ */
+async function runPackAssembleJob(job: any) {
+  console.log("[PackAssemble] Starting job:", job.id, "batch:", job.pack_batch_id);
+
+  const { data: session } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("id", job.session_id)
+    .maybeSingle();
+  if (!session) throw new Error("Session not found");
+
+  const { data: user } = await supabase
+    .from("users")
+    .select("telegram_id, lang, username, credits")
+    .eq("id", session.user_id)
+    .maybeSingle();
+  if (!user?.telegram_id) throw new Error("User telegram_id not found");
+
+  const lang = user.lang || "en";
+  const telegramId = user.telegram_id;
+
+  const { data: batch } = await supabase
+    .from("pack_batches")
+    .select("*")
+    .eq("id", job.pack_batch_id)
+    .maybeSingle();
+  if (!batch) throw new Error("Pack batch not found");
+
+  const { data: template } = await supabase
+    .from("pack_templates")
+    .select("*")
+    .eq("id", batch.template_id)
+    .maybeSingle();
+  if (!template) throw new Error("Pack template not found");
+
+  // Helper: update progress message
+  async function updatePackProgress(text: string) {
+    if (!session.progress_message_id || !session.progress_chat_id) return;
+    try {
+      await editMessageText(session.progress_chat_id, session.progress_message_id, text);
+    } catch {}
+  }
+
+  // Download the sheet from Telegram using file_id
+  const sheetFileId = session.pack_sheet_file_id;
+  if (!sheetFileId) throw new Error("No sheet file_id in session");
+
+  const sheetPath = await getFilePath(sheetFileId);
+  const sheetBuffer = await downloadFile(sheetPath);
+  console.log("[PackAssemble] Sheet downloaded, size:", Math.round(sheetBuffer.length / 1024), "KB");
+
+  // Get sheet dimensions and calculate cell sizes
+  const sheetMeta = await sharp(sheetBuffer).metadata();
+  const sheetW = sheetMeta.width || 1024;
+  const sheetH = sheetMeta.height || 1024;
+  const stickerCount = template.sticker_count || 4;
+  const cols = Math.ceil(Math.sqrt(stickerCount));
+  const rows = Math.ceil(stickerCount / cols);
+  const cellW = Math.floor(sheetW / cols);
+  const cellH = Math.floor(sheetH / rows);
+
+  console.log(`[PackAssemble] Sheet ${sheetW}x${sheetH}, grid ${cols}x${rows}, cell ${cellW}x${cellH}`);
+
+  // Cut sheet into individual cells
+  const cells: Buffer[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      if (idx >= stickerCount) break;
+      const cell = await sharp(sheetBuffer)
+        .extract({ left: c * cellW, top: r * cellH, width: cellW, height: cellH })
+        .png()
+        .toBuffer();
+      cells.push(cell);
+    }
+  }
+  console.log(`[PackAssemble] Cut ${cells.length} cells`);
+
+  // Update progress: removing background
+  await updatePackProgress(await getText(lang, "pack.progress_removing_bg"));
+
+  // Parallel Pixian background removal for all cells
+  const noBgCells: (Buffer | null)[] = await Promise.all(
+    cells.map(async (cellBuf, i) => {
+      const sizeKb = Math.round(cellBuf.length / 1024);
+      console.log(`[PackAssemble] Pixian cell ${i + 1}/${cells.length} (${sizeKb} KB)`);
+      const result = await callPixian(cellBuf, sizeKb);
+      return result || null;
+    })
+  );
+
+  // Count successes
+  const successCells = noBgCells.filter(b => b !== null) as Buffer[];
+  const failedCount = noBgCells.filter(b => b === null).length;
+  console.log(`[PackAssemble] BG removal done: ${successCells.length} success, ${failedCount} failed`);
+
+  if (successCells.length === 0) {
+    // Total failure — refund all credits
+    const refundAmount = batch.credits_spent || stickerCount;
+    await supabase.from("users").update({ credits: (user.credits || 0) + refundAmount }).eq("id", session.user_id);
+    await supabase.from("pack_batches").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", batch.id);
+    await supabase.from("sessions").update({ state: "canceled", is_active: false, progress_message_id: null, progress_chat_id: null }).eq("id", session.id);
+    if (session.progress_message_id && session.progress_chat_id) {
+      try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
+    }
+    await sendMessage(telegramId, await getText(lang, "pack.failed", { refund: refundAmount }));
+    await sendAlert({ type: "pack_failed", message: "All BG removal failed", details: { user: `@${user.username || telegramId}`, batchId: batch.id } });
+    return;
+  }
+
+  // Update progress: adding labels
+  await updatePackProgress(await getText(lang, "pack.progress_finishing"));
+
+  // Process each cell: trim, resize, white border via Pixian clean output, overlay text
+  const labels: string[] = (lang === "ru" ? template.labels : (template.labels_en || template.labels)) || [];
+  const stickerBuffers: Buffer[] = [];
+
+  for (let i = 0; i < noBgCells.length; i++) {
+    const cellBuf = noBgCells[i];
+    if (!cellBuf) continue;
+
+    try {
+      // Trim → resize to 512x512 → WebP
+      let processed = await sharp(cellBuf)
+        .trim({ threshold: 2 })
+        .resize(512, 512, {
+          fit: "contain",
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        })
+        .png()
+        .toBuffer();
+
+      // Overlay text label if available
+      const label = labels[i] || "";
+      if (label) {
+        const escapedLabel = label
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        const svgText = `<svg width="512" height="512">
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.7"/>
+    </filter>
+  </defs>
+  <text x="256" y="480" text-anchor="middle" font-size="36" font-weight="bold" fill="white" filter="url(#shadow)" font-family="Arial, Helvetica, sans-serif">${escapedLabel}</text>
+</svg>`;
+        processed = await sharp(processed)
+          .composite([{ input: Buffer.from(svgText), top: 0, left: 0 }])
+          .png()
+          .toBuffer();
+      }
+
+      // Final WebP
+      const webpBuf = await sharp(processed)
+        .webp({ quality: 95 })
+        .toBuffer();
+
+      stickerBuffers.push(webpBuf);
+    } catch (procErr: any) {
+      console.error(`[PackAssemble] Error processing cell ${i}:`, procErr.message);
+    }
+  }
+
+  console.log(`[PackAssemble] Processed ${stickerBuffers.length} stickers`);
+
+  if (stickerBuffers.length === 0) {
+    const refundAmount = batch.credits_spent || stickerCount;
+    await supabase.from("users").update({ credits: (user.credits || 0) + refundAmount }).eq("id", session.user_id);
+    await supabase.from("pack_batches").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", batch.id);
+    await supabase.from("sessions").update({ state: "canceled", is_active: false, progress_message_id: null, progress_chat_id: null }).eq("id", session.id);
+    if (session.progress_message_id && session.progress_chat_id) {
+      try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
+    }
+    await sendMessage(telegramId, await getText(lang, "pack.failed", { refund: refundAmount }));
+    await sendAlert({ type: "pack_failed", message: "All sticker processing failed", details: { user: `@${user.username || telegramId}`, batchId: batch.id } });
+    return;
+  }
+
+  // Update progress: creating sticker set
+  await updatePackProgress(await getText(lang, "pack.progress_assembling_set"));
+
+  // Create Telegram sticker set
+  const botUsername = config.botUsername || "sticq_bot";
+  const setName = `p2s_pack_${telegramId}_${Date.now()}_by_${botUsername}`.toLowerCase();
+  const packTitle = lang === "ru" ? `${template.name_ru} — Stickers` : `${template.name_en} — Stickers`;
+
+  try {
+    // Create set with first sticker
+    const firstStickerForm = new FormData();
+    firstStickerForm.append("user_id", String(telegramId));
+    firstStickerForm.append("name", setName);
+    firstStickerForm.append("title", packTitle);
+    firstStickerForm.append("stickers", JSON.stringify([{
+      sticker: "attach://sticker0",
+      format: "static",
+      emoji_list: ["🔥"],
+    }]));
+    firstStickerForm.append("sticker0", stickerBuffers[0], {
+      filename: "sticker.webp",
+      contentType: "image/webp",
+    });
+
+    await axios.post(
+      `https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`,
+      firstStickerForm,
+      { headers: firstStickerForm.getHeaders(), timeout: 30000 }
+    );
+    console.log("[PackAssemble] Sticker set created:", setName);
+
+    // Add remaining stickers
+    for (let i = 1; i < stickerBuffers.length; i++) {
+      const addForm = new FormData();
+      addForm.append("user_id", String(telegramId));
+      addForm.append("name", setName);
+      addForm.append("sticker", JSON.stringify({
+        sticker: "attach://stickerfile",
+        format: "static",
+        emoji_list: ["🔥"],
+      }));
+      addForm.append("stickerfile", stickerBuffers[i], {
+        filename: "sticker.webp",
+        contentType: "image/webp",
+      });
+
+      try {
+        await axios.post(
+          `https://api.telegram.org/bot${config.telegramBotToken}/addStickerToSet`,
+          addForm,
+          { headers: addForm.getHeaders(), timeout: 15000 }
+        );
+        console.log(`[PackAssemble] Added sticker ${i + 1}/${stickerBuffers.length}`);
+      } catch (addErr: any) {
+        console.error(`[PackAssemble] Failed to add sticker ${i + 1}:`, addErr.response?.data || addErr.message);
+      }
+    }
+  } catch (createErr: any) {
+    console.error("[PackAssemble] Failed to create sticker set:", createErr.response?.data || createErr.message);
+    const refundAmount = batch.credits_spent || stickerCount;
+    await supabase.from("users").update({ credits: (user.credits || 0) + refundAmount }).eq("id", session.user_id);
+    await supabase.from("pack_batches").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", batch.id);
+    await supabase.from("sessions").update({ state: "canceled", is_active: false, progress_message_id: null, progress_chat_id: null }).eq("id", session.id);
+    if (session.progress_message_id && session.progress_chat_id) {
+      try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
+    }
+    await sendMessage(telegramId, await getText(lang, "pack.failed", { refund: refundAmount }));
+    await sendAlert({
+      type: "pack_failed",
+      message: `Sticker set creation failed: ${createErr.response?.data?.description || createErr.message}`,
+      details: { user: `@${user.username || telegramId}`, batchId: batch.id, setName },
+    });
+    return;
+  }
+
+  // Save sticker records to DB
+  for (let i = 0; i < stickerBuffers.length; i++) {
+    await supabase.from("stickers").insert({
+      user_id: session.user_id,
+      session_id: session.id,
+      source_photo_file_id: session.current_photo_file_id,
+      sticker_set_name: setName,
+      pack_batch_id: batch.id,
+      pack_index: i,
+      env: config.appEnv,
+    });
+  }
+
+  // Update batch
+  await supabase
+    .from("pack_batches")
+    .update({
+      status: stickerBuffers.length === stickerCount ? "done" : "partial",
+      completed_count: stickerBuffers.length,
+      failed_count: stickerCount - stickerBuffers.length,
+      sticker_set_name: setName,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", batch.id);
+
+  // Clear progress
+  if (session.progress_message_id && session.progress_chat_id) {
+    try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
+  }
+
+  // Notify user
+  const link = `https://t.me/addstickers/${setName}`;
+  const isPartial = stickerBuffers.length < stickerCount;
+  const doneKey = isPartial ? "pack.done_partial" : "pack.done";
+  const doneText = await getText(lang, doneKey, {
+    count: stickerBuffers.length,
+    total: stickerCount,
+    link,
+  });
+
+  await sendMessage(telegramId, doneText, {
+    inline_keyboard: [
+      [{ text: lang === "ru" ? "📦 Добавить пак" : "📦 Add pack", url: link }],
+    ],
+  });
+
+  // Update session
+  await supabase
+    .from("sessions")
+    .update({
+      state: "confirm_sticker",
+      is_active: false,
+      progress_message_id: null,
+      progress_chat_id: null,
+    })
+    .eq("id", session.id);
+
+  // Alert
+  const alertType = isPartial ? "pack_partial" : "pack_completed";
+  await sendAlert({
+    type: alertType,
+    message: `Pack ${isPartial ? "partial" : "completed"}: ${stickerBuffers.length}/${stickerCount}`,
+    details: {
+      user: `@${user.username || telegramId}`,
+      batchId: batch.id,
+      setName,
+      link,
+    },
+  });
+
+  console.log("[PackAssemble] Job complete! Set:", setName);
+}
+
 async function runJob(job: any) {
+  // Route pack jobs to dedicated handlers
+  if (job.pack_batch_id) {
+    const { data: batch } = await supabase
+      .from("pack_batches")
+      .select("status")
+      .eq("id", job.pack_batch_id)
+      .maybeSingle();
+    
+    if (batch?.status === "approved" || batch?.status === "processing") {
+      return runPackAssembleJob(job);
+    } else {
+      return runPackPreviewJob(job);
+    }
+  }
+
   const { data: session } = await supabase
     .from("sessions")
     .select("*")
@@ -805,7 +1372,11 @@ async function poll() {
         })
         .eq("id", job.id);
 
-      // Refund credits on error
+      // Refund credits on error (skip for pack jobs — they handle their own refunds)
+      if (job.pack_batch_id) {
+        console.log("[Poll] Pack job error handled internally, skipping generic refund");
+        continue;
+      }
       try {
         const { data: session } = await supabase
           .from("sessions")

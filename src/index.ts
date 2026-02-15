@@ -967,10 +967,13 @@ function getMainMenuKeyboard(lang: string) {
     ? ["🤖 Помощник", "🎨 Стили"]
     : ["🤖 Assistant", "🎨 Styles"];
   const row2 = lang === "ru"
-    ? ["💰 Баланс", "❓ Помощь"]
-    : ["💰 Balance", "❓ Help"];
+    ? ["📦 Сделать пак", "💰 Баланс"]
+    : ["📦 Make a pack", "💰 Balance"];
+  const row3 = lang === "ru"
+    ? ["❓ Помощь"]
+    : ["❓ Help"];
 
-  return Markup.keyboard([row1, row2]).resize().persistent();
+  return Markup.keyboard([row1, row2, row3]).resize().persistent();
 }
 
 // Helper: check if language is in whitelist for free credits
@@ -2399,6 +2402,37 @@ bot.on("photo", async (ctx) => {
     } // end else (aSession exists)
   }
 
+  // === Pack flow: photo for sticker pack ===
+  if (session.state === "wait_pack_photo") {
+    console.log("Pack photo received, session:", session.id);
+    const packPhotos = Array.isArray(session.photos) ? session.photos : [];
+    packPhotos.push(photo.file_id);
+
+    // Update session with photo, move to preview payment state
+    await supabase
+      .from("sessions")
+      .update({
+        photos: packPhotos,
+        current_photo_file_id: photo.file_id,
+        state: "wait_pack_preview_payment",
+        is_active: true,
+      })
+      .eq("id", session.id);
+
+    // Send confirmation + preview offer with inline button
+    const previewBtn = await getText(lang, "btn.preview_pack");
+    const cancelBtn = await getText(lang, "btn.cancel_pack");
+    await ctx.reply(await getText(lang, "pack.preview_offer"), {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: previewBtn, callback_data: "pack_preview_pay" }],
+          [{ text: cancelBtn, callback_data: "pack_cancel" }],
+        ],
+      },
+    });
+    return;
+  }
+
   // === Manual mode: existing logic ===
   const photos = Array.isArray(session.photos) ? session.photos : [];
   photos.push(photo.file_id);
@@ -2546,6 +2580,442 @@ bot.hears(["❓ Помощь", "❓ Help"], async (ctx) => {
   const user = await getUser(telegramId);
   const lang = user?.lang || "en";
   await ctx.reply(await getText(lang, "menu.help"), getMainMenuKeyboard(lang));
+});
+
+// ============================================
+// "Сделать пак" flow
+// ============================================
+
+// Menu: 📦 Сделать пак / Make a pack — show template CTA screen
+bot.hears(["📦 Сделать пак", "📦 Make a pack"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) {
+    const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
+    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang));
+    return;
+  }
+  const lang = user.lang || "en";
+
+  // Get first active template
+  const { data: template } = await supabase
+    .from("pack_templates")
+    .select("*")
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (!template) {
+    await ctx.reply(
+      lang === "ru" ? "Паки скоро будут доступны!" : "Packs coming soon!",
+      getMainMenuKeyboard(lang)
+    );
+    return;
+  }
+
+  // Show CTA screen with template preview
+  const title = lang === "ru" ? template.name_ru : template.name_en;
+  const desc = lang === "ru" ? (template.description_ru || "") : (template.description_en || "");
+  const howto = await getText(lang, "pack.intro_howto");
+  const footer = await getText(lang, "pack.intro_footer");
+  const ctaText = `*${title}*\n\n${desc}\n\n${howto}\n\n_${footer}_`;
+
+  const ctaButton = await getText(lang, "pack.cta_button");
+  const keyboard = {
+    inline_keyboard: [[
+      { text: `📦 ${ctaButton}`, callback_data: `pack_start:${template.id}` },
+    ]],
+  };
+
+  // Send preview image if available
+  if (template.preview_file_id || template.preview_url) {
+    try {
+      const photoSource = template.preview_file_id || template.preview_url;
+      await ctx.replyWithPhoto(photoSource, {
+        caption: ctaText,
+        parse_mode: "Markdown",
+        reply_markup: keyboard,
+      });
+    } catch (e: any) {
+      console.error("Pack CTA photo error:", e.message);
+      await ctx.reply(ctaText, { parse_mode: "Markdown", reply_markup: keyboard });
+    }
+  } else {
+    await ctx.reply(ctaText, { parse_mode: "Markdown", reply_markup: keyboard });
+  }
+});
+
+// Callback: pack_start — user tapped "Попробовать" on template CTA
+bot.action(/^pack_start:(.+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const templateId = ctx.match[1];
+
+  // Verify template exists
+  const { data: template } = await supabase
+    .from("pack_templates")
+    .select("*")
+    .eq("id", templateId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (!template) {
+    await ctx.reply(
+      lang === "ru" ? "Шаблон не найден." : "Template not found.",
+      getMainMenuKeyboard(lang)
+    );
+    return;
+  }
+
+  // Deactivate old sessions
+  await supabase
+    .from("sessions")
+    .update({ is_active: false })
+    .eq("user_id", user.id)
+    .eq("is_active", true)
+    .eq("env", config.appEnv);
+
+  // Create new session for pack flow
+  const { data: session, error: sessErr } = await supabase
+    .from("sessions")
+    .insert({
+      user_id: user.id,
+      state: "wait_pack_photo",
+      is_active: true,
+      pack_template_id: templateId,
+      env: config.appEnv,
+    })
+    .select()
+    .single();
+
+  if (sessErr || !session) {
+    console.error("Failed to create pack session:", sessErr?.message);
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    return;
+  }
+
+  // Ask user to send a photo
+  await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
+});
+
+// Callback: pack_preview_pay — user pays 1 credit for preview
+bot.action("pack_preview_pay", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session || session.state !== "wait_pack_preview_payment") {
+    return;
+  }
+
+  // Check credits
+  if ((user.credits || 0) < 1) {
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await sendBuyCreditsMenu(ctx, user);
+    return;
+  }
+
+  // Deduct 1 credit atomically
+  const { data: deducted } = await supabase.rpc("deduct_credits", {
+    p_user_id: user.id,
+    p_amount: 1,
+  });
+
+  if (!deducted) {
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await sendBuyCreditsMenu(ctx, user);
+    return;
+  }
+
+  // Create pack_batch
+  const { data: batch, error: batchErr } = await supabase
+    .from("pack_batches")
+    .insert({
+      session_id: session.id,
+      user_id: user.id,
+      template_id: session.pack_template_id,
+      size: 4, // will be read from template
+      status: "preview",
+      credits_spent: 1,
+      env: config.appEnv,
+    })
+    .select()
+    .single();
+
+  if (batchErr || !batch) {
+    console.error("Failed to create pack_batch:", batchErr?.message);
+    // Refund credit
+    const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
+    await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    return;
+  }
+
+  // Update session
+  await supabase
+    .from("sessions")
+    .update({
+      state: "generating_pack_preview",
+      pack_batch_id: batch.id,
+      is_active: true,
+    })
+    .eq("id", session.id);
+
+  // Enqueue pack_preview job
+  await supabase.from("jobs").insert({
+    session_id: session.id,
+    user_id: user.id,
+    pack_batch_id: batch.id,
+    status: "queued",
+    attempts: 0,
+    env: config.appEnv,
+  });
+
+  // Send progress message
+  const msg = await ctx.reply(await getText(lang, "pack.progress_generating"));
+  if (msg?.message_id && ctx.chat?.id) {
+    await supabase
+      .from("sessions")
+      .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
+      .eq("id", session.id);
+  }
+
+  // Alert
+  sendAlert({
+    type: "pack_preview_ordered",
+    message: "Pack preview ordered",
+    details: {
+      user: `@${user.username || user.telegram_id}`,
+      template: session.pack_template_id,
+      batchId: batch.id,
+    },
+  }).catch(console.error);
+});
+
+// Callback: pack_approve — user approves preview, pays remaining credits
+bot.action("pack_approve", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session || session.state !== "wait_pack_approval") {
+    return;
+  }
+
+  // Get template for sticker count
+  const { data: template } = await supabase
+    .from("pack_templates")
+    .select("sticker_count")
+    .eq("id", session.pack_template_id)
+    .maybeSingle();
+
+  const stickerCount = template?.sticker_count || 4;
+  const remainingCredits = stickerCount - 1; // already paid 1 for preview
+
+  // Check credits
+  if ((user.credits || 0) < remainingCredits) {
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await sendBuyCreditsMenu(ctx, user);
+    return;
+  }
+
+  // Deduct remaining credits
+  const { data: deducted } = await supabase.rpc("deduct_credits", {
+    p_user_id: user.id,
+    p_amount: remainingCredits,
+  });
+
+  if (!deducted) {
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await sendBuyCreditsMenu(ctx, user);
+    return;
+  }
+
+  // Update batch
+  await supabase
+    .from("pack_batches")
+    .update({
+      status: "approved",
+      credits_spent: stickerCount,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", session.pack_batch_id);
+
+  // Update session
+  await supabase
+    .from("sessions")
+    .update({ state: "processing_pack", is_active: true })
+    .eq("id", session.id);
+
+  // Enqueue pack_assemble job
+  await supabase.from("jobs").insert({
+    session_id: session.id,
+    user_id: user.id,
+    pack_batch_id: session.pack_batch_id,
+    status: "queued",
+    attempts: 0,
+    env: config.appEnv,
+  });
+
+  // Send progress
+  const msg = await ctx.reply(await getText(lang, "pack.progress_assembling"));
+  if (msg?.message_id && ctx.chat?.id) {
+    await supabase
+      .from("sessions")
+      .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
+      .eq("id", session.id);
+  }
+
+  sendAlert({
+    type: "pack_approved",
+    message: "Pack approved",
+    details: {
+      user: `@${user.username || user.telegram_id}`,
+      template: session.pack_template_id,
+      batchId: session.pack_batch_id,
+      credits: stickerCount,
+    },
+  }).catch(console.error);
+});
+
+// Callback: pack_regenerate — user wants new preview (pays 1 more credit)
+bot.action("pack_regenerate", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session || session.state !== "wait_pack_approval") {
+    return;
+  }
+
+  // Check credits
+  if ((user.credits || 0) < 1) {
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await sendBuyCreditsMenu(ctx, user);
+    return;
+  }
+
+  // Deduct 1 credit
+  const { data: deducted } = await supabase.rpc("deduct_credits", {
+    p_user_id: user.id,
+    p_amount: 1,
+  });
+
+  if (!deducted) {
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await sendBuyCreditsMenu(ctx, user);
+    return;
+  }
+
+  // Update batch credits_spent
+  const { data: batch } = await supabase
+    .from("pack_batches")
+    .select("credits_spent")
+    .eq("id", session.pack_batch_id)
+    .maybeSingle();
+
+  await supabase
+    .from("pack_batches")
+    .update({
+      credits_spent: (batch?.credits_spent || 1) + 1,
+      status: "preview",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", session.pack_batch_id);
+
+  // Update session
+  await supabase
+    .from("sessions")
+    .update({
+      state: "generating_pack_preview",
+      pack_sheet_file_id: null,
+      is_active: true,
+    })
+    .eq("id", session.id);
+
+  // Enqueue new preview job
+  await supabase.from("jobs").insert({
+    session_id: session.id,
+    user_id: user.id,
+    pack_batch_id: session.pack_batch_id,
+    status: "queued",
+    attempts: 0,
+    env: config.appEnv,
+  });
+
+  const msg = await ctx.reply(await getText(lang, "pack.progress_generating"));
+  if (msg?.message_id && ctx.chat?.id) {
+    await supabase
+      .from("sessions")
+      .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
+      .eq("id", session.id);
+  }
+
+  sendAlert({
+    type: "pack_regenerated",
+    message: "Pack preview regenerated",
+    details: {
+      user: `@${user.username || user.telegram_id}`,
+      template: session.pack_template_id,
+      batchId: session.pack_batch_id,
+    },
+  }).catch(console.error);
+});
+
+// Callback: pack_cancel — user cancels pack
+bot.action("pack_cancel", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session || !["wait_pack_approval", "wait_pack_preview_payment"].includes(session.state)) {
+    return;
+  }
+
+  // Cancel batch if exists
+  if (session.pack_batch_id) {
+    await supabase
+      .from("pack_batches")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("id", session.pack_batch_id);
+  }
+
+  // Deactivate session
+  await supabase
+    .from("sessions")
+    .update({ state: "canceled", is_active: false })
+    .eq("id", session.id);
+
+  await ctx.reply(await getText(lang, "pack.cancelled"), getMainMenuKeyboard(lang));
 });
 
 // Text handler (style description)

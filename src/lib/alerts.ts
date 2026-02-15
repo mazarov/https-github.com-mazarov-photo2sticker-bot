@@ -13,7 +13,14 @@ type AlertType =
   | "trial_credit_granted"
   | "trial_credit_denied"
   | "idea_generated"
-  | "onboarding_completed";
+  | "onboarding_completed"
+  | "pack_preview_ordered"
+  | "pack_preview_failed"
+  | "pack_approved"
+  | "pack_completed"
+  | "pack_partial"
+  | "pack_failed"
+  | "pack_regenerated";
 
 interface AlertOptions {
   type: AlertType;
@@ -36,6 +43,13 @@ const EMOJI: Record<AlertType, string> = {
   trial_credit_denied: "❌",
   idea_generated: "💡",
   onboarding_completed: "🎓",
+  pack_preview_ordered: "📦",
+  pack_preview_failed: "❌",
+  pack_approved: "✅",
+  pack_completed: "🎉",
+  pack_partial: "🟡",
+  pack_failed: "🔴",
+  pack_regenerated: "🔄",
 };
 
 export async function sendAlert(options: AlertOptions): Promise<void> {

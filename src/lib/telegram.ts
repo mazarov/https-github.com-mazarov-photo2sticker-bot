@@ -64,6 +64,43 @@ export async function deleteMessage(chatId: number, messageId: number) {
   });
 }
 
+export async function sendPhoto(
+  chatId: number,
+  photoBuffer: Buffer,
+  caption?: string,
+  replyMarkup?: any
+): Promise<{ message_id: number; file_id: string } | null> {
+  try {
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("photo", photoBuffer, {
+      filename: "photo.png",
+      contentType: "image/png",
+    });
+    if (caption) {
+      form.append("caption", caption);
+    }
+    if (replyMarkup) {
+      form.append("reply_markup", JSON.stringify(replyMarkup));
+    }
+
+    const res = await axios.post(`${apiBase}/sendPhoto`, form, { headers: form.getHeaders() });
+    if (!res.data?.ok) {
+      console.error("sendPhoto unexpected response:", res.data);
+      return null;
+    }
+    const photos = res.data.result?.photo;
+    const largestPhoto = photos?.[photos.length - 1];
+    return {
+      message_id: res.data.result.message_id,
+      file_id: largestPhoto?.file_id || "",
+    };
+  } catch (err: any) {
+    console.error("sendPhoto error:", err.response?.data || err.message);
+    return null;
+  }
+}
+
 export async function sendSticker(
   chatId: number,
   stickerBuffer: Buffer,
