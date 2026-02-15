@@ -96,7 +96,7 @@ git checkout feature/xxx
 | `SUPPORT_BOT_TOKEN` | — | Токен бота поддержки |
 | `SUPPORT_CHANNEL_ID` | — | ID канала поддержки |
 | `ADMIN_IDS` | — | Telegram ID админов (через запятую) |
-| `SUPABASE_STORAGE_BUCKET` | `stickers` | Бакет в Supabase Storage |
+| `SUPABASE_STORAGE_BUCKET` | `stickers` | Бакет в Supabase Storage (создать в Dashboard: Storage → New bucket; имя = значение переменной). Используется для стикеров и для листов пака (`pack_sheets/`). |
 
 Модели Gemini настраиваются через таблицу `app_config` в Supabase, не через env vars.
 

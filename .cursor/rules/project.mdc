@@ -59,12 +59,7 @@ docker push mazarov/p2s-rembg:latest
 1. Создать feature-ветку: `git checkout -b feature/my-feature`
 2. Разработать и закоммитить
 3. **Применить SQL-миграции** в Supabase (единая БД для прод и тест, разделение по колонке `env`)
-4. **Смержить в `test` и запушить:**
-   ```bash
-   git checkout test
-   git merge feature/my-feature --no-edit
-   git push
-   ```
+4. **Выкатить фичу на тест:** мерж в `test` и пуш, либо `git push origin feature/my-feature:test --force` (подробнее — правило `releases.mdc`)
 5. Dockhost автоматически пересобирает контейнеры при пуше в `test`
 6. Тестовый бот использует `APP_ENV=test` — все данные (users, sessions, jobs) фильтруются по `env = 'test'`
 
