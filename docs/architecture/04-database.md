@@ -25,6 +25,9 @@ erDiagram
 
 ## Таблицы
 
+> Планируемые изменения модели сессий (flow_kind, session_rev, ui_message_id/ui_chat_id):
+> [16-02-session-architecture-requirements.md](../16-02-session-architecture-requirements.md), [16-02-session-router-rfc.md](../16-02-session-router-rfc.md)
+
 ### `users` — Пользователи
 
 | Колонка | Тип | Default | Описание |
@@ -83,6 +86,10 @@ erDiagram
 | `pack_content_set_id` | text | — | FK → pack_content_sets (выбранный набор подписей/сцен) |
 | `pack_carousel_index` | int | — | Индекс текущей карточки в карусели наборов |
 | `pack_sheet_file_id` | text | — | file_id сгенерированного листа превью |
+| `flow_kind` | text | — | План: тип flow (`single` / `pack` / `assistant`) |
+| `session_rev` | int | 1 | План: ревизия сессии для stale callback защиты |
+| `ui_message_id` | bigint | — | План: активное UI-сообщение flow |
+| `ui_chat_id` | bigint | — | План: chat_id активного UI-сообщения |
 | `env` | text | 'prod' | Окружение |
 
 ### `pack_content_sets` — Наборы подписей и сцен для пака
@@ -97,6 +104,7 @@ erDiagram
 | `carousel_description_ru` / `carousel_description_en` | text | Описание в карточке карусели |
 | `labels` / `labels_en` | jsonb | Массивы подписей (порядок = порядок стикеров в сетке) |
 | `scene_descriptions` | jsonb | Массив описаний сцен для Gemini (EN) |
+| `sticker_count` | int | Кол-во стикеров в паке для набора |
 | `sort_order` | int | Порядок в карусели |
 | `is_active` | boolean | Активен ли набор |
 | `mood` | text | Опционально: для автоподбора (romance, everyday, humor, …) |

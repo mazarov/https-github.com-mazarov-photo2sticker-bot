@@ -1,5 +1,8 @@
 # Известные проблемы и workaround'ы
 
+> Архитектурный план по устранению класса ошибок "stale callback / wrong session state":
+> [16-02-session-architecture-requirements.md](../16-02-session-architecture-requirements.md), [16-02-session-router-rfc.md](../16-02-session-router-rfc.md)
+
 ## 1. `is_active` всегда false на сессиях
 
 **Проблема**: при любом `UPDATE` на таблице `sessions`, поле `is_active` сбрасывается в `false`.
@@ -159,3 +162,20 @@ bot.launch({ dropPendingUpdates: true });
 1. Хендлер "Стили" сбрасывает state в `wait_photo` перед проверкой фото
 2. Фото-хендлер при `assistant_wait_photo` без `assistant_session` —
    fallthrough в ручной режим вместо silent return
+
+---
+
+## 11. Stale callback в pack-flow (preview/back)
+
+**Проблема**: пользователь кликает по устаревшему inline-сообщению, callback приходит для
+неактуального шага (`wait_pack_carousel` vs `wait_pack_preview_payment`) и выглядит как "кнопка не работает".
+
+**Текущее решение (point fixes)**:
+- session-bound callback_data для критичных действий:
+  - `pack_preview_pay[:session_id]`
+  - `pack_back_to_carousel[:session_id]`
+- idempotent back для `wait_pack_carousel` / `wait_pack_preview_payment`
+- явный user-facing hint при preview-клике из карусели
+
+**Долгосрочное решение**:
+- Session Router + FSM + `session_rev` (см. RFC).

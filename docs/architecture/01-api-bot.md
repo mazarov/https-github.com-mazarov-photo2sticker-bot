@@ -3,6 +3,9 @@
 Основной процесс приложения. Telegram-бот на Telegraf 4 с long polling.
 Обрабатывает все входящие сообщения, управляет сессиями, оплатой и UI.
 
+> План архитектурного усиления логики сессий и callback:
+> [16-02-session-architecture-requirements.md](../16-02-session-architecture-requirements.md), [16-02-session-router-rfc.md](../16-02-session-router-rfc.md)
+
 ## Состояния сессии (`session_state`)
 
 Сессия — основная сущность, привязанная к пользователю. Состояние определяет,
@@ -155,10 +158,11 @@ flowchart TD
 - `pack_try:CONTENT_SET_ID` — выбрать набор и перейти к фото/стилю (wait_pack_photo или wait_pack_preview_payment)
 - `pack_start:TEMPLATE_ID` — старт flow по выбранному template (fallback, без карусели)
 - `pack_style:STYLE_ID` — выбрать style preset v2 перед preview
-- `pack_preview_pay` — оплатить превью (1 кредит)
+- `pack_preview_pay[:SESSION_ID]` — оплатить превью (1 кредит), session-bound callback
 - `pack_approve` — оплатить сборку (N-1) и запустить assemble
 - `pack_regenerate` — перегенерировать preview (1 кредит)
 - `pack_cancel` — отменить pack flow
+- `pack_back_to_carousel[:SESSION_ID]` — назад к выбору поз, session-bound callback
 
 #### Идеи стикеров (ассистент, assistant_wait_idea)
 - `asst_idea_gen` — сгенерировать выбранную идею
