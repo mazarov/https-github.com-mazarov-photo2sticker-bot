@@ -1106,7 +1106,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     isPremium: ctx.from?.is_premium || false,
     totalGenerations: user.total_generations || 0,
     credits: user.credits || 0,
-    hasPhoto: false,
+    hasPhoto: !!lastPhoto,
     previousGoal,
     availableStyles,
   };
@@ -1319,8 +1319,26 @@ async function getAssistantSystemPrompt(
   // Determine traffic source for trial credit decision
   const isPaidTraffic = userContext?.utmSource && userContext?.utmMedium === "cpc";
   const trafficSource = isPaidTraffic ? "paid" : (userContext?.utmSource || null);
+  // Authoritative photo state for LLM (avoid stale "Has photo: false" from old base prompt).
+  let hasPhoto = false;
+  if (aSession.session_id) {
+    const { data: s } = await supabase
+      .from("sessions")
+      .select("current_photo_file_id")
+      .eq("id", aSession.session_id)
+      .maybeSingle();
+    hasPhoto = !!s?.current_photo_file_id;
+  }
+  if (!hasPhoto) {
+    hasPhoto = !!aSession.pending_photo_file_id;
+  }
 
-  return basePrompt + buildStateInjection(aSession, { availableStyles, trialBudgetRemaining, trafficSource });
+  return basePrompt + buildStateInjection(aSession, {
+    availableStyles,
+    trialBudgetRemaining,
+    trafficSource,
+    hasPhoto,
+  });
 }
 
 /**
@@ -4377,12 +4395,21 @@ bot.on("text", async (ctx) => {
             ])
           );
         } else if (action === "photo") {
-          // LLM wants a photo — switch state
-          await supabase
-            .from("sessions")
-            .update({ state: "assistant_wait_photo", is_active: true })
-            .eq("id", session.id);
-          if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+          const hasPhotoNow = !!(session.current_photo_file_id || user.last_photo_file_id || updatedSession.pending_photo_file_id);
+          if (hasPhotoNow) {
+            // Guard: LLM may request photo due to stale context. Keep chat flow when photo exists.
+            const guardReply = generateFallbackReply("normal", updatedSession, lang);
+            messages[messages.length - 1] = { role: "assistant", content: guardReply };
+            await updateAssistantSession(aSession.id, { messages });
+            await ctx.reply(guardReply, getMainMenuKeyboard(lang));
+          } else {
+            // LLM wants a photo — switch state
+            await supabase
+              .from("sessions")
+              .update({ state: "assistant_wait_photo", is_active: true })
+              .eq("id", session.id);
+            if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+          }
         } else if (action === "show_examples") {
           // Show style examples to help user choose
           const styleId = result.toolCall?.args?.style_id;
