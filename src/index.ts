@@ -1163,14 +1163,15 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
 
     // Guard against race conditions: user may switch to another flow (e.g., pack)
-    // while assistant idea generation is still running.
+    // while assistant idea generation is still running. Only check state: some DB setups
+    // flip is_active to false on update, so we don't require is_active here.
     const { data: freshSession } = await supabase
       .from("sessions")
-      .select("state,is_active")
+      .select("state")
       .eq("id", newSession.id)
       .maybeSingle();
-    if (!freshSession?.is_active || !String(freshSession.state || "").startsWith("assistant_")) {
-      console.log("[startAssistant_ideas] Session switched, skipping idea card for session:", newSession.id, "state:", freshSession?.state, "is_active:", freshSession?.is_active);
+    if (!String(freshSession?.state || "").startsWith("assistant_")) {
+      console.log("[startAssistant_ideas] Session switched, skipping idea card for session:", newSession.id, "state:", freshSession?.state);
       return;
     }
 
@@ -2354,14 +2355,15 @@ bot.on("photo", async (ctx) => {
     try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
 
     // Guard against race conditions: session may switch to pack/other flow
-    // while idea generation is running.
+    // while idea generation is running. Only check state: some DB setups flip
+    // is_active to false on update.
     const { data: freshSession } = await supabase
       .from("sessions")
-      .select("state,is_active")
+      .select("state")
       .eq("id", session.id)
       .maybeSingle();
-    if (!freshSession?.is_active || !String(freshSession.state || "").startsWith("assistant_")) {
-      console.log("[assistant_ideas] Session switched, skipping idea card for session:", session.id, "state:", freshSession?.state, "is_active:", freshSession?.is_active);
+    if (!String(freshSession?.state || "").startsWith("assistant_")) {
+      console.log("[assistant_ideas] Session switched, skipping idea card for session:", session.id, "state:", freshSession?.state);
       return;
     }
 
@@ -2694,36 +2696,15 @@ bot.hears(["📦 Сделать пак", "📦 Make a pack"], async (ctx) => {
     return;
   }
 
-  // Show CTA screen with template preview
-  const title = lang === "ru" ? template.name_ru : template.name_en;
-  const desc = lang === "ru" ? (template.description_ru || "") : (template.description_en || "");
-  const howto = await getText(lang, "pack.intro_howto");
-  const footer = await getText(lang, "pack.intro_footer");
-  const ctaText = `*${title}*\n\n${desc}\n\n${howto}\n\n_${footer}_`;
-
-  const ctaButton = await getText(lang, "pack.cta_button");
+  // Step 1: invitation — "Want to see how your sticker pack will look?" → button leads to carousel
+  const invitationText = await getText(lang, "pack.preview_offer");
+  const invitationBtn = await getText(lang, "pack.invitation_btn");
   const keyboard = {
     inline_keyboard: [[
-      { text: `📦 ${ctaButton}`, callback_data: `pack_start:${template.id}` },
+      { text: `📦 ${invitationBtn}`, callback_data: `pack_show_carousel:${template.id}` },
     ]],
   };
-
-  // Send preview image if available
-  if (template.preview_file_id || template.preview_url) {
-    try {
-      const photoSource = template.preview_file_id || template.preview_url;
-      await ctx.replyWithPhoto(photoSource, {
-        caption: ctaText,
-        parse_mode: "Markdown",
-        reply_markup: keyboard,
-      });
-    } catch (e: any) {
-      console.error("Pack CTA photo error:", e.message);
-      await ctx.reply(ctaText, { parse_mode: "Markdown", reply_markup: keyboard });
-    }
-  } else {
-    await ctx.reply(ctaText, { parse_mode: "Markdown", reply_markup: keyboard });
-  }
+  await ctx.reply(invitationText, { reply_markup: keyboard });
 });
 
 // Callback: pack_start — user tapped "Попробовать" on template CTA
@@ -2803,6 +2784,173 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
     await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
   } else {
     // No photo — ask user to send one
+    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
+  }
+});
+
+// Callback: pack_show_carousel — step 2: show carousel of content sets
+bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+  const templateId = ctx.match[1];
+
+  const { data: template } = await supabase.from("pack_templates").select("*").eq("id", templateId).eq("is_active", true).maybeSingle();
+  if (!template) {
+    await ctx.reply(lang === "ru" ? "Шаблон не найден." : "Template not found.", getMainMenuKeyboard(lang));
+    return;
+  }
+
+  const { data: contentSets } = await supabase
+    .from("pack_content_sets")
+    .select("*")
+    .eq("pack_template_id", templateId)
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true });
+  if (!contentSets?.length) {
+    await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
+    return;
+  }
+
+  await supabase.from("sessions").update({ is_active: false }).eq("user_id", user.id).eq("is_active", true).eq("env", config.appEnv);
+  let selectedPackStyleId: string | null = null;
+  try {
+    const defaultPackStyle = await pickStyleForIdeas(user);
+    selectedPackStyleId = defaultPackStyle?.id || null;
+  } catch (_) {}
+
+  const { data: session, error: sessErr } = await supabase
+    .from("sessions")
+    .insert({
+      user_id: user.id,
+      state: "wait_pack_carousel",
+      is_active: true,
+      pack_template_id: templateId,
+      pack_carousel_index: 0,
+      selected_style_id: selectedPackStyleId,
+      env: config.appEnv,
+    })
+    .select()
+    .single();
+  if (sessErr || !session) {
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    return;
+  }
+
+  const set = contentSets[0];
+  const templateName = lang === "ru" ? template.name_ru : template.name_en;
+  const templateDesc = lang === "ru" ? (template.description_ru || "") : (template.description_en || "");
+  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+  const setName = lang === "ru" ? set.name_ru : set.name_en;
+  const carouselCaption = `*${templateName}*\n${templateDesc}\n\n${setDesc}`;
+  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "◀️", callback_data: "pack_carousel_prev" },
+        { text: `1/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: "▶️", callback_data: "pack_carousel_next" },
+      ],
+      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+    ],
+  };
+  await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+});
+
+bot.action("pack_carousel_noop", (ctx) => safeAnswerCbQuery(ctx));
+
+bot.action("pack_carousel_prev", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  await updatePackCarouselCard(ctx, -1);
+});
+bot.action("pack_carousel_next", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  await updatePackCarouselCard(ctx, 1);
+});
+
+async function updatePackCarouselCard(ctx: any, delta: number) {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session || session.state !== "wait_pack_carousel" || !session.pack_template_id) return;
+
+  const { data: contentSets } = await supabase
+    .from("pack_content_sets")
+    .select("*")
+    .eq("pack_template_id", session.pack_template_id)
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true });
+  if (!contentSets?.length) return;
+
+  const { data: template } = await supabase
+    .from("pack_templates")
+    .select("name_ru, name_en, description_ru, description_en")
+    .eq("id", session.pack_template_id)
+    .maybeSingle();
+  if (!template) return;
+
+  const currentIndex = (session.pack_carousel_index ?? 0) + delta;
+  const idx = ((currentIndex % contentSets.length) + contentSets.length) % contentSets.length;
+  const set = contentSets[idx];
+
+  await supabase.from("sessions").update({ pack_carousel_index: idx }).eq("id", session.id);
+
+  const templateName = lang === "ru" ? template.name_ru : template.name_en;
+  const templateDesc = lang === "ru" ? (template.description_ru || "") : (template.description_en || "");
+  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+  const setName = lang === "ru" ? set.name_ru : set.name_en;
+  const carouselCaption = `*${templateName}*\n${templateDesc}\n\n${setDesc}`;
+  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "◀️", callback_data: "pack_carousel_prev" },
+        { text: `${idx + 1}/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: "▶️", callback_data: "pack_carousel_next" },
+      ],
+      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+    ],
+  };
+  try {
+    await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+  } catch (_) {}
+}
+
+bot.action(/^pack_try:(.+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+  const contentSetId = ctx.match[1];
+
+  const session = await getActiveSession(user.id);
+  if (!session || session.state !== "wait_pack_carousel") return;
+
+  const existingPhoto = session.current_photo_file_id || (await supabase.from("users").select("last_photo_file_id").eq("id", user.id).single().then((r) => r.data?.last_photo_file_id)) || null;
+  const initialState = existingPhoto ? "wait_pack_preview_payment" : "wait_pack_photo";
+
+  await supabase
+    .from("sessions")
+    .update({
+      state: initialState,
+      pack_content_set_id: contentSetId,
+      pack_carousel_index: null,
+      current_photo_file_id: existingPhoto || null,
+      photos: existingPhoto ? [existingPhoto] : [],
+    })
+    .eq("id", session.id);
+
+  if (existingPhoto) {
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
+  } else {
     await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
   }
 });

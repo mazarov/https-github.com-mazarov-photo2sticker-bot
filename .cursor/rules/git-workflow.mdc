@@ -13,10 +13,20 @@ alwaysApply: true
 
 Do NOT commit directly to `main` without explicit confirmation.
 
+## Именование веток
+
+**Ветка называется так же, как документ, из которого ведётся разработка.**
+
+- Документ: `docs/16-02-pack-content-sets.md` → ветка: `feature/16-02-pack-content-sets`
+- Документ: `docs/15-02-pack-sheet-storage.md` → ветка: `feature/15-02-pack-sheet-storage`
+- Имя ветки = префикс `feature/` + имя файла без расширения (без `.md`).
+
+Если задачи нет в отдельном документе — использовать осмысленное короткое имя: `feature/<short-name>`.
+
 ## Feature Branch Workflow
 
 ```
-1. git checkout -b feature/<name>   — create branch
+1. git checkout -b feature/<name>   — create branch (name = doc filename without .md)
 2. ... commits ...                   — work in branch
 3. Test on test bot                  — verify
 4. Ask user: "Готово к мержу в main?"
@@ -40,6 +50,7 @@ Do NOT commit directly to `main` without explicit confirmation.
 
 ## Rules
 
+- **Branch name = document name:** при разработке по доку из `docs/` ветка: `feature/<имя-файла-без-.md>`
 - Never push untested features to `main`
 - Always confirm branch choice with user before first commit
 - Test containers deploy from feature branch, prod from `main`
