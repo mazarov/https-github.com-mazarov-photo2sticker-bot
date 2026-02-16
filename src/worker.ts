@@ -176,6 +176,12 @@ async function ensureSubjectProfileForSource(
   if (existing) return existing;
 
   const detectedAt = new Date().toISOString();
+  const detectorModel = await getAppConfig("gemini_model_subject_detector", "gemini-2.0-flash");
+  console.log("[subject-profile] detector model:", detectorModel, {
+    sessionId: session.id,
+    sourceKind,
+    sourceFileId: sourceFileId.substring(0, 30) + "...",
+  });
   const detected = await detectSubjectProfileFromImageBuffer(sourceBuffer, sourceMime);
   const subjectMode =
     detected.subjectMode === "unknown"
