@@ -474,8 +474,13 @@ async function getEmotionPresets(): Promise<EmotionPreset[]> {
   return data || [];
 }
 
-async function sendEmotionKeyboard(ctx: any, lang: string) {
+async function sendEmotionKeyboard(
+  ctx: any,
+  lang: string,
+  options?: { sessionId?: string | null; sessionRev?: number | null }
+) {
   const presets = await getEmotionPresets();
+  const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
 
   const buttons: ReturnType<typeof Markup.button.callback>[][] = [];
   for (let i = 0; i < presets.length; i += 2) {
@@ -483,14 +488,14 @@ async function sendEmotionKeyboard(ctx: any, lang: string) {
     row.push(
       Markup.button.callback(
         `${presets[i].emoji} ${lang === "ru" ? presets[i].name_ru : presets[i].name_en}`,
-        `emotion_${presets[i].id}`
+        sessionRef ? `emotion_${presets[i].id}:${sessionRef}` : `emotion_${presets[i].id}`
       )
     );
     if (presets[i + 1]) {
       row.push(
         Markup.button.callback(
           `${presets[i + 1].emoji} ${lang === "ru" ? presets[i + 1].name_ru : presets[i + 1].name_en}`,
-          `emotion_${presets[i + 1].id}`
+          sessionRef ? `emotion_${presets[i + 1].id}:${sessionRef}` : `emotion_${presets[i + 1].id}`
         )
       );
     }
@@ -521,8 +526,13 @@ async function getMotionPresets(): Promise<MotionPreset[]> {
   return data || [];
 }
 
-async function sendMotionKeyboard(ctx: any, lang: string) {
+async function sendMotionKeyboard(
+  ctx: any,
+  lang: string,
+  options?: { sessionId?: string | null; sessionRev?: number | null }
+) {
   const presets = await getMotionPresets();
+  const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
 
   const buttons: ReturnType<typeof Markup.button.callback>[][] = [];
   for (let i = 0; i < presets.length; i += 2) {
@@ -530,14 +540,14 @@ async function sendMotionKeyboard(ctx: any, lang: string) {
     row.push(
       Markup.button.callback(
         `${presets[i].emoji} ${lang === "ru" ? presets[i].name_ru : presets[i].name_en}`,
-        `motion_${presets[i].id}`
+        sessionRef ? `motion_${presets[i].id}:${sessionRef}` : `motion_${presets[i].id}`
       )
     );
     if (presets[i + 1]) {
       row.push(
         Markup.button.callback(
           `${presets[i + 1].emoji} ${lang === "ru" ? presets[i + 1].name_ru : presets[i + 1].name_en}`,
-          `motion_${presets[i + 1].id}`
+          sessionRef ? `motion_${presets[i + 1].id}:${sessionRef}` : `motion_${presets[i + 1].id}`
         )
       );
     }
@@ -5537,7 +5547,10 @@ bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendEmotionKeyboard(ctx, lang);
+  await sendEmotionKeyboard(ctx, lang, {
+    sessionId: session.id,
+    sessionRev: (session.session_rev || 1) + 1,
+  });
 });
 
 // Callback: change emotion (old format - fallback)
@@ -5558,14 +5571,23 @@ bot.action("change_emotion", async (ctx) => {
 
   await supabase
     .from("sessions")
-    .update({ state: "wait_emotion", is_active: true, pending_generation_type: null })
+    .update({
+      state: "wait_emotion",
+      is_active: true,
+      pending_generation_type: null,
+      flow_kind: "single",
+      session_rev: (session.session_rev || 1) + 1,
+    })
     .eq("id", session.id);
 
-  await sendEmotionKeyboard(ctx, lang);
+  await sendEmotionKeyboard(ctx, lang, {
+    sessionId: session.id,
+    sessionRev: (session.session_rev || 1) + 1,
+  });
 });
 
 // Callback: emotion selection
-bot.action(/^emotion_(.+)$/, async (ctx) => {
+bot.action(/^emotion_([^:]+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -5574,13 +5596,24 @@ bot.action(/^emotion_(.+)$/, async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
-  if (!session?.last_sticker_file_id) {
-    await ctx.reply(await getText(lang, "error.no_stickers_added"));
+  const emotionId = ctx.match[1];
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "emotion_select", "session_not_found");
     return;
   }
-
-  const emotionId = ctx.match[1];
+  if (session.state !== "wait_emotion" || !session.last_sticker_file_id) {
+    await rejectSessionEvent(ctx, lang, "emotion_select", "wrong_state");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "emotion_select", "stale_callback");
+    return;
+  }
   const presets = await getEmotionPresets();
   const preset = presets.find((p) => p.id === emotionId);
   if (!preset) return;
@@ -5588,7 +5621,12 @@ bot.action(/^emotion_(.+)$/, async (ctx) => {
   if (preset.id === "custom") {
     await supabase
       .from("sessions")
-      .update({ state: "wait_custom_emotion", is_active: true })
+      .update({
+        state: "wait_custom_emotion",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: (session.session_rev || 1) + 1,
+      })
       .eq("id", session.id);
     await ctx.reply(await getText(lang, "emotion.custom_prompt"));
     return;
@@ -5673,7 +5711,10 @@ bot.action(/^change_motion:([^:]+)(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendMotionKeyboard(ctx, lang);
+  await sendMotionKeyboard(ctx, lang, {
+    sessionId: session.id,
+    sessionRev: (session.session_rev || 1) + 1,
+  });
 });
 
 // Callback: change motion (old format - fallback)
@@ -5694,14 +5735,23 @@ bot.action("change_motion", async (ctx) => {
 
   await supabase
     .from("sessions")
-    .update({ state: "wait_motion", is_active: true, pending_generation_type: null })
+    .update({
+      state: "wait_motion",
+      is_active: true,
+      pending_generation_type: null,
+      flow_kind: "single",
+      session_rev: (session.session_rev || 1) + 1,
+    })
     .eq("id", session.id);
 
-  await sendMotionKeyboard(ctx, lang);
+  await sendMotionKeyboard(ctx, lang, {
+    sessionId: session.id,
+    sessionRev: (session.session_rev || 1) + 1,
+  });
 });
 
 // Callback: motion selection
-bot.action(/^motion_(.+)$/, async (ctx) => {
+bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -5710,13 +5760,24 @@ bot.action(/^motion_(.+)$/, async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
-  if (!session?.last_sticker_file_id) {
-    await ctx.reply(await getText(lang, "error.no_stickers_added"));
+  const motionId = ctx.match[1];
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "motion_select", "session_not_found");
     return;
   }
-
-  const motionId = ctx.match[1];
+  if (session.state !== "wait_motion" || !session.last_sticker_file_id) {
+    await rejectSessionEvent(ctx, lang, "motion_select", "wrong_state");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "motion_select", "stale_callback");
+    return;
+  }
   const presets = await getMotionPresets();
   const preset = presets.find((p) => p.id === motionId);
   if (!preset) return;
@@ -5724,7 +5785,12 @@ bot.action(/^motion_(.+)$/, async (ctx) => {
   if (preset.id === "custom") {
     await supabase
       .from("sessions")
-      .update({ state: "wait_custom_motion", is_active: true })
+      .update({
+        state: "wait_custom_motion",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: (session.session_rev || 1) + 1,
+      })
       .eq("id", session.id);
     await ctx.reply(await getText(lang, "motion.custom_prompt"));
     return;
