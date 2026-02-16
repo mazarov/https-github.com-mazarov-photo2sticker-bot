@@ -16,6 +16,11 @@ export interface SubjectProfile {
 
 const SUBJECT_LOCK_BEGIN = "[SUBJECT LOCK BEGIN]";
 const SUBJECT_LOCK_END = "[SUBJECT LOCK END]";
+const LEGACY_SUBJECT_PATTERNS: RegExp[] = [
+  /Subject:\s*Analyze the provided photo\.[^\n]*(?:\n|$)/gi,
+  /If there is ONE person[^.]*\.(?:\s|$)/gi,
+  /If there are MULTIPLE people[^.]*\.(?:\s|$)/gi,
+];
 
 export function parseBooleanConfig(value: string | null | undefined): boolean {
   const normalized = String(value || "").trim().toLowerCase();
@@ -108,7 +113,7 @@ export function buildSubjectLockBlock(profile: Pick<SubjectProfile, "subjectMode
 }
 
 export function appendSubjectLock(prompt: string, lockBlock: string): string {
-  const cleanPrompt = (prompt || "").trim();
+  const cleanPrompt = stripLegacySubjectInstructions((prompt || "").trim());
   const cleanLock = (lockBlock || "").trim();
   if (!cleanLock) return cleanPrompt;
   if (cleanPrompt.includes(SUBJECT_LOCK_BEGIN) && cleanPrompt.includes(SUBJECT_LOCK_END)) {
@@ -116,6 +121,68 @@ export function appendSubjectLock(prompt: string, lockBlock: string): string {
   }
   if (!cleanPrompt) return cleanLock;
   return `${cleanLock}\n\n${cleanPrompt}`;
+}
+
+function stripLegacySubjectInstructions(prompt: string): string {
+  let next = prompt;
+  for (const pattern of LEGACY_SUBJECT_PATTERNS) {
+    next = next.replace(pattern, "");
+  }
+  return next.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function parseNumberConfig(value: string | null | undefined, fallback: number): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return num;
+}
+
+async function hardenDetectedProfile(detected: {
+  subjectMode: SubjectMode;
+  subjectCount: number | null;
+  subjectConfidence: number | null;
+}): Promise<{
+  subjectMode: SubjectMode;
+  subjectCount: number | null;
+  subjectConfidence: number | null;
+}> {
+  let subjectMode = normalizeSubjectMode(detected.subjectMode);
+  let subjectCount = normalizeCount(detected.subjectCount);
+  const subjectConfidence = normalizeConfidence(detected.subjectConfidence);
+
+  if (subjectMode === "unknown") {
+    subjectMode = inferSubjectModeByCount(subjectCount);
+  }
+
+  // Guard: avoid forcing "multi" on weak/ambiguous detector output.
+  if (subjectMode === "multi") {
+    const minConfidence = parseNumberConfig(
+      await getAppConfig("subject_multi_confidence_min", "0.85"),
+      0.85
+    );
+    const lowConfidence = subjectConfidence === null || subjectConfidence < minConfidence;
+    if (lowConfidence) {
+      const fallbackMode = normalizeSubjectMode(
+        await getAppConfig("subject_multi_low_confidence_fallback", "unknown")
+      );
+      if (fallbackMode === "single") {
+        subjectMode = "single";
+        subjectCount = 1;
+      } else {
+        subjectMode = "unknown";
+        subjectCount = null;
+      }
+    }
+  }
+
+  if (subjectMode === "single" && subjectCount === null) {
+    subjectCount = 1;
+  }
+  if (subjectMode === "unknown") {
+    subjectCount = null;
+  }
+
+  return { subjectMode, subjectCount, subjectConfidence };
 }
 
 function extractTextFromGeminiResponse(data: any): string {
@@ -241,7 +308,7 @@ export async function detectSubjectProfileFromImageBuffer(
     if (!rawText) {
       return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null };
     }
-    return parseDetectorPayload(rawText);
+    return await hardenDetectedProfile(parseDetectorPayload(rawText));
   } catch (err: any) {
     console.warn("[subject-profile] detector failed:", err?.response?.data?.error?.message || err?.message || err);
     return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null };

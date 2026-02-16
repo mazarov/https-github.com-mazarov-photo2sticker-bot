@@ -14,7 +14,6 @@ import {
   appendSubjectLock,
   buildSubjectLockBlock,
   detectSubjectProfileFromImageBuffer,
-  inferSubjectModeByCount,
   isSubjectLockEnabled,
   isSubjectModePackFilterEnabled,
   isSubjectPostcheckEnabled,
@@ -183,13 +182,9 @@ async function ensureSubjectProfileForSource(
     sourceFileId: sourceFileId.substring(0, 30) + "...",
   });
   const detected = await detectSubjectProfileFromImageBuffer(sourceBuffer, sourceMime);
-  const subjectMode =
-    detected.subjectMode === "unknown"
-      ? inferSubjectModeByCount(detected.subjectCount)
-      : detected.subjectMode;
 
   const nextProfile: SubjectProfile = {
-    subjectMode,
+    subjectMode: detected.subjectMode,
     subjectCount: detected.subjectCount,
     subjectConfidence: detected.subjectConfidence,
     sourceFileId,
@@ -462,6 +457,9 @@ async function runPackPreviewJob(job: any) {
   }
   const subjectLockBlock =
     lockEnabled && packSubjectProfile ? buildSubjectLockBlock(packSubjectProfile) : "";
+  const styleBlockWithSubject = subjectLockBlock
+    ? appendSubjectLock(styleBlock, subjectLockBlock)
+    : styleBlock;
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
   if (subjectFilterEnabled) {
     const setSubjectMode = normalizePackSetSubjectMode(baseContentSet?.subject_mode);
@@ -563,11 +561,11 @@ CRITICAL RULES FOR THE GRID:
 
   const hasCollage = !!collageBase64;
   const prompt = hasCollage
-    ? `${subjectLockBlock ? `${subjectLockBlock}\n\n` : ""}${styleBlock ? `${styleBlock}\n\n` : ""}[REFERENCE IMAGE]
+    ? `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}[REFERENCE IMAGE]
 The first image is a reference sticker pack. Match its visual style (rendering, outline, proportions, colors).
 
 ${packTaskBlock}`
-    : `${subjectLockBlock ? `${subjectLockBlock}\n\n` : ""}${styleBlock ? `${styleBlock}\n\n` : ""}${packTaskBlock}`;
+    : `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}${packTaskBlock}`;
 
   console.log("[PackPreview] Prompt (first 400):", prompt.substring(0, 400), hasCollage ? "(with collage ref)" : "(no collage)");
 

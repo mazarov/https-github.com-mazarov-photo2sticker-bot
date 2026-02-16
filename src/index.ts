@@ -13,7 +13,6 @@ import {
   appendSubjectLock,
   buildSubjectLockBlock,
   detectSubjectProfileFromImageBuffer,
-  inferSubjectModeByCount,
   isSubjectLockEnabled,
   isSubjectModePackFilterEnabled,
   isSubjectProfileEnabled,
@@ -791,10 +790,7 @@ async function ensureSubjectProfileForGeneration(
     const mimeType = getMimeTypeByTelegramPath(filePath);
     const detected = await detectSubjectProfileFromImageBuffer(fileBuffer, mimeType);
 
-    const subjectMode =
-      detected.subjectMode === "unknown"
-        ? inferSubjectModeByCount(detected.subjectCount)
-        : detected.subjectMode;
+    const subjectMode = detected.subjectMode;
     const nextProfile: SubjectProfile = {
       subjectMode,
       subjectCount: detected.subjectCount,
@@ -1755,13 +1751,33 @@ async function getActiveSession(userId: string) {
 
   // Fallback: some DB setups flip is_active to false on update
   console.log("getActiveSession fallback for user:", userId);
+  const fallbackAllowedStates = [
+    "assistant_wait_photo",
+    "assistant_wait_idea",
+    "assistant_chat",
+    "wait_photo",
+    "wait_style",
+    "wait_custom_style_v2",
+    "wait_custom_emotion",
+    "wait_custom_motion",
+    "wait_text_overlay",
+    "wait_emotion",
+    "wait_pack_photo",
+    "wait_pack_carousel",
+    "wait_pack_preview_payment",
+    "wait_pack_approval",
+    "wait_first_purchase",
+    "wait_buy_credit",
+  ];
+  const recentCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
   const { data: fallback } = await supabase
     .from("sessions")
     .select("*")
     .eq("user_id", userId)
     .eq("env", config.appEnv)
-    .neq("state", "canceled")
-    .order("created_at", { ascending: false })
+    .in("state", fallbackAllowedStates)
+    .gte("updated_at", recentCutoff)
+    .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (fallback) {
