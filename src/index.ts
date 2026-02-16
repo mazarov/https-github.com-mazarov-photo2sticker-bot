@@ -1163,14 +1163,15 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
 
     // Guard against race conditions: user may switch to another flow (e.g., pack)
-    // while assistant idea generation is still running.
+    // while assistant idea generation is still running. Only check state: some DB setups
+    // flip is_active to false on update, so we don't require is_active here.
     const { data: freshSession } = await supabase
       .from("sessions")
-      .select("state,is_active")
+      .select("state")
       .eq("id", newSession.id)
       .maybeSingle();
-    if (!freshSession?.is_active || !String(freshSession.state || "").startsWith("assistant_")) {
-      console.log("[startAssistant_ideas] Session switched, skipping idea card for session:", newSession.id, "state:", freshSession?.state, "is_active:", freshSession?.is_active);
+    if (!String(freshSession?.state || "").startsWith("assistant_")) {
+      console.log("[startAssistant_ideas] Session switched, skipping idea card for session:", newSession.id, "state:", freshSession?.state);
       return;
     }
 
@@ -2354,14 +2355,15 @@ bot.on("photo", async (ctx) => {
     try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
 
     // Guard against race conditions: session may switch to pack/other flow
-    // while idea generation is running.
+    // while idea generation is running. Only check state: some DB setups flip
+    // is_active to false on update.
     const { data: freshSession } = await supabase
       .from("sessions")
-      .select("state,is_active")
+      .select("state")
       .eq("id", session.id)
       .maybeSingle();
-    if (!freshSession?.is_active || !String(freshSession.state || "").startsWith("assistant_")) {
-      console.log("[assistant_ideas] Session switched, skipping idea card for session:", session.id, "state:", freshSession?.state, "is_active:", freshSession?.is_active);
+    if (!String(freshSession?.state || "").startsWith("assistant_")) {
+      console.log("[assistant_ideas] Session switched, skipping idea card for session:", session.id, "state:", freshSession?.state);
       return;
     }
 
