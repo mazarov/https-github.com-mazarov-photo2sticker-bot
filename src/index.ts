@@ -2783,9 +2783,29 @@ bot.hears(["✨ Создать стикер", "✨ Create sticker"], async (ctx)
 
   const lang = user.lang || "en";
 
-  // If assistant dialog is already active — don't restart silently.
-  const activeAssistant = await getActiveAssistantSession(user.id);
-  if (activeAssistant?.status === "active") {
+  // If assistant dialog is already active (or we can restore assistant state),
+  // don't restart the dialog and lose context.
+  let activeAssistant = await getActiveAssistantSession(user.id);
+  const existingSession = await getActiveSession(user.id);
+
+  if (existingSession?.state?.startsWith("assistant_")) {
+    if (!existingSession.is_active) {
+      await supabase
+        .from("sessions")
+        .update({ is_active: true })
+        .eq("id", existingSession.id);
+    }
+
+    if (!activeAssistant) {
+      const recent = await getRecentAssistantSession(user.id);
+      if (recent) {
+        await reactivateAssistantSession(recent.id);
+        activeAssistant = { ...recent, status: "active" } as AssistantSessionRow;
+      }
+    }
+  }
+
+  if (activeAssistant?.status === "active" || existingSession?.state?.startsWith("assistant_")) {
     await ctx.reply(
       lang === "ru" ? "Продолжаем диалог 👇" : "Let's continue the dialog 👇",
       getMainMenuKeyboard(lang)
@@ -2793,7 +2813,7 @@ bot.hears(["✨ Создать стикер", "✨ Create sticker"], async (ctx)
     return;
   }
 
-  // Start new assistant dialog
+  // Start new assistant dialog only when there is no assistant context at all.
   await startAssistantDialog(ctx, user, lang);
 });
 
