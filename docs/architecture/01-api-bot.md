@@ -106,6 +106,10 @@ flowchart TD
     REROUTE -->|Нет| MANUAL[Ручной режим:<br/>сохранить фото<br/>→ wait_style<br/>показать карусель]
 ```
 
+Дополнительно для активных flow:
+- `assistant_chat` и `assistant_wait_idea`: новое фото не ломает flow, бот спрашивает "новое или текущее фото" (`assistant_new_photo` / `assistant_keep_photo`).
+- `wait_pack_preview_payment` и `wait_pack_approval`: аналогичный выбор для pack flow (`pack_new_photo` / `pack_keep_photo`) с продолжением pack-сценария.
+
 ### Обработка текста (`bot.on("text")`)
 
 Маршрутизация по `session.state`:

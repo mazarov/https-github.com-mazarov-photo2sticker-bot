@@ -2449,44 +2449,46 @@ bot.on("photo", async (ctx) => {
     }
   }
 
-  // === AI Assistant: photo sent during active chat — update photo and continue ===
-  if (session.state === "assistant_chat") {
-    console.log("Assistant chat photo: updating photo for session:", session.id);
-    const chatPhotos = Array.isArray(session.photos) ? session.photos : [];
-    chatPhotos.push(photo.file_id);
+  // === AI Assistant: replacement photo router (chat + ideas) ===
+  // For active assistant flow we always ask which photo to use.
+  if (session.state === "assistant_chat" || session.state === "assistant_wait_idea") {
+    const assistantPhotos = Array.isArray(session.photos) ? session.photos : [];
+    const nextPhotos = [...assistantPhotos, photo.file_id];
+    const nextRev = (session.session_rev || 1) + 1;
     await supabase.from("sessions")
-      .update({ photos: chatPhotos, current_photo_file_id: photo.file_id, is_active: true })
+      .update({
+        photos: nextPhotos,
+        pending_photo_file_id: photo.file_id,
+        is_active: true,
+        flow_kind: "assistant",
+        session_rev: nextRev,
+      })
       .eq("id", session.id);
+    session.photos = nextPhotos;
+    session.pending_photo_file_id = photo.file_id;
+    session.session_rev = nextRev;
 
-    const aSessionChat = await getActiveAssistantSession(user.id);
-    if (aSessionChat) {
-      // Notify assistant about the new photo
-      const chatMessages: AssistantMessage[] = Array.isArray(aSessionChat.messages) ? [...aSessionChat.messages] : [];
-      chatMessages.push({ role: "user", content: "[User sent a new photo]" });
-      const chatSystemPrompt = await getAssistantSystemPrompt(chatMessages, aSessionChat, {
-        credits: user.credits || 0,
-        hasPurchased: !!user.has_purchased,
-        totalGenerations: user.total_generations || 0,
-        utmSource: user.utm_source,
-        utmMedium: user.utm_medium,
-      });
-      try {
-        const chatResult = await callAIChat(chatMessages, chatSystemPrompt);
-        chatMessages.push({ role: "assistant", content: chatResult.text });
-        await updateAssistantSession(aSessionChat.id, { messages: chatMessages });
-        if (chatResult.text) await ctx.reply(chatResult.text, getMainMenuKeyboard(lang));
-      } catch (err: any) {
-        console.error("Assistant chat photo AI error:", err.message);
-        const ack = lang === "ru"
-          ? "Фото обновлено! Продолжаем — что будем делать со стикером?"
-          : "Photo updated! Let's continue — what shall we do with the sticker?";
-        await ctx.reply(ack, getMainMenuKeyboard(lang));
-      }
-    } else {
-      // No assistant session — acknowledge photo update
-      const ack = lang === "ru" ? "Фото принято! 📸" : "Photo received! 📸";
-      await ctx.reply(ack, getMainMenuKeyboard(lang));
+    const aSession = await getActiveAssistantSession(user.id);
+    if (aSession) {
+      await updateAssistantSession(aSession.id, { pending_photo_file_id: photo.file_id });
     }
+
+    const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
+    await ctx.reply(
+      lang === "ru"
+        ? "Вижу новое фото! С каким будем работать?"
+        : "New photo! Which one should we use?",
+      Markup.inlineKeyboard([
+        [Markup.button.callback(
+          lang === "ru" ? "✅ Новое фото" : "✅ New photo",
+          sessionRef ? `assistant_new_photo:${sessionRef}` : "assistant_new_photo"
+        )],
+        [Markup.button.callback(
+          lang === "ru" ? "❌ Оставить прежнее" : "❌ Keep current",
+          sessionRef ? `assistant_keep_photo:${sessionRef}` : "assistant_keep_photo"
+        )],
+      ])
+    );
     return;
   }
 
@@ -2614,36 +2616,6 @@ bot.on("photo", async (ctx) => {
       sessionId: session.id,
       sessionRev: session.session_rev,
     });
-    return;
-  }
-
-  // === AI Assistant: new photo during active dialog ===
-  if (session.state === "assistant_chat") {
-    // Store new photo file_id in assistant_sessions for later use
-    const aSession = await getActiveAssistantSession(user.id);
-    if (aSession) {
-      await updateAssistantSession(aSession.id, { pending_photo_file_id: photo.file_id });
-    }
-
-    await ctx.reply(
-      lang === "ru"
-        ? "Вижу новое фото! С каким будем работать?"
-        : "New photo! Which one should we use?",
-      Markup.inlineKeyboard([
-        [Markup.button.callback(
-          lang === "ru" ? "✅ Новое фото" : "✅ New photo",
-            formatCallbackSessionRef(session.id, session.session_rev)
-              ? `assistant_new_photo:${formatCallbackSessionRef(session.id, session.session_rev)}`
-              : "assistant_new_photo"
-        )],
-        [Markup.button.callback(
-          lang === "ru" ? "❌ Оставить прежнее" : "❌ Keep current",
-            formatCallbackSessionRef(session.id, session.session_rev)
-              ? `assistant_keep_photo:${formatCallbackSessionRef(session.id, session.session_rev)}`
-              : "assistant_keep_photo"
-        )],
-      ])
-    );
     return;
   }
 
@@ -7303,7 +7275,7 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
   }
 
   const aSession = await getActiveAssistantSession(user.id);
-  const newPhotoFileId = aSession?.pending_photo_file_id;
+  const newPhotoFileId = session.pending_photo_file_id || aSession?.pending_photo_file_id;
   if (!newPhotoFileId) {
     await ctx.reply(lang === "ru" ? "Фото не найдено, пришли ещё раз." : "Photo not found, please send again.");
     return;
@@ -7311,11 +7283,98 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
   const photos = Array.isArray(session.photos) ? session.photos : [];
   photos.push(newPhotoFileId);
 
+  // Ideas flow: keep assistant_wait_idea and refresh idea card for the new photo.
+  if (session.state === "assistant_wait_idea") {
+    const ideasState = (session.sticker_ideas_state || {}) as any;
+    const pickedStyle = (ideasState?.styleId && await getStylePresetV2ById(ideasState.styleId))
+      || await pickStyleForIdeas(user);
+    if (!pickedStyle) {
+      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+      return;
+    }
+
+    const loadingMsg = await ctx.reply(
+      lang === "ru" ? "📸 Обновляю идею для нового фото..." : "📸 Refreshing idea for the new photo..."
+    );
+    let idea: StickerIdea;
+    let photoDescription = "";
+    try {
+      const result = await generateFirstIdeaWithPhoto({
+        photoFileId: newPhotoFileId,
+        stylePresetId: pickedStyle.id,
+        lang,
+      });
+      idea = result.idea;
+      photoDescription = result.photoDescription;
+    } catch (err: any) {
+      console.error("Assistant new photo (ideas) error:", err.message);
+      idea = getDefaultIdeas(lang)[0];
+    }
+
+    const nextRev = (session.session_rev || 1) + 1;
+    await supabase
+      .from("sessions")
+      .update({
+        photos,
+        current_photo_file_id: newPhotoFileId,
+        pending_photo_file_id: null,
+        state: "assistant_wait_idea",
+        sticker_ideas_state: {
+          styleId: pickedStyle.id,
+          ideaIndex: 0,
+          ideas: [idea],
+          photoDescription,
+          holidayId: ideasState?.holidayId || null,
+        },
+        is_active: true,
+        flow_kind: "assistant",
+        session_rev: nextRev,
+      })
+      .eq("id", session.id);
+
+    if (aSession) {
+      await updateAssistantSession(aSession.id, { pending_photo_file_id: null });
+    }
+    try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
+    await showStickerIdeaCard(ctx, {
+      idea,
+      ideaIndex: 0,
+      totalIdeas: 0,
+      style: pickedStyle,
+      lang,
+      currentHolidayId: ideasState?.holidayId || null,
+      sessionId: session.id,
+      sessionRev: nextRev,
+    });
+    return;
+  }
+
+  if (!aSession) {
+    await supabase
+      .from("sessions")
+      .update({
+        photos,
+        current_photo_file_id: newPhotoFileId,
+        pending_photo_file_id: null,
+        is_active: true,
+        flow_kind: "assistant",
+        session_rev: (session.session_rev || 1) + 1,
+      })
+      .eq("id", session.id);
+    await ctx.reply(
+      lang === "ru"
+        ? "Фото обновлено! Продолжаем — что будем делать со стикером?"
+        : "Photo updated! Let's continue — what shall we do with the sticker?",
+      getMainMenuKeyboard(lang)
+    );
+    return;
+  }
+
   // Update photo and notify assistant
-  const messages: AssistantMessage[] = Array.isArray(aSession!.messages) ? [...aSession!.messages] : [];
+  const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
   messages.push({ role: "user", content: "[User sent a new photo and chose to use it]" });
 
-  const systemPrompt = await getAssistantSystemPrompt(messages, aSession!);
+  const systemPrompt = await getAssistantSystemPrompt(messages, aSession);
 
   try {
     const result = await callAIChat(messages, systemPrompt);
@@ -7325,12 +7384,12 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
     let toolUpdates: Partial<AssistantSessionRow> = {};
     let toolAction = "none";
     if (result.toolCall) {
-      const { updates, action: ta } = handleToolCall(result.toolCall, aSession!);
+      const { updates, action: ta } = handleToolCall(result.toolCall, aSession);
       toolUpdates = updates;
       toolAction = ta;
     }
 
-    await updateAssistantSession(aSession!.id, {
+    await updateAssistantSession(aSession.id, {
       messages,
       pending_photo_file_id: null,
       ...toolUpdates,
@@ -7341,6 +7400,7 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
       .update({
         photos,
         current_photo_file_id: newPhotoFileId,
+        pending_photo_file_id: null,
         state: "assistant_chat",
         is_active: true,
         flow_kind: "assistant",
@@ -7391,6 +7451,19 @@ bot.action(/^assistant_keep_photo(?::(.+))?$/, async (ctx) => {
   if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
     await rejectSessionEvent(ctx, lang, "assistant_keep_photo", "stale_callback");
     return;
+  }
+  await supabase
+    .from("sessions")
+    .update({
+      pending_photo_file_id: null,
+      is_active: true,
+      flow_kind: "assistant",
+      session_rev: (session.session_rev || 1) + 1,
+    })
+    .eq("id", session.id);
+  const aSession = await getActiveAssistantSession(user.id);
+  if (aSession) {
+    await updateAssistantSession(aSession.id, { pending_photo_file_id: null });
   }
   const msg = lang === "ru" ? "Хорошо, работаем с текущим фото!" : "Ok, keeping the current photo!";
   await ctx.reply(msg);
