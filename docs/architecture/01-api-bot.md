@@ -158,6 +158,8 @@ flowchart TD
 - `pack_start:TEMPLATE_ID` — старт flow по выбранному template (fallback, без карусели)
 - `pack_style:STYLE_ID` — выбрать style preset v2 перед preview
 - `pack_preview_pay:SESSION_ID[:REV]` — оплатить превью (1 кредит)
+- `pack_new_photo:SESSION_ID[:REV]` — использовать новое фото и вернуться к шагу выбора стиля
+- `pack_keep_photo:SESSION_ID[:REV]` — оставить текущее фото и продолжить текущий шаг pack flow
 - `pack_back_to_carousel:SESSION_ID[:REV]` — вернуться к выбору поз
 - `pack_approve:SESSION_ID[:REV]` — оплатить сборку (N-1) и запустить assemble
 - `pack_regenerate:SESSION_ID[:REV]` — перегенерировать preview (1 кредит)

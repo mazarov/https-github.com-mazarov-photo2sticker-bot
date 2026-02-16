@@ -2722,6 +2722,38 @@ bot.on("photo", async (ctx) => {
     return;
   }
 
+  // === Pack flow: new photo during style/payment or approval step ===
+  // Keep the current pack flow and ask which photo to use.
+  if (session.state === "wait_pack_preview_payment" || session.state === "wait_pack_approval") {
+    const packPhotos = Array.isArray(session.photos) ? session.photos : [];
+    const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
+    await supabase
+      .from("sessions")
+      .update({
+        photos: [...packPhotos, photo.file_id],
+        pending_photo_file_id: photo.file_id,
+        is_active: true,
+      })
+      .eq("id", session.id);
+
+    await ctx.reply(
+      lang === "ru"
+        ? "Вижу новое фото! С каким продолжаем пак?"
+        : "I see a new photo! Which one should we use for the pack?",
+      Markup.inlineKeyboard([
+        [Markup.button.callback(
+          lang === "ru" ? "✅ Новое фото" : "✅ New photo",
+          sessionRef ? `pack_new_photo:${sessionRef}` : "pack_new_photo"
+        )],
+        [Markup.button.callback(
+          lang === "ru" ? "❌ Оставить текущее" : "❌ Keep current",
+          sessionRef ? `pack_keep_photo:${sessionRef}` : "pack_keep_photo"
+        )],
+      ])
+    );
+    return;
+  }
+
   // === Manual mode: existing logic ===
   const photos = Array.isArray(session.photos) ? session.photos : [];
   photos.push(photo.file_id);
@@ -3898,6 +3930,104 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
     .eq("id", session.id);
 
   await ctx.reply(await getText(lang, "pack.cancelled"), getMainMenuKeyboard(lang));
+});
+
+// Callback: pack_new_photo — user chose to continue pack with newly sent photo
+bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { session, reasonCode } = await resolvePackSessionForEvent(
+    user.id,
+    ["wait_pack_preview_payment", "wait_pack_approval"],
+    explicitSessionId
+  );
+  if (!session || reasonCode === "wrong_state") {
+    await rejectPackEvent(ctx, lang, "pack_new_photo", reasonCode || "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectPackEvent(ctx, lang, "pack_new_photo", "stale_callback");
+    return;
+  }
+
+  const newPhotoFileId = session.pending_photo_file_id;
+  if (!newPhotoFileId) {
+    await ctx.reply(lang === "ru" ? "Фото не найдено, пришли ещё раз." : "Photo not found, please send again.");
+    return;
+  }
+  const photos = Array.isArray(session.photos) ? session.photos : [];
+  if (!photos.includes(newPhotoFileId)) photos.push(newPhotoFileId);
+
+  await supabase
+    .from("sessions")
+    .update({
+      photos,
+      current_photo_file_id: newPhotoFileId,
+      pending_photo_file_id: null,
+      state: "wait_pack_preview_payment",
+      pack_batch_id: null,
+      pack_sheet_file_id: null,
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
+    })
+    .eq("id", session.id);
+
+  await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
+});
+
+// Callback: pack_keep_photo — user keeps current photo and continues pack flow
+bot.action(/^pack_keep_photo(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { session, reasonCode } = await resolvePackSessionForEvent(
+    user.id,
+    ["wait_pack_preview_payment", "wait_pack_approval"],
+    explicitSessionId
+  );
+  if (!session || reasonCode === "wrong_state") {
+    await rejectPackEvent(ctx, lang, "pack_keep_photo", reasonCode || "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectPackEvent(ctx, lang, "pack_keep_photo", "stale_callback");
+    return;
+  }
+
+  await supabase
+    .from("sessions")
+    .update({
+      pending_photo_file_id: null,
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
+    })
+    .eq("id", session.id);
+
+  if (session.state === "wait_pack_approval") {
+    await ctx.reply(
+      lang === "ru"
+        ? "Оставляем текущее фото. Можешь одобрить превью или перегенерировать."
+        : "Keeping current photo. You can approve the preview or regenerate."
+    );
+    return;
+  }
+
+  await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
 });
 
 // Text handler (style description)
