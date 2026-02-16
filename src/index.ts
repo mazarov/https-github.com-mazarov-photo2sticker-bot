@@ -1214,6 +1214,8 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
       totalIdeas: 0, // unlimited
       style: pickedStyle,
       lang,
+      sessionId: newSession.id,
+      sessionRev: newSession.session_rev,
     });
   }
 }
