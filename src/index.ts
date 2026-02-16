@@ -1517,6 +1517,31 @@ async function getActiveSession(userId: string) {
   return fallback;
 }
 
+/** Get session that is in pack flow (for pack callbacks when user may have is_active assistant session). */
+async function getPackFlowSession(userId: string) {
+  const packStates = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "generating_pack_preview", "wait_pack_approval", "processing_pack"];
+  const { data } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .in("state", packStates)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data;
+}
+
+/** Get session for style selection (wait_style or wait_pack_preview_payment). Prefers pack session when active is assistant. */
+async function getSessionForStyleSelection(userId: string) {
+  let session = await getActiveSession(userId);
+  if (session && !["wait_style", "wait_pack_preview_payment"].includes(session.state)) {
+    const packSession = await getPackFlowSession(userId);
+    if (packSession?.state === "wait_pack_preview_payment") session = packSession;
+  }
+  return session;
+}
+
 /**
  * Handle grant_credit / deny_credit action from AI assistant.
  */
@@ -2669,7 +2694,7 @@ async function sendPackStyleSelectionStep(
   if (telegramId) {
     const user = await getUser(telegramId);
     if (user) {
-      const session = await getActiveSession(user.id);
+      const session = await getPackFlowSession(user.id);
       if (session?.pack_content_set_id) {
         const { data: contentSet } = await supabase
           .from("pack_content_sets")
@@ -2970,7 +2995,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
+  const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_carousel" || !session.pack_template_id) return;
 
   const { data: contentSets } = await supabase
@@ -3016,7 +3041,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
   const lang = user.lang || "en";
   const contentSetId = ctx.match[1];
 
-  const session = await getActiveSession(user.id);
+  const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_carousel") return;
 
   const existingPhoto = session.current_photo_file_id || (await supabase.from("users").select("last_photo_file_id").eq("id", user.id).single().then((r) => r.data?.last_photo_file_id)) || null;
@@ -3049,7 +3074,7 @@ bot.action("pack_back_to_carousel", async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
+  const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_preview_payment" || !session.pack_template_id) return;
 
   const { data: contentSets } = await supabase
@@ -3103,7 +3128,7 @@ bot.action("pack_preview_pay", async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_preview_payment") {
     return;
   }
@@ -3238,7 +3263,7 @@ bot.action("pack_approve", async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_approval") {
     return;
   }
@@ -3329,7 +3354,7 @@ bot.action("pack_regenerate", async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_approval") {
     return;
   }
@@ -3419,7 +3444,7 @@ bot.action("pack_back", async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_approval") return;
 
   await supabase
@@ -3440,7 +3465,7 @@ bot.action("pack_cancel", async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  const session = await getPackFlowSession(user.id);
   if (!session || !["wait_pack_approval", "wait_pack_preview_payment"].includes(session.state)) {
     return;
   }
@@ -4245,7 +4270,7 @@ bot.action(/^style_carousel_pick:(.+)$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
-    const session = await getActiveSession(user.id);
+    const session = await getSessionForStyleSelection(user.id);
     if (!session?.id || !["wait_style", "wait_pack_preview_payment"].includes(session.state)) return;
 
     const styleId = ctx.match[1];
@@ -4355,7 +4380,7 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
-    const session = await getActiveSession(user.id);
+    const session = await getSessionForStyleSelection(user.id);
     if (!session?.id || !["wait_style", "wait_pack_preview_payment"].includes(session.state)) return;
 
     const styleId = ctx.match[1];
@@ -4426,7 +4451,7 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
-    const session = await getActiveSession(user.id);
+    const session = await getSessionForStyleSelection(user.id);
 
     // Delete sticker preview message if exists
     const stickerMsgId = ctx.match[1] ? parseInt(ctx.match[1], 10) : 0;
@@ -4459,7 +4484,7 @@ bot.action(/^style_v2:(.+)$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
-    const session = await getActiveSession(user.id);
+    const session = await getSessionForStyleSelection(user.id);
     if (!session?.id) return;
     if (session.state !== "wait_style" && session.state !== "wait_pack_preview_payment") return;
 
