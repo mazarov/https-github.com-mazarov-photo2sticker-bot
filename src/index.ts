@@ -991,12 +991,15 @@ async function getUser(telegramId: number) {
   return data;
 }
 
-// Helper: get persistent menu keyboard (single row)
+// Helper: get persistent menu keyboard (2 rows)
 function getMainMenuKeyboard(lang: string) {
-  const row = lang === "ru"
-    ? ["🤖 1 стикер", "📦 Пак стикеров", "💰 Баланс", "❓"]
-    : ["🤖 1 sticker", "📦 Sticker pack", "💰 Balance", "❓"];
-  return Markup.keyboard([row]).resize().persistent();
+  const row1 = lang === "ru"
+    ? ["✨ Создать стикер", "📦 Создать пак"]
+    : ["✨ Create sticker", "📦 Create pack"];
+  const row2 = lang === "ru"
+    ? ["💰 Ваш баланс", "💬 Поддержка"]
+    : ["💰 Your balance", "💬 Support"];
+  return Markup.keyboard([row1, row2]).resize().persistent();
 }
 
 // Helper: check if language is in whitelist for free credits
@@ -2554,8 +2557,8 @@ bot.on("photo", async (ctx) => {
 // Persistent menu handlers (Reply Keyboard)
 // ============================================
 
-// Menu: 🤖 1 стикер — launch or continue AI assistant dialog
-bot.hears(["🤖 1 стикер", "🤖 1 sticker"], async (ctx) => {
+// Menu: ✨ Создать стикер — launch or continue AI assistant dialog
+bot.hears(["✨ Создать стикер", "✨ Create sticker"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -2630,8 +2633,8 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
   await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
 });
 
-// Menu: 💰 Баланс — show balance + credit packs
-bot.hears(["💰 Баланс", "💰 Balance"], async (ctx) => {
+// Menu: 💰 Ваш баланс — show balance + credit packs
+bot.hears(["💰 Ваш баланс", "💰 Your balance"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -2645,8 +2648,8 @@ bot.hears(["💰 Баланс", "💰 Balance"], async (ctx) => {
   await sendBuyCreditsMenu(ctx, user);
 });
 
-// Menu: ❓ (help, icon only)
-bot.hears(["❓"], async (ctx) => {
+// Menu: 💬 Поддержка
+bot.hears(["💬 Поддержка", "💬 Support"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -2719,8 +2722,8 @@ async function sendPackStyleSelectionStep(
   });
 }
 
-// Menu: 📦 Пак стикеров — show template CTA screen
-bot.hears(["📦 Пак стикеров", "📦 Sticker pack"], async (ctx) => {
+// Menu: 📦 Создать пак — show template CTA screen
+bot.hears(["📦 Создать пак", "📦 Create pack"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -3552,11 +3555,11 @@ bot.on("text", async (ctx) => {
 
   // Skip menu button texts — they are handled by bot.hears() above
   const menuButtons = [
-    "🤖 1 стикер", "🤖 1 sticker",
+    "✨ Создать стикер", "✨ Create sticker",
     "🎨 Стили", "🎨 Styles", // legacy, button hidden
-    "📦 Пак стикеров", "📦 Sticker pack",
-    "💰 Баланс", "💰 Balance",
-    "❓",
+    "📦 Создать пак", "📦 Create pack",
+    "💰 Ваш баланс", "💰 Your balance",
+    "💬 Поддержка", "💬 Support",
   ];
   if (menuButtons.includes(ctx.message.text?.trim())) return;
 
@@ -4144,8 +4147,8 @@ bot.on("text", async (ctx) => {
       // Suggest they start a new assistant dialog or use manual mode
       console.log("confirm_sticker text fallback: user sent text but no active assistant. Text:", ctx.message.text?.slice(0, 50));
       const msg = lang === "ru"
-        ? "Нажми «1 стикер», чтобы создать новый стикер."
-        : "Tap «1 sticker» to create a new sticker.";
+        ? "Нажми «Создать стикер», чтобы создать новый стикер."
+        : "Tap «Create sticker» to create a new sticker.";
       await ctx.reply(msg, getMainMenuKeyboard(lang));
     }
     return;
@@ -5698,8 +5701,8 @@ bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)$/, async (ctx) => {
       await ctx.reply(replyText, getMainMenuKeyboard(lang));
     } else {
       await ctx.reply(lang === "ru"
-        ? `Стиль: ${styleName}. Нажми «1 стикер», чтобы начать.`
-        : `Style: ${styleName}. Tap «1 sticker» to start.`);
+        ? `Стиль: ${styleName}. Нажми «Создать стикер», чтобы начать.`
+        : `Style: ${styleName}. Tap «Create sticker» to start.`);
     }
   } catch (err: any) {
     console.error("assistant_style_preview_ok error:", err.message);
@@ -5746,8 +5749,8 @@ bot.action(/^assistant_pick_style:(.+)$/, async (ctx) => {
     } else {
       // No active assistant session — just acknowledge
       await ctx.reply(lang === "ru"
-        ? `Стиль: ${styleName}. Нажми «1 стикер», чтобы начать.`
-        : `Style: ${styleName}. Tap «1 sticker» to start.`);
+        ? `Стиль: ${styleName}. Нажми «Создать стикер», чтобы начать.`
+        : `Style: ${styleName}. Tap «Create sticker» to start.`);
     }
   } catch (err: any) {
     console.error("assistant_pick_style callback error:", err.message);
