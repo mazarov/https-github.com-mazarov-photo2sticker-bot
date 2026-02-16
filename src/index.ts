@@ -3195,7 +3195,10 @@ bot.action("pack_back_to_carousel", async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
   const session = await getPackFlowSession(user.id);
-  if (!session || session.state !== "wait_pack_preview_payment") return;
+  if (!session || session.state !== "wait_pack_preview_payment") {
+    console.log("[pack_back_to_carousel] Session not found or wrong state:", session?.id, session?.state);
+    return;
+  }
 
   // Get all active content sets (no longer filtered by pack_template_id)
   const { data: contentSets } = await supabase
@@ -3203,16 +3206,27 @@ bot.action("pack_back_to_carousel", async (ctx) => {
     .select("*")
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
-  if (!contentSets?.length) return;
+  if (!contentSets?.length) {
+    console.log("[pack_back_to_carousel] No active content sets found");
+    return;
+  }
+
+  // Restore carousel index if session had one, otherwise use 0
+  const carouselIndex = session.pack_carousel_index ?? 0;
+  const targetSetIndex = Math.min(carouselIndex, contentSets.length - 1);
+  const targetSet = contentSets[targetSetIndex] || contentSets[0];
 
   await supabase
     .from("sessions")
-    .update({ state: "wait_pack_carousel", pack_carousel_index: 0 })
+    .update({ 
+      state: "wait_pack_carousel", 
+      pack_carousel_index: targetSetIndex,
+      is_active: true 
+    })
     .eq("id", session.id);
 
-  const set = contentSets[0];
-  const setName = lang === "ru" ? set.name_ru : set.name_en;
-  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+  const setName = lang === "ru" ? targetSet.name_ru : targetSet.name_en;
+  const setDesc = lang === "ru" ? (targetSet.carousel_description_ru || targetSet.name_ru) : (targetSet.carousel_description_en || targetSet.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
@@ -3220,10 +3234,10 @@ bot.action("pack_back_to_carousel", async (ctx) => {
     inline_keyboard: [
       [
         { text: "◀️", callback_data: "pack_carousel_prev" },
-        { text: `1/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: `${targetSetIndex + 1}/${contentSets.length}`, callback_data: "pack_carousel_noop" },
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
-      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+      [{ text: tryBtn, callback_data: `pack_try:${targetSet.id}` }],
     ],
   };
   if (session.progress_message_id && session.progress_chat_id) {
@@ -3264,7 +3278,24 @@ bot.action("pack_preview_pay", async (ctx) => {
       try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
       return;
     }
-    try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
+    
+    // Log error and show message to user
+    console.error("[pack_preview_pay] Session not found or wrong state:", {
+      userId: user.id,
+      sessionId: session?.id,
+      sessionState: session?.state,
+      expectedState: "wait_pack_preview_payment",
+      isActive: session?.is_active
+    });
+    
+    try { 
+      if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); 
+    } catch (_) {}
+    
+    const errorMsg = lang === "ru" 
+      ? "Произошла ошибка. Попробуй начать заново: нажми «📦 Создать пак»."
+      : "An error occurred. Please try again: tap «📦 Create pack».";
+    await ctx.reply(errorMsg, getMainMenuKeyboard(lang));
     return;
   }
 
