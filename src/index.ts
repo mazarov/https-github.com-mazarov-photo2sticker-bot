@@ -10015,19 +10015,3 @@ function gracefulShutdown(signal: string) {
 process.once("SIGINT", () => gracefulShutdown("SIGINT"));
 process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
 
-hutdown for webhook mode (bot.stop() is for polling only)
-function gracefulShutdown(signal: string) {
-  console.log(`${signal} received, shutting down gracefully...`);
-  server.close(() => {
-    console.log("HTTP server closed");
-    process.exit(0);
-  });
-  setTimeout(() => {
-    console.log("Forced shutdown after timeout");
-    process.exit(1);
-  }, 10_000);
-}
-
-process.once("SIGINT", () => gracefulShutdown("SIGINT"));
-process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
-
