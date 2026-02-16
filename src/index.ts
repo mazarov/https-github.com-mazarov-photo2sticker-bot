@@ -3085,7 +3085,7 @@ bot.action("pack_back_to_carousel", async (ctx) => {
   };
   if (session.progress_message_id && session.progress_chat_id) {
     try {
-      await ctx.telegram.editMessageText(session.progress_chat_id, session.progress_message_id, carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+      await ctx.telegram.editMessageText(session.progress_chat_id, session.progress_message_id, undefined, carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
     } catch (_) {}
   } else {
     const sent = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
