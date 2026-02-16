@@ -1063,12 +1063,13 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
   // Close any active assistant sessions for this user
   await closeAllActiveAssistantSessions(user.id);
 
-  // Cancel all active sessions
+  // Cancel ALL non-canceled sessions (is_active may already be false due to DB bug — see known-issues #1)
   await supabase
     .from("sessions")
     .update({ state: "canceled", is_active: false })
     .eq("user_id", user.id)
-    .eq("is_active", true);
+    .eq("env", config.appEnv)
+    .neq("state", "canceled");
 
   // Create new session with assistant state
   const lastPhoto = user.last_photo_file_id || null;
@@ -2783,37 +2784,8 @@ bot.hears(["✨ Создать стикер", "✨ Create sticker"], async (ctx)
 
   const lang = user.lang || "en";
 
-  // If assistant dialog is already active (or we can restore assistant state),
-  // don't restart the dialog and lose context.
-  let activeAssistant = await getActiveAssistantSession(user.id);
-  const existingSession = await getActiveSession(user.id);
-
-  if (existingSession?.state?.startsWith("assistant_")) {
-    if (!existingSession.is_active) {
-      await supabase
-        .from("sessions")
-        .update({ is_active: true })
-        .eq("id", existingSession.id);
-    }
-
-    if (!activeAssistant) {
-      const recent = await getRecentAssistantSession(user.id);
-      if (recent) {
-        await reactivateAssistantSession(recent.id);
-        activeAssistant = { ...recent, status: "active" } as AssistantSessionRow;
-      }
-    }
-  }
-
-  if (activeAssistant?.status === "active" || existingSession?.state?.startsWith("assistant_")) {
-    await ctx.reply(
-      lang === "ru" ? "Продолжаем диалог 👇" : "Let's continue the dialog 👇",
-      getMainMenuKeyboard(lang)
-    );
-    return;
-  }
-
-  // Start new assistant dialog only when there is no assistant context at all.
+  // Always start a fresh assistant dialog.
+  // startAssistantDialog cancels all previous sessions before creating a new one.
   await startAssistantDialog(ctx, user, lang);
 });
 
