@@ -87,6 +87,12 @@ erDiagram
 | `pack_sheet_file_id` | text | — | file_id сгенерированного листа превью |
 | `flow_kind` | text | — | Вид потока (`single`/`assistant`/`pack`) |
 | `session_rev` | int | 1 | Ревизия сессии для stale-callback защиты |
+| `subject_mode` | text | — | Профиль субъекта: `single` / `multi` / `unknown` |
+| `subject_count` | int | — | Оцененное количество людей в source |
+| `subject_confidence` | numeric | — | Confidence детектора (0..1) |
+| `subject_source_file_id` | text | — | Source file_id, для которого считан профиль |
+| `subject_source_kind` | text | — | `photo` или `sticker` |
+| `subject_detected_at` | timestamptz | — | Время обновления профиля |
 | `env` | text | 'prod' | Окружение |
 
 ### `pack_content_sets` — Наборы подписей и сцен для пака
@@ -104,6 +110,7 @@ erDiagram
 | `sort_order` | int | Порядок в карусели |
 | `is_active` | boolean | Активен ли набор |
 | `mood` | text | Опционально: для автоподбора (romance, everyday, humor, …) |
+| `subject_mode` | text | Совместимость набора: `single` / `multi` / `any` |
 
 ### `jobs` — Очередь заданий
 
@@ -199,6 +206,13 @@ Presets: waving, thumbs_up, facepalm, praying, flexing, shrugging, peace, heart_
 Ключи для Session Router rollout:
 - `session_router_enabled` — включение роутера резолва сессий
 - `strict_session_rev_enabled` — строгая проверка `callback rev` vs `sessions.session_rev`
+
+Ключи для Subject Profile Contract rollout:
+- `gemini_model_subject_detector` — модель детектора количества людей
+- `subject_profile_enabled` — сохранение profile в `sessions`
+- `subject_lock_enabled` — инъекция Subject Lock в prompt
+- `subject_mode_pack_filter_enabled` — проверка совместимости `pack_content_sets.subject_mode`
+- `subject_postcheck_enabled` — пост-проверка результата (под флагом)
 
 ### Вспомогательные таблицы
 

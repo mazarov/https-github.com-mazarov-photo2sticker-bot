@@ -10,6 +10,20 @@ import { getFilePath, downloadFile, sendSticker } from "./lib/telegram";
 import { addWhiteBorder, addTextToSticker } from "./lib/image-utils";
 import { getAppConfig } from "./lib/app-config";
 import {
+  appendSubjectLock,
+  buildSubjectLockBlock,
+  detectSubjectProfileFromImageBuffer,
+  inferSubjectModeByCount,
+  isSubjectLockEnabled,
+  isSubjectModePackFilterEnabled,
+  isSubjectProfileEnabled,
+  normalizeSubjectMode,
+  normalizeSubjectSourceKind,
+  resolveGenerationSource,
+  type SubjectProfile,
+  type SubjectSourceKind,
+} from "./lib/subject-profile";
+import {
   buildSystemPrompt,
   callAIChat,
   type AssistantMessage,
@@ -723,6 +737,182 @@ async function sendProgressStart(ctx: any, sessionId: string, lang: string) {
 // Shared composition/background rules — same for single sticker and pack (unified prompt flow)
 const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. The COMPLETE character (including all limbs, hands, fingers, elbows, hair) must be fully visible with nothing cropped by image edges.\n3. Leave at least 15% empty space on EVERY side of the character.\n4. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n5. Do NOT add any border, outline, stroke, or contour around the character. Clean raw edges only.`;
 
+function getMimeTypeByTelegramPath(filePath: string): string {
+  if (filePath.endsWith(".webp")) return "image/webp";
+  if (filePath.endsWith(".png")) return "image/png";
+  return "image/jpeg";
+}
+
+function getSessionSubjectProfileForSource(
+  session: any,
+  sourceFileId: string,
+  sourceKind: SubjectSourceKind
+): SubjectProfile | null {
+  const sessionMode = normalizeSubjectMode(session?.subject_mode);
+  const sessionSourceFileId = session?.subject_source_file_id || null;
+  const sessionSourceKind = normalizeSubjectSourceKind(session?.subject_source_kind);
+  if (!sessionSourceFileId || sessionSourceFileId !== sourceFileId || sessionSourceKind !== sourceKind) {
+    return null;
+  }
+
+  const parsedCount = Number(session?.subject_count);
+  const parsedConfidence = Number(session?.subject_confidence);
+
+  return {
+    subjectMode: sessionMode,
+    subjectCount: Number.isFinite(parsedCount) && parsedCount > 0 ? Math.floor(parsedCount) : null,
+    subjectConfidence:
+      Number.isFinite(parsedConfidence) && parsedConfidence >= 0
+        ? Math.max(0, Math.min(1, Number(parsedConfidence.toFixed(3))))
+        : null,
+    sourceFileId,
+    sourceKind,
+    detectedAt: session?.subject_detected_at || new Date().toISOString(),
+  };
+}
+
+async function ensureSubjectProfileForGeneration(
+  session: any,
+  generationType: "style" | "emotion" | "motion" | "text"
+): Promise<SubjectProfile | null> {
+  const profileEnabled = await isSubjectProfileEnabled();
+  if (!profileEnabled) return null;
+
+  const { sourceFileId, sourceKind } = resolveGenerationSource(session, generationType);
+  if (!sourceFileId) return null;
+
+  const existingProfile = getSessionSubjectProfileForSource(session, sourceFileId, sourceKind);
+  if (existingProfile) return existingProfile;
+
+  const detectedAt = new Date().toISOString();
+  try {
+    const filePath = await getFilePath(sourceFileId);
+    const fileBuffer = await downloadFile(filePath);
+    const mimeType = getMimeTypeByTelegramPath(filePath);
+    const detected = await detectSubjectProfileFromImageBuffer(fileBuffer, mimeType);
+
+    const subjectMode =
+      detected.subjectMode === "unknown"
+        ? inferSubjectModeByCount(detected.subjectCount)
+        : detected.subjectMode;
+    const nextProfile: SubjectProfile = {
+      subjectMode,
+      subjectCount: detected.subjectCount,
+      subjectConfidence: detected.subjectConfidence,
+      sourceFileId,
+      sourceKind,
+      detectedAt,
+    };
+
+    await supabase
+      .from("sessions")
+      .update({
+        subject_mode: nextProfile.subjectMode,
+        subject_count: nextProfile.subjectCount,
+        subject_confidence: nextProfile.subjectConfidence,
+        subject_source_file_id: nextProfile.sourceFileId,
+        subject_source_kind: nextProfile.sourceKind,
+        subject_detected_at: detectedAt,
+      })
+      .eq("id", session.id);
+
+    Object.assign(session, {
+      subject_mode: nextProfile.subjectMode,
+      subject_count: nextProfile.subjectCount,
+      subject_confidence: nextProfile.subjectConfidence,
+      subject_source_file_id: nextProfile.sourceFileId,
+      subject_source_kind: nextProfile.sourceKind,
+      subject_detected_at: nextProfile.detectedAt,
+    });
+
+    console.log("[subject-profile] updated for session:", session.id, {
+      sourceKind,
+      subjectMode: nextProfile.subjectMode,
+      subjectCount: nextProfile.subjectCount,
+    });
+    return nextProfile;
+  } catch (err: any) {
+    console.warn("[subject-profile] failed to resolve profile:", err?.message || err);
+    const fallbackProfile: SubjectProfile = {
+      subjectMode: "unknown",
+      subjectCount: null,
+      subjectConfidence: null,
+      sourceFileId,
+      sourceKind,
+      detectedAt,
+    };
+
+    await supabase
+      .from("sessions")
+      .update({
+        subject_mode: fallbackProfile.subjectMode,
+        subject_count: fallbackProfile.subjectCount,
+        subject_confidence: fallbackProfile.subjectConfidence,
+        subject_source_file_id: fallbackProfile.sourceFileId,
+        subject_source_kind: fallbackProfile.sourceKind,
+        subject_detected_at: detectedAt,
+      })
+      .eq("id", session.id);
+
+    Object.assign(session, {
+      subject_mode: fallbackProfile.subjectMode,
+      subject_count: fallbackProfile.subjectCount,
+      subject_confidence: fallbackProfile.subjectConfidence,
+      subject_source_file_id: fallbackProfile.sourceFileId,
+      subject_source_kind: fallbackProfile.sourceKind,
+      subject_detected_at: fallbackProfile.detectedAt,
+    });
+    return fallbackProfile;
+  }
+}
+
+async function applySubjectLockToPrompt(
+  session: any,
+  generationType: "style" | "emotion" | "motion" | "text",
+  prompt: string
+): Promise<string> {
+  const ensuredProfile = await ensureSubjectProfileForGeneration(session, generationType);
+  const lockEnabled = await isSubjectLockEnabled();
+  if (!lockEnabled) return prompt;
+
+  const { sourceFileId, sourceKind } = resolveGenerationSource(session, generationType);
+  if (!sourceFileId) return prompt;
+
+  const profile =
+    ensuredProfile ||
+    getSessionSubjectProfileForSource(session, sourceFileId, sourceKind) ||
+    null;
+  if (!profile) return prompt;
+
+  const lockBlock = buildSubjectLockBlock(profile);
+  return appendSubjectLock(prompt, lockBlock);
+}
+
+function normalizePackSetSubjectMode(value: any): "single" | "multi" | "any" {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "single") return "single";
+  if (normalized === "multi") return "multi";
+  return "any";
+}
+
+function isPackSetCompatibleWithSubject(
+  setSubjectMode: "single" | "multi" | "any",
+  subjectMode: "single" | "multi" | "unknown"
+): boolean {
+  if (subjectMode === "unknown") return true;
+  if (setSubjectMode === "any") return true;
+  return setSubjectMode === subjectMode;
+}
+
+function filterPackContentSetsBySubjectMode(contentSets: any[], subjectMode: "single" | "multi" | "unknown"): any[] {
+  if (!Array.isArray(contentSets)) return [];
+  if (subjectMode === "unknown") return contentSets;
+  return contentSets.filter((set) => {
+    const setMode = normalizePackSetSubjectMode(set?.subject_mode);
+    return isPackSetCompatibleWithSubject(setMode, subjectMode);
+  });
+}
+
 async function startGeneration(
   ctx: any,
   user: any,
@@ -741,6 +931,7 @@ async function startGeneration(
 ) {
   const creditsNeeded = 1;
 
+  options.promptFinal = await applySubjectLockToPrompt(session, options.generationType, options.promptFinal);
   options.promptFinal = options.promptFinal + COMPOSITION_SUFFIX;
 
   console.log("=== startGeneration ===");
@@ -1891,6 +2082,7 @@ async function handleTrialCreditAction(
 // Helper: send buy credits menu
 async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
   const lang = user.lang || "en";
+  const existingPhoto = user.last_photo_file_id || null;
   const text = messageText || await getText(lang, "payment.balance", { credits: user.credits });
   const isAdmin = config.adminIds.includes(user.telegram_id);
 
@@ -3063,6 +3255,8 @@ async function handlePackMenuEntry(ctx: any) {
       pack_template_id: templateId,
       pack_carousel_index: 0,
       selected_style_id: selectedPackStyleId,
+      current_photo_file_id: existingPhoto,
+      photos: existingPhoto ? [existingPhoto] : [],
       env: config.appEnv,
     })
     .select()
@@ -3072,7 +3266,24 @@ async function handlePackMenuEntry(ctx: any) {
     return;
   }
 
-  const set = contentSets[0];
+  let visibleSets = contentSets;
+  if (existingPhoto) {
+    await ensureSubjectProfileForGeneration(session, "style");
+  }
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  if (subjectFilterEnabled) {
+    const subjectMode = normalizeSubjectMode(session.subject_mode);
+    visibleSets = filterPackContentSetsBySubjectMode(contentSets, subjectMode);
+  }
+  if (!visibleSets.length) {
+    await ctx.reply(
+      lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
+      getMainMenuKeyboard(lang)
+    );
+    return;
+  }
+
+  const set = visibleSets[0];
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
@@ -3082,7 +3293,7 @@ async function handlePackMenuEntry(ctx: any) {
     inline_keyboard: [
       [
         { text: "◀️", callback_data: "pack_carousel_prev" },
-        { text: `1/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: `1/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
@@ -3204,6 +3415,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
+  const existingPhoto = user.last_photo_file_id || null;
   const templateId = ctx.match[1];
 
   const { data: contentSets, error: contentSetsErr } = await supabase
@@ -3238,6 +3450,8 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
       pack_template_id: templateId,
       pack_carousel_index: 0,
       selected_style_id: selectedPackStyleId,
+      current_photo_file_id: existingPhoto,
+      photos: existingPhoto ? [existingPhoto] : [],
       env: config.appEnv,
     })
     .select()
@@ -3247,7 +3461,24 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
     return;
   }
 
-  const set = contentSets[0];
+  let visibleSets = contentSets;
+  if (existingPhoto) {
+    await ensureSubjectProfileForGeneration(session, "style");
+  }
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  if (subjectFilterEnabled) {
+    const subjectMode = normalizeSubjectMode(session.subject_mode);
+    visibleSets = filterPackContentSetsBySubjectMode(contentSets, subjectMode);
+  }
+  if (!visibleSets.length) {
+    await ctx.reply(
+      lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
+      getMainMenuKeyboard(lang)
+    );
+    return;
+  }
+
+  const set = visibleSets[0];
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
@@ -3257,7 +3488,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
     inline_keyboard: [
       [
         { text: "◀️", callback_data: "pack_carousel_prev" },
-        { text: `1/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: `1/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
@@ -3303,9 +3534,35 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
     .order("sort_order", { ascending: true });
   if (!contentSets?.length) return;
 
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  const subjectMode = normalizeSubjectMode(session.subject_mode);
+  const visibleSets = subjectFilterEnabled
+    ? filterPackContentSetsBySubjectMode(contentSets, subjectMode)
+    : contentSets;
+  if (!visibleSets.length) {
+    await ctx.reply(
+      lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
+      getMainMenuKeyboard(lang)
+    );
+    return;
+  }
+
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  const subjectMode = normalizeSubjectMode(session.subject_mode);
+  const visibleSets = subjectFilterEnabled
+    ? filterPackContentSetsBySubjectMode(contentSets, subjectMode)
+    : contentSets;
+  if (!visibleSets.length) {
+    await ctx.reply(
+      lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
+      getMainMenuKeyboard(lang)
+    );
+    return;
+  }
+
   const currentIndex = (session.pack_carousel_index ?? 0) + delta;
-  const idx = ((currentIndex % contentSets.length) + contentSets.length) % contentSets.length;
-  const set = contentSets[idx];
+  const idx = ((currentIndex % visibleSets.length) + visibleSets.length) % visibleSets.length;
+  const set = visibleSets[idx];
 
   await supabase.from("sessions").update({ pack_carousel_index: idx }).eq("id", session.id);
 
@@ -3318,7 +3575,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
     inline_keyboard: [
       [
         { text: "◀️", callback_data: "pack_carousel_prev" },
-        { text: `${idx + 1}/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: `${idx + 1}/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
@@ -3341,7 +3598,39 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
   const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_carousel") return;
 
+  const { data: selectedContentSet } = await supabase
+    .from("pack_content_sets")
+    .select("id, pack_template_id, subject_mode")
+    .eq("id", contentSetId)
+    .maybeSingle();
+  if (!selectedContentSet) {
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    return;
+  }
+  if (selectedContentSet.pack_template_id !== session.pack_template_id) {
+    await ctx.answerCbQuery(lang === "ru" ? "Этот набор уже устарел. Выбери из текущей карусели." : "This set is stale. Please pick from the current carousel.", { show_alert: false }).catch(() => {});
+    return;
+  }
+
   const existingPhoto = session.current_photo_file_id || (await supabase.from("users").select("last_photo_file_id").eq("id", user.id).single().then((r) => r.data?.last_photo_file_id)) || null;
+  if (existingPhoto) {
+    const draftSession = { ...session, current_photo_file_id: existingPhoto, photos: [existingPhoto] };
+    await ensureSubjectProfileForGeneration(draftSession, "style");
+
+    const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+    const subjectMode = normalizeSubjectMode(draftSession.subject_mode);
+    const setSubjectMode = normalizePackSetSubjectMode(selectedContentSet.subject_mode);
+    if (subjectFilterEnabled && !isPackSetCompatibleWithSubject(setSubjectMode, subjectMode)) {
+      await ctx.answerCbQuery(
+        lang === "ru"
+          ? "Этот набор не подходит под текущее количество персонажей. Выбери другой набор."
+          : "This set is not compatible with current subject count. Please choose another set.",
+        { show_alert: true }
+      ).catch(() => {});
+      return;
+    }
+  }
+
   const initialState = existingPhoto ? "wait_pack_preview_payment" : "wait_pack_photo";
 
   await supabase
@@ -3408,7 +3697,7 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
-  const set = contentSets[0];
+  const set = visibleSets[0];
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
@@ -3418,7 +3707,7 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
     inline_keyboard: [
       [
         { text: "◀️", callback_data: "pack_carousel_prev" },
-        { text: `1/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: `1/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
@@ -3511,16 +3800,18 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
         promptResult.ok && !promptResult.retry
           ? (promptResult.prompt || packStyleUserInput)
           : packStyleUserInput;
-      packPromptFinal = stylePart + COMPOSITION_SUFFIX;
+      packPromptFinal = await applySubjectLockToPrompt(session, "style", stylePart);
+      packPromptFinal = packPromptFinal + COMPOSITION_SUFFIX;
     }
   }
 
   // sticker_count source: content set only.
   let packSize = 4;
+  let selectedSetSubjectMode: "single" | "multi" | "any" = "any";
   if (session.pack_content_set_id) {
     const { data: selectedContentSet, error: setErr } = await supabase
       .from("pack_content_sets")
-      .select("sticker_count")
+      .select("sticker_count, subject_mode")
       .eq("id", session.pack_content_set_id)
       .maybeSingle();
     if (setErr) {
@@ -3528,6 +3819,9 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     }
     if (selectedContentSet?.sticker_count) {
       packSize = Number(selectedContentSet.sticker_count) || 4;
+    }
+    if (selectedContentSet?.subject_mode) {
+      selectedSetSubjectMode = normalizePackSetSubjectMode(selectedContentSet.subject_mode);
     }
   }
   if (!session.pack_content_set_id) {
@@ -3543,6 +3837,22 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
       console.warn("[pack_preview_pay] fallback content set load failed:", firstSetErr.message);
     }
     packSize = Number(firstContentSet?.sticker_count) || 4;
+  }
+
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  if (subjectFilterEnabled) {
+    const styleSession = { ...session };
+    await ensureSubjectProfileForGeneration(styleSession, "style");
+    const subjectMode = normalizeSubjectMode(styleSession.subject_mode);
+    if (!isPackSetCompatibleWithSubject(selectedSetSubjectMode, subjectMode)) {
+      await ctx.reply(
+        lang === "ru"
+          ? "Выбранный набор не подходит под текущее количество персонажей. Вернись к выбору поз и выбери другой набор."
+          : "Selected set is not compatible with current subject count. Go back to poses and choose another set.",
+        getMainMenuKeyboard(lang)
+      );
+      return;
+    }
   }
 
   // Check credits
