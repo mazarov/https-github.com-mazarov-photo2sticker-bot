@@ -5346,6 +5346,10 @@ bot.action("add_to_pack", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
+  if (await isSessionRouterEnabled()) {
+    await rejectSessionEvent(ctx, lang, "add_to_pack_legacy", "session_not_found");
+    return;
+  }
   const session = await getActiveSession(user.id);
   if (!session?.last_sticker_file_id) {
     await ctx.reply(await getText(lang, "error.no_stickers_added"));
@@ -5507,6 +5511,10 @@ bot.action("change_style", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
+  if (await isSessionRouterEnabled()) {
+    await rejectSessionEvent(ctx, lang, "change_style_legacy", "session_not_found");
+    return;
+  }
   const session = await getActiveSession(user.id);
   if (!session?.id) return;
 
@@ -5616,6 +5624,10 @@ bot.action("change_emotion", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
+  if (await isSessionRouterEnabled()) {
+    await rejectSessionEvent(ctx, lang, "change_emotion_legacy", "session_not_found");
+    return;
+  }
   const session = await getActiveSession(user.id);
   if (!session?.last_sticker_file_id) {
     await ctx.reply(await getText(lang, "error.no_stickers_added"));
@@ -5783,6 +5795,10 @@ bot.action("change_motion", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
+  if (await isSessionRouterEnabled()) {
+    await rejectSessionEvent(ctx, lang, "change_motion_legacy", "session_not_found");
+    return;
+  }
   const session = await getActiveSession(user.id);
   if (!session?.last_sticker_file_id) {
     await ctx.reply(await getText(lang, "error.no_stickers_added"));
