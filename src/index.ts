@@ -955,7 +955,11 @@ function buildBalanceInfo(user: any, lang: string): string {
 
 // Helper: get user by telegram_id
 // Build standard sticker action buttons (used after generation, text overlay, border toggle)
-async function buildStickerButtons(lang: string, stickerId: string) {
+async function buildStickerButtons(
+  lang: string,
+  stickerId: string,
+  options?: { sessionId?: string | null; sessionRev?: number | null }
+) {
   const addToPackText = await getText(lang, "btn.add_to_pack");
   const changeEmotionText = await getText(lang, "btn.change_emotion");
   const changeMotionText = await getText(lang, "btn.change_motion");
@@ -963,12 +967,16 @@ async function buildStickerButtons(lang: string, stickerId: string) {
   const toggleBorderText = await getText(lang, "btn.toggle_border");
   const packIdeasText = lang === "ru" ? "💡 Идеи для пака" : "💡 Pack ideas";
 
+  const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
+  const emotionCb = sessionRef ? `change_emotion:${stickerId}:${sessionRef}` : `change_emotion:${stickerId}`;
+  const motionCb = sessionRef ? `change_motion:${stickerId}:${sessionRef}` : `change_motion:${stickerId}`;
+
   return {
     inline_keyboard: [
       [{ text: addToPackText, callback_data: `add_to_pack:${stickerId}` }],
       [
-        { text: changeEmotionText, callback_data: `change_emotion:${stickerId}` },
-        { text: changeMotionText, callback_data: `change_motion:${stickerId}` },
+        { text: changeEmotionText, callback_data: emotionCb },
+        { text: changeMotionText, callback_data: motionCb },
       ],
       [
         { text: toggleBorderText, callback_data: `toggle_border:${stickerId}` },
@@ -1560,6 +1568,34 @@ function formatCallbackSessionRef(sessionId?: string | null, sessionRev?: number
 async function isStrictSessionRevEnabled(): Promise<boolean> {
   const value = await getAppConfig("strict_session_rev_enabled", "false");
   return String(value).toLowerCase() === "true";
+}
+
+async function rejectSessionEvent(
+  ctx: any,
+  lang: string,
+  event: string,
+  reasonCode: "session_not_found" | "wrong_state" | "stale_callback"
+) {
+  const message =
+    reasonCode === "session_not_found"
+      ? (lang === "ru" ? "Сессия не найдена. Начни заново с нового действия." : "Session not found. Please start the action again.")
+      : reasonCode === "stale_callback"
+        ? (lang === "ru" ? "Кнопка устарела. Используй последнее сообщение." : "This button is stale. Please use the latest message.")
+        : (lang === "ru" ? "Это действие сейчас недоступно." : "This action is unavailable right now.");
+  console.warn("[session.reject]", { event, reasonCode, userId: ctx.from?.id, callbackData: (ctx.callbackQuery as any)?.data });
+  await ctx.answerCbQuery(message, { show_alert: false }).catch(() => {});
+}
+
+async function getSessionByIdForUser(userId: string, sessionId?: string | null) {
+  if (!sessionId) return null;
+  const { data } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .maybeSingle();
+  return data;
 }
 
 async function rejectPackEvent(
@@ -4272,7 +4308,10 @@ bot.on("text", async (ctx) => {
 
       // Build buttons (same as post-generation)
       const btnStickerId = stickerId || "unknown";
-      const replyMarkup = await buildStickerButtons(lang, btnStickerId);
+      const replyMarkup = await buildStickerButtons(lang, btnStickerId, {
+        sessionId: session.id,
+        sessionRev: session.session_rev,
+      });
 
       // Send sticker with text overlay
       const newFileId = await sendSticker(user.telegram_id, textBuffer, replyMarkup);
@@ -4662,7 +4701,8 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
     const applyText = lang === "ru" ? "✅ Применить" : "✅ Apply";
     const backText = lang === "ru" ? "↩️ Назад" : "↩️ Back";
 
-    const applyCallback = session.state === "wait_pack_preview_payment" ? `style_v2:${preset.id}` : `style_v2:${preset.id}`;
+    const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
+    const applyCallback = sessionRef ? `style_v2:${preset.id}:${sessionRef}` : `style_v2:${preset.id}`;
     const keyboard = {
       inline_keyboard: [[
         { text: backText, callback_data: `back_to_style_list:${stickerMsgId}` },
@@ -4711,7 +4751,7 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
 });
 
 // Callback: substyle selected (v2)
-bot.action(/^style_v2:(.+)$/, async (ctx) => {
+bot.action(/^style_v2:([^:]+)(?::(.+))?$/, async (ctx) => {
   try {
     safeAnswerCbQuery(ctx);
     const telegramId = ctx.from?.id;
@@ -4721,11 +4761,24 @@ bot.action(/^style_v2:(.+)$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
-    const session = await getSessionForStyleSelection(user.id);
-    if (!session?.id) return;
-    if (session.state !== "wait_style" && session.state !== "wait_pack_preview_payment") return;
-
     const styleId = ctx.match[1];
+    const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+    const session = explicitSessionId
+      ? await getSessionByIdForUser(user.id, explicitSessionId)
+      : await getSessionForStyleSelection(user.id);
+    if (!session?.id) {
+      await rejectSessionEvent(ctx, lang, "style_v2", "session_not_found");
+      return;
+    }
+    if (session.state !== "wait_style" && session.state !== "wait_pack_preview_payment") {
+      await rejectSessionEvent(ctx, lang, "style_v2", "wrong_state");
+      return;
+    }
+    const strictRevEnabled = await isStrictSessionRevEnabled();
+    if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+      await rejectSessionEvent(ctx, lang, "style_v2", "stale_callback");
+      return;
+    }
     console.log("[Styles v2] Substyle selected:", styleId);
 
     const preset = await getStylePresetV2ById(styleId);
@@ -4738,7 +4791,12 @@ bot.action(/^style_v2:(.+)$/, async (ctx) => {
     if (session.state === "wait_pack_preview_payment") {
       await supabase
         .from("sessions")
-        .update({ selected_style_id: preset.id, is_active: true })
+        .update({
+          selected_style_id: preset.id,
+          is_active: true,
+          flow_kind: "pack",
+          session_rev: (session.session_rev || 1) + 1,
+        })
         .eq("id", session.id);
       try { await ctx.deleteMessage(); } catch {}
       await sendPackStyleSelectionStep(ctx, lang, preset.id, undefined, { useBackButton: true, sessionId: session.id });
@@ -5411,7 +5469,7 @@ bot.action("change_style", async (ctx) => {
 });
 
 // Callback: change emotion (new format with sticker ID)
-bot.action(/^change_emotion:(.+)$/, async (ctx) => {
+bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
   console.log("=== change_emotion:ID callback ===");
   console.log("callback_data:", ctx.match?.[0]);
   safeAnswerCbQuery(ctx);
@@ -5423,6 +5481,7 @@ bot.action(/^change_emotion:(.+)$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const stickerId = ctx.match[1];
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   console.log("stickerId:", stickerId);
 
   // Get sticker from DB by ID
@@ -5446,23 +5505,32 @@ bot.action(/^change_emotion:(.+)$/, async (ctx) => {
   }
 
   // Get or create active session
-  let session = await getActiveSession(user.id);
+  let session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
   if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
-      .insert({ user_id: user.id, state: "wait_emotion", is_active: true, env: config.appEnv })
+      .insert({ user_id: user.id, state: "wait_emotion", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
       .select()
       .single();
     session = newSession;
   }
 
   if (!session?.id) return;
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "change_emotion", "stale_callback");
+    return;
+  }
 
   await supabase
     .from("sessions")
     .update({
       state: "wait_emotion",
       is_active: true,
+      flow_kind: "single",
+      session_rev: (session.session_rev || 1) + 1,
       last_sticker_file_id: sticker.telegram_file_id,
       current_photo_file_id: sticker.source_photo_file_id,
       pending_generation_type: null,
@@ -5537,7 +5605,7 @@ bot.action(/^emotion_(.+)$/, async (ctx) => {
 });
 
 // Callback: change motion (new format with sticker ID)
-bot.action(/^change_motion:(.+)$/, async (ctx) => {
+bot.action(/^change_motion:([^:]+)(?::(.+))?$/, async (ctx) => {
   console.log("=== change_motion:ID callback ===");
   console.log("callback_data:", ctx.match?.[0]);
   safeAnswerCbQuery(ctx);
@@ -5549,6 +5617,7 @@ bot.action(/^change_motion:(.+)$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const stickerId = ctx.match[1];
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   console.log("stickerId:", stickerId);
 
   // Get sticker from DB by ID
@@ -5572,23 +5641,32 @@ bot.action(/^change_motion:(.+)$/, async (ctx) => {
   }
 
   // Get or create active session
-  let session = await getActiveSession(user.id);
+  let session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
   if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
-      .insert({ user_id: user.id, state: "wait_motion", is_active: true, env: config.appEnv })
+      .insert({ user_id: user.id, state: "wait_motion", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
       .select()
       .single();
     session = newSession;
   }
 
   if (!session?.id) return;
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "change_motion", "stale_callback");
+    return;
+  }
 
   await supabase
     .from("sessions")
     .update({
       state: "wait_motion",
       is_active: true,
+      flow_kind: "single",
+      session_rev: (session.session_rev || 1) + 1,
       last_sticker_file_id: sticker.telegram_file_id,
       current_photo_file_id: sticker.source_photo_file_id,
       pending_generation_type: null,
@@ -7106,7 +7184,8 @@ bot.action(/^retry_generation:(.+)$/, async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
-  const sessionId = ctx.match[1];
+  const { sessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match[1]);
+  if (!sessionId) return;
   console.log("[retry_generation] sessionId:", sessionId, "telegramId:", telegramId);
 
   const user = await getUser(telegramId);
@@ -7131,6 +7210,11 @@ bot.action(/^retry_generation:(.+)$/, async (ctx) => {
       ? "❌ Сессия не найдена. Отправь новое фото."
       : "❌ Session not found. Send a new photo.";
     await ctx.editMessageText(notFoundText);
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "retry_generation", "stale_callback");
     return;
   }
 
