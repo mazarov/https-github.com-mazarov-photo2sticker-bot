@@ -258,3 +258,39 @@ export async function sendNotification(options: NotificationOptions): Promise<vo
     console.error("[Notification] Error:", err);
   }
 }
+
+/** Send pack preview image to alert channel with "Make pack example" button (for this style). */
+export async function sendPackPreviewAlert(
+  styleId: string,
+  imageBuffer: Buffer,
+  details?: { user?: string; batchId?: string }
+): Promise<void> {
+  const channelId = config.alertChannelId;
+  if (!channelId) return;
+
+  const caption = `📦 Pack preview\nStyle: ${styleId}${details?.user ? `\nUser: ${details.user}` : ""}${details?.batchId ? `\nBatch: ${details.batchId}` : ""}`;
+
+  try {
+    const formData = new FormData();
+    formData.append("chat_id", channelId);
+    formData.append("caption", caption);
+    formData.append("photo", new Blob([imageBuffer], { type: "image/png" }), "pack_preview.png");
+    formData.append("reply_markup", JSON.stringify({
+      inline_keyboard: [[
+        { text: "✅ Сделать примером", callback_data: `pack_make_example:${styleId}` },
+      ]],
+    }));
+
+    const response = await fetch(
+      `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`,
+      { method: "POST", body: formData }
+    );
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error("[Alert] sendPackPreviewAlert failed:", err);
+    }
+  } catch (err) {
+    console.error("[Alert] sendPackPreviewAlert error:", err);
+  }
+}
