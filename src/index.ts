@@ -6496,8 +6496,12 @@ bot.action(/^asst_idea_next:(\d+)(?::(.+))?$/, async (ctx) => {
   const newIdeas = [...state.ideas, newIdea];
   const newIndex = newIdeas.length - 1;
   const newState = { ...state, ideaIndex: newIndex, ideas: newIdeas };
+  const nextRev = (session.session_rev || 1) + 1;
   await supabase.from("sessions").update({
-    sticker_ideas_state: newState, is_active: true,
+    sticker_ideas_state: newState,
+    is_active: true,
+    flow_kind: "assistant",
+    session_rev: nextRev,
   }).eq("id", session.id);
 
   try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
@@ -6510,7 +6514,7 @@ bot.action(/^asst_idea_next:(\d+)(?::(.+))?$/, async (ctx) => {
     lang,
     currentHolidayId: state.holidayId,
     sessionId: session.id,
-    sessionRev: session.session_rev,
+    sessionRev: nextRev,
   });
 });
 
@@ -6717,9 +6721,12 @@ bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)(?::(.+))?$/, async (ctx) =
 
   // Update style in session
   const newState = { ...state, styleId };
+  const nextRev = (session.session_rev || 1) + 1;
   await supabase.from("sessions").update({
     sticker_ideas_state: newState,
     is_active: true,
+    flow_kind: "assistant",
+    session_rev: nextRev,
   }).eq("id", session.id);
 
   // Delete sticker preview
@@ -6739,7 +6746,7 @@ bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)(?::(.+))?$/, async (ctx) =
     lang,
     currentHolidayId: state.holidayId,
     sessionId: session.id,
-    sessionRev: session.session_rev,
+    sessionRev: nextRev,
   });
 });
 
@@ -6793,10 +6800,13 @@ bot.action(/^asst_idea_holiday_off:(\d+)(?::(.+))?$/, async (ctx) => {
   }
 
   const newState = { styleId: state.styleId, ideaIndex: 0, ideas: [idea], photoDescription: state.photoDescription, holidayId: null };
+  const nextRev = (session.session_rev || 1) + 1;
   await supabase.from("sessions").update({
     sticker_ideas_state: newState,
     state: "assistant_wait_idea",
     is_active: true,
+    flow_kind: "assistant",
+    session_rev: nextRev,
   }).eq("id", session.id);
 
   try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
@@ -6808,7 +6818,7 @@ bot.action(/^asst_idea_holiday_off:(\d+)(?::(.+))?$/, async (ctx) => {
     idea, ideaIndex: 0, totalIdeas: 0, style: preset, lang,
     currentHolidayId: null,
     sessionId: session.id,
-    sessionRev: session.session_rev,
+    sessionRev: nextRev,
   });
 });
 
@@ -6868,10 +6878,13 @@ bot.action(/^asst_idea_holiday:([^:]+):(\d+)(?::(.+))?$/, async (ctx) => {
   }
 
   const newState = { styleId: state.styleId, ideaIndex: 0, ideas: [idea], photoDescription: state.photoDescription, holidayId };
+  const nextRev = (session.session_rev || 1) + 1;
   await supabase.from("sessions").update({
     sticker_ideas_state: newState,
     state: "assistant_wait_idea",
     is_active: true,
+    flow_kind: "assistant",
+    session_rev: nextRev,
   }).eq("id", session.id);
 
   try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
@@ -6883,7 +6896,7 @@ bot.action(/^asst_idea_holiday:([^:]+):(\d+)(?::(.+))?$/, async (ctx) => {
     idea, ideaIndex: 0, totalIdeas: 0, style: preset, lang,
     currentHolidayId: holidayId,
     sessionId: session.id,
-    sessionRev: session.session_rev,
+    sessionRev: nextRev,
   });
 });
 
