@@ -4128,7 +4128,7 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendStyleKeyboardFlat(ctx, lang, session.id, { selectedStyleId: session.selected_style_id || null, sessionRev: nextRev });
+  await sendStyleKeyboardFlat(ctx, lang, session.id, { selectedStyleId: session.selected_style_id || null });
 });
 
 // Callback: single_keep_photo — keep current photo in single flow
