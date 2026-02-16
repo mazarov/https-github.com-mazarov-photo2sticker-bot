@@ -544,7 +544,6 @@ async function runPackAssembleJob(job: any) {
   const sheetMeta = await sharp(sheetBuffer).metadata();
   const sheetW = sheetMeta.width || 1024;
   const sheetH = sheetMeta.height || 1024;
-  const stickerCount = contentSet.sticker_count || 9;
   // User already paid 1 credit for preview, so on assemble failure
   // we refund only the second payment (N-1 credits).
   const assembleRefundAmount = Math.max(0, stickerCount - 1);
@@ -669,7 +668,7 @@ async function runPackAssembleJob(job: any) {
   const prefix = rawPrefix.slice(0, maxPrefixLen);
   const setName = `${prefix}${suffix}`;
   console.log("[PackAssemble] Sticker set name:", setName, "len:", setName.length);
-  const packTitle = lang === "ru" ? `${template.name_ru} — Stickers` : `${template.name_en} — Stickers`;
+  const packTitle = lang === "ru" ? `${contentSet.name_ru} — Stickers` : `${contentSet.name_en} — Stickers`;
 
   try {
     // Create set with first sticker

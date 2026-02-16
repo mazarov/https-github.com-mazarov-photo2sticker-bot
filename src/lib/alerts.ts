@@ -158,9 +158,9 @@ export async function sendNotification(options: NotificationOptions): Promise<vo
       formData.append("chat_id", channelId);
       
       // Attach source image
-      formData.append("source", new Blob([options.sourceImageBuffer], { type: "image/jpeg" }), "source.jpg");
+      formData.append("source", options.sourceImageBuffer, { filename: "source.jpg", contentType: "image/jpeg" });
       // Attach result image
-      formData.append("result", new Blob([options.resultImageBuffer], { type: "image/webp" }), "result.webp");
+      formData.append("result", options.resultImageBuffer, { filename: "result.webp", contentType: "image/webp" });
       
       // Media group JSON
       const media = [
@@ -169,17 +169,14 @@ export async function sendNotification(options: NotificationOptions): Promise<vo
       ];
       formData.append("media", JSON.stringify(media));
 
-      const response = await fetch(
+      const response = await axios.post(
         `https://api.telegram.org/bot${config.telegramBotToken}/sendMediaGroup`,
-        {
-          method: "POST",
-          body: formData,
-        }
+        formData,
+        { headers: formData.getHeaders() }
       );
 
-      if (!response.ok) {
-        const errorData = await response.text();
-        console.error("[Notification] Failed to send media group:", errorData);
+      if (response.status !== 200) {
+        console.error("[Notification] Failed to send media group:", response.statusText);
       }
 
       // Send follow-up message with "Make example" button if stickerId provided
@@ -213,19 +210,16 @@ export async function sendNotification(options: NotificationOptions): Promise<vo
       formData.append("chat_id", channelId);
       formData.append("caption", caption);
       formData.append("parse_mode", "Markdown");
-      formData.append("photo", new Blob([options.imageBuffer], { type: "image/webp" }), "sticker.webp");
+      formData.append("photo", options.imageBuffer, { filename: "sticker.webp", contentType: "image/webp" });
 
-      const response = await fetch(
+      const response = await axios.post(
         `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`,
-        {
-          method: "POST",
-          body: formData,
-        }
+        formData,
+        { headers: formData.getHeaders() }
       );
 
-      if (!response.ok) {
-        const errorData = await response.text();
-        console.error("[Notification] Failed to send photo:", errorData);
+      if (response.status !== 200) {
+        console.error("[Notification] Failed to send photo:", response.statusText);
       }
     } else {
       // Text only (with optional buttons)
