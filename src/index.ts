@@ -2855,8 +2855,8 @@ async function sendPackStyleSelectionStep(
   });
 }
 
-// Menu: 📦 Пак стикеров — show template CTA screen
-bot.hears(["📦 Пак стикеров", "📦 Sticker pack"], async (ctx) => {
+// Shared: entry into pack flow (menu button or broadcast "Попробовать")
+async function handlePackMenuEntry(ctx: any) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -2958,6 +2958,15 @@ bot.hears(["📦 Пак стикеров", "📦 Sticker pack"], async (ctx) => 
       })
       .eq("id", session.id);
   }
+}
+
+// Menu: 📦 Пак стикеров — show template CTA screen
+bot.hears(["📦 Пак стикеров", "📦 Sticker pack"], handlePackMenuEntry);
+
+// Broadcast "Попробовать" — same as tapping "Пак стикеров"
+bot.action("broadcast_try_pack", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  await handlePackMenuEntry(ctx);
 });
 
 // Callback: pack_start — user tapped "Попробовать" on template CTA
@@ -9683,6 +9692,22 @@ process.on("unhandledRejection", async (reason: any) => {
 });
 
 // Graceful shutdown for webhook mode (bot.stop() is for polling only)
+function gracefulShutdown(signal: string) {
+  console.log(`${signal} received, shutting down gracefully...`);
+  server.close(() => {
+    console.log("HTTP server closed");
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.log("Forced shutdown after timeout");
+    process.exit(1);
+  }, 10_000);
+}
+
+process.once("SIGINT", () => gracefulShutdown("SIGINT"));
+process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
+hutdown for webhook mode (bot.stop() is for polling only)
 function gracefulShutdown(signal: string) {
   console.log(`${signal} received, shutting down gracefully...`);
   server.close(() => {
