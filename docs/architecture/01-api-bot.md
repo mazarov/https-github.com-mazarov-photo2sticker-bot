@@ -137,11 +137,13 @@ flowchart TD
 - `add_to_pack` / `add_to_pack:ID` — добавить в стикерпак
 
 #### Ассистент
-- `assistant_confirm` — подтвердить параметры, запустить генерацию
-- `assistant_restart` — начать заново
-- `assistant_new_photo` — загрузить новое фото
-- `assistant_keep_photo` — оставить текущее фото
-- `assistant_pick_style:ID` — выбрать стиль из примеров
+- `assistant_confirm[:SESSION_ID[:REV]]` — подтвердить параметры, запустить генерацию
+- `assistant_restart[:SESSION_ID[:REV]]` — начать заново
+- `assistant_new_photo[:SESSION_ID[:REV]]` — загрузить новое фото
+- `assistant_keep_photo[:SESSION_ID[:REV]]` — оставить текущее фото
+- `assistant_style_preview:STYLE_ID[:SESSION_ID[:REV]]` — показать превью стиля
+- `assistant_style_preview_ok:STYLE_ID:STICKER_MSG_ID[:SESSION_ID[:REV]]` — применить стиль из превью
+- `assistant_pick_style:STYLE_ID[:SESSION_ID[:REV]]` — выбрать стиль из примеров
 
 #### Идеи для пака
 - `pack_ideas:ID` — показать идеи для стикера
@@ -162,13 +164,16 @@ flowchart TD
 - `pack_cancel:SESSION_ID[:REV]` — отменить pack flow
 
 #### Идеи стикеров (ассистент, assistant_wait_idea)
-- `asst_idea_gen` — сгенерировать выбранную идею
-- `asst_idea_next` — следующая идея
-- `asst_idea_restyle` — сменить стиль
-- `asst_idea_style` — выбрать стиль из примеров
-- `asst_idea_back` — назад
-- `asst_idea_custom` — своя идея (текстом)
-- `asst_idea_skip` — пропустить, перейти в assistant_chat
+- `asst_idea_gen:INDEX[:SESSION_ID[:REV]]` — сгенерировать выбранную идею
+- `asst_idea_next:INDEX[:SESSION_ID[:REV]]` — следующая идея
+- `asst_idea_restyle:STYLE_ID:INDEX[:SESSION_ID[:REV]]` — сменить стиль
+- `asst_idea_restyle_ok:STYLE_ID:INDEX:STICKER_MSG_ID[:SESSION_ID[:REV]]` — подтвердить новый стиль
+- `asst_idea_style:INDEX[:SESSION_ID[:REV]]` — выбрать стиль из примеров
+- `asst_idea_back:INDEX[:SESSION_ID[:REV]]` — назад
+- `asst_idea_holiday:HOLIDAY_ID:INDEX[:SESSION_ID[:REV]]` — включить holiday-режим
+- `asst_idea_holiday_off:INDEX[:SESSION_ID[:REV]]` — выключить holiday-режим
+- `asst_idea_custom[:SESSION_ID[:REV]]` — своя идея (текстом)
+- `asst_idea_skip[:SESSION_ID[:REV]]` — пропустить, перейти в assistant_chat
 
 #### Оплата
 - `pack_CREDITS_PRICE` — выбрать пакет кредитов
