@@ -73,7 +73,7 @@ const fallbackTexts: Record<string, Record<string, string>> = {
     "paywall.message": "Стикер почти готов! 🔥\n\nРазблокируй генерацию, купив пакет кредитов.\n\n🎁 Бонус: +2 кредита к первой покупке!",
     "paywall.bonus_applied": "🎁 Бонус +2 кредита начислен!",
     // Pack
-    "menu.make_pack": "📦 Сделать пак",
+    "menu.make_pack": "📦 Пак стикеров",
     "pack.intro_title": "Уникальные телеграм стикеры для вашей пары 💖",
     "pack.intro_howto": "Загрузи фото → посмотри превью → получи готовый стикерпак!",
     "pack.intro_footer": "Культовый набор реакций пригодится на каждый случай",
@@ -173,7 +173,7 @@ const fallbackTexts: Record<string, Record<string, string>> = {
     "paywall.message": "Sticker almost ready! 🔥\n\nUnlock generation by purchasing a credit package.\n\n🎁 Bonus: +2 credits with your first purchase!",
     "paywall.bonus_applied": "🎁 Bonus +2 credits applied!",
     // Pack
-    "menu.make_pack": "📦 Make a pack",
+    "menu.make_pack": "📦 Sticker pack",
     "pack.intro_title": "Unique Telegram stickers for your couple 💖",
     "pack.intro_howto": "Upload a photo → see preview → get a ready sticker pack!",
     "pack.intro_footer": "A must-have reaction set for every occasion",
