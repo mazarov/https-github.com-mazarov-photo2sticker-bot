@@ -208,12 +208,46 @@ async function runPackPreviewJob(job: any) {
     .maybeSingle();
   if (!batch) throw new Error("Pack batch not found");
 
-  const { data: template } = await supabase
-    .from("pack_templates")
-    .select("*")
-    .eq("id", batch.template_id)
-    .maybeSingle();
-  if (!template) throw new Error("Pack template not found");
+  const templateId = batch.template_id || session.pack_template_id || null;
+  let template: any = null;
+  let baseContentSet: any = null;
+  if (session.pack_content_set_id) {
+    const { data: selectedSet } = await supabase
+      .from("pack_content_sets")
+      .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (selectedSet?.is_active) {
+      baseContentSet = selectedSet;
+      console.log("[PackPreview] Using selected content set:", session.pack_content_set_id);
+    }
+  }
+  if (!baseContentSet && templateId) {
+    const { data: firstSet } = await supabase
+      .from("pack_content_sets")
+      .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active")
+      .eq("pack_template_id", templateId)
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (firstSet) {
+      baseContentSet = firstSet;
+      console.log("[PackPreview] Fallback to first active content set:", firstSet.id);
+    }
+  }
+  if (baseContentSet) {
+    template = {
+      id: baseContentSet.pack_template_id || templateId || "unknown_template",
+      sticker_count: baseContentSet.sticker_count || 4,
+      labels: baseContentSet.labels || [],
+      labels_en: baseContentSet.labels_en || baseContentSet.labels || [],
+      scene_descriptions: baseContentSet.scene_descriptions || [],
+      collage_file_id: null,
+      collage_url: null,
+    };
+  }
+  if (!template) throw new Error("Pack content set not found");
 
   // Scene descriptions: from content set if session has one, else from template
   const stickerCountForScenes = template.sticker_count || 4;
@@ -224,12 +258,11 @@ async function runPackPreviewJob(job: any) {
       .from("pack_content_sets")
       .select("scene_descriptions, is_active")
       .eq("id", session.pack_content_set_id)
-      .eq("pack_template_id", template.id)
       .maybeSingle();
     if (contentSetErr) {
       console.warn("[PackPreview] Content set fetch error:", contentSetErr.message);
     } else if (!contentSet) {
-      console.warn("[PackPreview] Content set not found:", session.pack_content_set_id, "template:", template.id);
+      console.warn("[PackPreview] Content set not found:", session.pack_content_set_id);
     } else if (!contentSet.is_active) {
       console.warn("[PackPreview] Content set inactive:", session.pack_content_set_id);
     } else if (!Array.isArray(contentSet.scene_descriptions) || contentSet.scene_descriptions.length !== stickerCountForScenes) {
@@ -520,12 +553,44 @@ async function runPackAssembleJob(job: any) {
     .maybeSingle();
   if (!batch) throw new Error("Pack batch not found");
 
-  const { data: template } = await supabase
-    .from("pack_templates")
-    .select("*")
-    .eq("id", batch.template_id)
-    .maybeSingle();
-  if (!template) throw new Error("Pack template not found");
+  const templateId = batch.template_id || session.pack_template_id || null;
+  let template: any = null;
+  let baseContentSet: any = null;
+  if (session.pack_content_set_id) {
+    const { data: selectedSet } = await supabase
+      .from("pack_content_sets")
+      .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (selectedSet?.is_active) {
+      baseContentSet = selectedSet;
+      console.log("[PackAssemble] Using selected content set:", session.pack_content_set_id);
+    }
+  }
+  if (!baseContentSet && templateId) {
+    const { data: firstSet } = await supabase
+      .from("pack_content_sets")
+      .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active")
+      .eq("pack_template_id", templateId)
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (firstSet) {
+      baseContentSet = firstSet;
+      console.log("[PackAssemble] Fallback to first active content set:", firstSet.id);
+    }
+  }
+  if (baseContentSet) {
+    template = {
+      id: baseContentSet.pack_template_id || templateId || "unknown_template",
+      sticker_count: baseContentSet.sticker_count || 4,
+      labels: baseContentSet.labels || [],
+      labels_en: baseContentSet.labels_en || baseContentSet.labels || [],
+      scene_descriptions: baseContentSet.scene_descriptions || [],
+    };
+  }
+  if (!template) throw new Error("Pack content set not found");
 
   // Labels: from content set if session has one, else from template
   let labelsSource: string[] = (lang === "ru" ? template.labels : (template.labels_en || template.labels)) || [];
@@ -534,7 +599,6 @@ async function runPackAssembleJob(job: any) {
       .from("pack_content_sets")
       .select("labels, labels_en, is_active")
       .eq("id", session.pack_content_set_id)
-      .eq("pack_template_id", template.id)
       .maybeSingle();
     if (contentSet?.is_active && Array.isArray(contentSet.labels) && contentSet.labels.length === (template.sticker_count || 4)) {
       labelsSource = lang === "ru" ? (contentSet.labels || []) : (contentSet.labels_en || contentSet.labels || []);

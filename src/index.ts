@@ -2967,34 +2967,20 @@ async function handlePackMenuEntry(ctx: any) {
     await updateAssistantSession(activeAssistant.id, { status: "completed" });
   }
 
-  // Get first active template
-  const { data: template } = await supabase
-    .from("pack_templates")
-    .select("*")
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (!template) {
-    await ctx.reply(
-      lang === "ru" ? "Паки скоро будут доступны!" : "Packs coming soon!",
-      getMainMenuKeyboard(lang)
-    );
-    return;
-  }
-
-  const templateId = template.id;
-  const { data: contentSets } = await supabase
+  // Source of truth for pack catalog in current test DB: pack_content_sets.
+  const { data: contentSets, error: contentSetsErr } = await supabase
     .from("pack_content_sets")
     .select("*")
-    .eq("pack_template_id", templateId)
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
+  if (contentSetsErr) {
+    console.error("[pack_menu] Failed to load content sets:", contentSetsErr.message);
+  }
   if (!contentSets?.length) {
     await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
     return;
   }
+  const templateId = String(contentSets[0].pack_template_id || "couple_v1");
 
   await supabase.from("sessions").update({ is_active: false }).eq("user_id", user.id).eq("is_active", true).eq("env", config.appEnv);
   let selectedPackStyleId: string | null = null;
@@ -3074,15 +3060,16 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
 
   const templateId = ctx.match[1];
 
-  // Verify template exists
-  const { data: template } = await supabase
-    .from("pack_templates")
-    .select("*")
-    .eq("id", templateId)
+  const { data: contentSetsForTemplate, error: contentSetsErr } = await supabase
+    .from("pack_content_sets")
+    .select("id")
+    .eq("pack_template_id", templateId)
     .eq("is_active", true)
-    .maybeSingle();
-
-  if (!template) {
+    .order("sort_order", { ascending: true });
+  if (contentSetsErr) {
+    console.error("[pack_start] Failed to load template content sets:", contentSetsErr.message);
+  }
+  if (!contentSetsForTemplate?.length) {
     await ctx.reply(
       lang === "ru" ? "Шаблон не найден." : "Template not found.",
       getMainMenuKeyboard(lang)
@@ -3122,6 +3109,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
       flow_kind: "pack",
       session_rev: 1,
       pack_template_id: templateId,
+      pack_content_set_id: contentSetsForTemplate[0].id,
       selected_style_id: selectedPackStyleId,
       current_photo_file_id: existingPhoto,
       photos: existingPhoto ? [existingPhoto] : [],
@@ -3155,18 +3143,15 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const lang = user.lang || "en";
   const templateId = ctx.match[1];
 
-  const { data: template } = await supabase.from("pack_templates").select("*").eq("id", templateId).eq("is_active", true).maybeSingle();
-  if (!template) {
-    await ctx.reply(lang === "ru" ? "Шаблон не найден." : "Template not found.", getMainMenuKeyboard(lang));
-    return;
-  }
-
-  const { data: contentSets } = await supabase
+  const { data: contentSets, error: contentSetsErr } = await supabase
     .from("pack_content_sets")
     .select("*")
     .eq("pack_template_id", templateId)
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
+  if (contentSetsErr) {
+    console.error("[pack_show_carousel] Failed to load content sets:", contentSetsErr.message);
+  }
   if (!contentSets?.length) {
     await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
     return;
@@ -3467,13 +3452,35 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     }
   }
 
-  // Load template to get sticker_count
-  const { data: packTemplate } = await supabase
-    .from("pack_templates")
-    .select("sticker_count")
-    .eq("id", session.pack_template_id)
-    .maybeSingle();
-  const packSize = packTemplate?.sticker_count || 4;
+  // sticker_count source: content set only.
+  let packSize = 4;
+  if (session.pack_content_set_id) {
+    const { data: selectedContentSet, error: setErr } = await supabase
+      .from("pack_content_sets")
+      .select("sticker_count")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (setErr) {
+      console.warn("[pack_preview_pay] content set load failed:", setErr.message);
+    }
+    if (selectedContentSet?.sticker_count) {
+      packSize = Number(selectedContentSet.sticker_count) || 4;
+    }
+  }
+  if (!session.pack_content_set_id) {
+    const { data: firstContentSet, error: firstSetErr } = await supabase
+      .from("pack_content_sets")
+      .select("sticker_count")
+      .eq("pack_template_id", session.pack_template_id)
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (firstSetErr) {
+      console.warn("[pack_preview_pay] fallback content set load failed:", firstSetErr.message);
+    }
+    packSize = Number(firstContentSet?.sticker_count) || 4;
+  }
 
   // Check credits
   if ((user.credits || 0) < 1) {
@@ -3604,14 +3611,35 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
     return;
   }
 
-  // Get template for sticker count
-  const { data: template } = await supabase
-    .from("pack_templates")
-    .select("sticker_count")
-    .eq("id", session.pack_template_id)
-    .maybeSingle();
-
-  const stickerCount = template?.sticker_count || 4;
+  // Get sticker count from selected content set (or first active set for template id).
+  let stickerCount = 4;
+  if (session.pack_content_set_id) {
+    const { data: selectedContentSet, error: setErr } = await supabase
+      .from("pack_content_sets")
+      .select("sticker_count")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (setErr) {
+      console.warn("[pack_approve] content set load failed:", setErr.message);
+    }
+    if (selectedContentSet?.sticker_count) {
+      stickerCount = Number(selectedContentSet.sticker_count) || 4;
+    }
+  }
+  if (!session.pack_content_set_id) {
+    const { data: firstContentSet, error: firstSetErr } = await supabase
+      .from("pack_content_sets")
+      .select("sticker_count")
+      .eq("pack_template_id", session.pack_template_id)
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (firstSetErr) {
+      console.warn("[pack_approve] fallback content set load failed:", firstSetErr.message);
+    }
+    stickerCount = Number(firstContentSet?.sticker_count) || 4;
+  }
   const remainingCredits = stickerCount - 1; // already paid 1 for preview
 
   // Check credits
