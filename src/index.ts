@@ -434,6 +434,17 @@ async function sendStyleCarousel(ctx: any, lang: string, page: number = 0): Prom
 async function sendStyleExamplesKeyboard(ctx: any, lang: string, selectedStyleId?: string | null) {
   const allPresets = await getStylePresetsV2();
   const isRu = lang === "ru";
+  const telegramId = ctx.from?.id;
+  let sessionRef: string | null = null;
+  if (telegramId) {
+    const user = await getUser(telegramId);
+    if (user?.id) {
+      const session = await getActiveSession(user.id);
+      if (session?.id && session.state?.startsWith("assistant_")) {
+        sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
+      }
+    }
+  }
 
   // 3 styles per row (unified layout)
   const buttons: any[][] = [];
@@ -443,7 +454,7 @@ async function sendStyleExamplesKeyboard(ctx: any, lang: string, selectedStyleId
       const isSelected = selectedStyleId && selectedStyleId === allPresets[j].id;
       row.push(Markup.button.callback(
         `${isSelected ? "✅ " : ""}${allPresets[j].emoji} ${isRu ? allPresets[j].name_ru : allPresets[j].name_en}`,
-        `assistant_style_preview:${allPresets[j].id}`
+        sessionRef ? `assistant_style_preview:${allPresets[j].id}:${sessionRef}` : `assistant_style_preview:${allPresets[j].id}`
       ));
     }
     buttons.push(row);
@@ -6008,7 +6019,7 @@ bot.action(/^toggle_border:(.+)$/, async (ctx) => {
 
 // Callback: assistant picks a style from the examples keyboard
 // Assistant: style preview — show sticker + description + OK button
-bot.action(/^assistant_style_preview:(.+)$/, async (ctx) => {
+bot.action(/^assistant_style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
   try {
     safeAnswerCbQuery(ctx);
     const telegramId = ctx.from?.id;
@@ -6020,6 +6031,23 @@ bot.action(/^assistant_style_preview:(.+)$/, async (ctx) => {
     const isRu = lang === "ru";
 
     const styleId = ctx.match[1];
+    const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+    const session = explicitSessionId
+      ? await getSessionByIdForUser(user.id, explicitSessionId)
+      : await getActiveSession(user.id);
+    if (!session?.id) {
+      await rejectSessionEvent(ctx, lang, "assistant_style_preview", "session_not_found");
+      return;
+    }
+    if (!session.state?.startsWith("assistant_")) {
+      await rejectSessionEvent(ctx, lang, "assistant_style_preview", "wrong_state");
+      return;
+    }
+    const strictRevEnabled = await isStrictSessionRevEnabled();
+    if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+      await rejectSessionEvent(ctx, lang, "assistant_style_preview", "stale_callback");
+      return;
+    }
     const preset = await getStylePresetV2ById(styleId);
     if (!preset) return;
 
@@ -6043,9 +6071,10 @@ bot.action(/^assistant_style_preview:(.+)$/, async (ctx) => {
     const description = preset.description_ru || preset.prompt_hint;
     const text = `${preset.emoji} *${styleName}*\n\n${description}`;
 
+    const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
     const keyboard = {
       inline_keyboard: [[
-        { text: "✅ ОК", callback_data: `assistant_style_preview_ok:${styleId}:${stickerMsgId}` },
+        { text: "✅ ОК", callback_data: sessionRef ? `assistant_style_preview_ok:${styleId}:${stickerMsgId}:${sessionRef}` : `assistant_style_preview_ok:${styleId}:${stickerMsgId}` },
       ]],
     };
 
@@ -6056,7 +6085,7 @@ bot.action(/^assistant_style_preview:(.+)$/, async (ctx) => {
 });
 
 // Assistant: style preview OK — apply style
-bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)$/, async (ctx) => {
+bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const styleId = ctx.match[1];
   const stickerMsgId = parseInt(ctx.match[2], 10);
@@ -6075,6 +6104,23 @@ bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)$/, async (ctx) => {
     const user = await getUser(telegramId);
     if (!user?.id) return;
     const lang = user.lang || "en";
+    const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[3] || null);
+    const session = explicitSessionId
+      ? await getSessionByIdForUser(user.id, explicitSessionId)
+      : await getActiveSession(user.id);
+    if (!session?.id) {
+      await rejectSessionEvent(ctx, lang, "assistant_style_preview_ok", "session_not_found");
+      return;
+    }
+    if (!session.state?.startsWith("assistant_")) {
+      await rejectSessionEvent(ctx, lang, "assistant_style_preview_ok", "wrong_state");
+      return;
+    }
+    const strictRevEnabled = await isStrictSessionRevEnabled();
+    if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+      await rejectSessionEvent(ctx, lang, "assistant_style_preview_ok", "stale_callback");
+      return;
+    }
 
     const preset = await getStylePresetV2ById(styleId);
     const styleName = preset
@@ -6084,6 +6130,11 @@ bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)$/, async (ctx) => {
     const aSession = await getActiveAssistantSession(user.id);
     if (aSession) {
       await updateAssistantSession(aSession.id, { style: styleName });
+      await supabase.from("sessions").update({
+        flow_kind: "assistant",
+        session_rev: (session.session_rev || 1) + 1,
+        is_active: true,
+      }).eq("id", session.id);
       console.log("assistant_style_preview_ok:", styleId, "→", styleName, "aSession:", aSession.id);
 
       const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
@@ -6109,7 +6160,7 @@ bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)$/, async (ctx) => {
   }
 });
 
-bot.action(/^assistant_pick_style:(.+)$/, async (ctx) => {
+bot.action(/^assistant_pick_style:([^:]+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const styleId = ctx.match[1];
   const telegramId = ctx.from?.id;
@@ -6119,6 +6170,23 @@ bot.action(/^assistant_pick_style:(.+)$/, async (ctx) => {
     const user = await getUser(telegramId);
     if (!user?.id) return;
     const lang = user.lang || "en";
+    const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+    const session = explicitSessionId
+      ? await getSessionByIdForUser(user.id, explicitSessionId)
+      : await getActiveSession(user.id);
+    if (!session?.id) {
+      await rejectSessionEvent(ctx, lang, "assistant_pick_style", "session_not_found");
+      return;
+    }
+    if (!session.state?.startsWith("assistant_")) {
+      await rejectSessionEvent(ctx, lang, "assistant_pick_style", "wrong_state");
+      return;
+    }
+    const strictRevEnabled = await isStrictSessionRevEnabled();
+    if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+      await rejectSessionEvent(ctx, lang, "assistant_pick_style", "stale_callback");
+      return;
+    }
 
     // Get style name
     const preset = await getStylePresetV2ById(styleId);
@@ -6130,6 +6198,11 @@ bot.action(/^assistant_pick_style:(.+)$/, async (ctx) => {
     const aSession = await getActiveAssistantSession(user.id);
     if (aSession) {
       await updateAssistantSession(aSession.id, { style: styleName });
+      await supabase.from("sessions").update({
+        flow_kind: "assistant",
+        session_rev: (session.session_rev || 1) + 1,
+        is_active: true,
+      }).eq("id", session.id);
       console.log("assistant_pick_style:", styleId, "→", styleName, "aSession:", aSession.id);
 
       // Build response through AI to continue flow naturally
@@ -6897,7 +6970,7 @@ bot.action(/^asst_idea_skip(?::(.+))?$/, async (ctx) => {
 });
 
 // Callback: assistant restart — start new assistant dialog from post-generation button
-bot.action("assistant_restart", async (ctx) => {
+bot.action(/^assistant_restart(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6906,6 +6979,19 @@ bot.action("assistant_restart", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  if (explicitSessionId) {
+    const session = await getSessionByIdForUser(user.id, explicitSessionId);
+    if (!session?.id) {
+      await rejectSessionEvent(ctx, lang, "assistant_restart", "session_not_found");
+      return;
+    }
+    const strictRevEnabled = await isStrictSessionRevEnabled();
+    if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+      await rejectSessionEvent(ctx, lang, "assistant_restart", "stale_callback");
+      return;
+    }
+  }
   await startAssistantDialog(ctx, user, lang);
 });
 
