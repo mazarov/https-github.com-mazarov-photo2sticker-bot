@@ -1443,6 +1443,20 @@ function generateFallbackReply(action: string, session: AssistantSessionRow, lan
   return isRu ? "Продолжаем!" : "Let's continue!";
 }
 
+function shouldResumeAssistantChatAfterPhoto(aSession: AssistantSessionRow): boolean {
+  const hasCollectedParams = Boolean(
+    aSession.style ||
+    aSession.emotion ||
+    aSession.pose ||
+    (aSession.goal && String(aSession.goal).trim())
+  );
+  const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? aSession.messages : [];
+  const nonSystemMessages = messages.filter(m => m.role !== "system").length;
+  // Fresh dialog before first real user intent usually has only greeting.
+  // When there is real conversation context, return to requirements collection.
+  return hasCollectedParams || nonSystemMessages >= 3;
+}
+
 /**
  * Build a mirror message showing all collected params.
  */
@@ -2488,11 +2502,34 @@ bot.on("photo", async (ctx) => {
       session.state = "wait_photo";
       // Fall through to manual photo handler below
     } else {
+      const photos = Array.isArray(session.photos) ? session.photos : [];
+      photos.push(photo.file_id);
 
-    const photos = Array.isArray(session.photos) ? session.photos : [];
-    photos.push(photo.file_id);
+      if (shouldResumeAssistantChatAfterPhoto(aSession)) {
+        console.log("Assistant photo: returning to requirements collection (assistant_chat)");
+        await supabase
+          .from("sessions")
+          .update({
+            photos,
+            current_photo_file_id: photo.file_id,
+            state: "assistant_chat",
+            is_active: true,
+            flow_kind: "assistant",
+            session_rev: (session.session_rev || 1) + 1,
+          })
+          .eq("id", session.id);
 
-    // === NEW: Show sticker ideas immediately after photo ===
+        const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
+        messages.push({ role: "user", content: "[User sent a photo]" });
+        const replyText = generateFallbackReply("normal", aSession, lang);
+        messages.push({ role: "assistant", content: replyText });
+        await updateAssistantSession(aSession.id, { messages, pending_photo_file_id: null });
+        await ctx.reply(replyText, getMainMenuKeyboard(lang));
+        return;
+      }
+
+    // Initial assistant flow without enough dialog context:
+    // show sticker ideas after photo.
     console.log("Assistant photo: showing sticker ideas flow");
 
     // Pick style: user's last > default > random
