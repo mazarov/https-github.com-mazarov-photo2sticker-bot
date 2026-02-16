@@ -6358,7 +6358,7 @@ bot.action(/^asst_idea_gen:(\d+)(?::(.+))?$/, async (ctx) => {
 });
 
 // Next idea — always generate a new one via text-only LLM
-bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
+bot.action(/^asst_idea_next:(\d+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6367,7 +6367,19 @@ bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_next", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_next", "stale_callback");
+    return;
+  }
   if (!session?.sticker_ideas_state) {
     console.error("[asst_idea_next] No sticker_ideas_state, session:", session?.id, "state:", session?.state);
     await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
@@ -6430,7 +6442,7 @@ bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
 });
 
 // Show style selection buttons
-bot.action(/^asst_idea_style:(\d+)$/, async (ctx) => {
+bot.action(/^asst_idea_style:(\d+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6440,6 +6452,20 @@ bot.action(/^asst_idea_style:(\d+)$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const ideaIndex = parseInt(ctx.match[1], 10);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_style", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_style", "stale_callback");
+    return;
+  }
+  const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
   const allPresets = await getStylePresetsV2();
   const isRu = lang === "ru";
 
@@ -6451,7 +6477,7 @@ bot.action(/^asst_idea_style:(\d+)$/, async (ctx) => {
       const p = allPresets[j];
       row.push(Markup.button.callback(
         `${p.emoji} ${isRu ? p.name_ru : p.name_en}`,
-        `asst_idea_restyle:${p.id}:${ideaIndex}`
+        sessionRef ? `asst_idea_restyle:${p.id}:${ideaIndex}:${sessionRef}` : `asst_idea_restyle:${p.id}:${ideaIndex}`
       ));
     }
     buttons.push(row);
@@ -6459,7 +6485,7 @@ bot.action(/^asst_idea_style:(\d+)$/, async (ctx) => {
   // Back button
   buttons.push([Markup.button.callback(
     isRu ? "⬅️ Назад" : "⬅️ Back",
-    `asst_idea_back:${ideaIndex}`
+    sessionRef ? `asst_idea_back:${ideaIndex}:${sessionRef}` : `asst_idea_back:${ideaIndex}`
   )]);
 
   try { await ctx.deleteMessage(); } catch {}
@@ -6470,7 +6496,7 @@ bot.action(/^asst_idea_style:(\d+)$/, async (ctx) => {
 });
 
 // Back to idea card from style selection
-bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
+bot.action(/^asst_idea_back:(\d+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6479,7 +6505,19 @@ bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_back", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_back", "stale_callback");
+    return;
+  }
   const state = session?.sticker_ideas_state as { styleId: string; ideaIndex: number; ideas: StickerIdea[]; holidayId?: string | null } | null;
   if (!state?.ideas?.length) {
     try { await ctx.deleteMessage(); } catch {}
@@ -6506,7 +6544,7 @@ bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
 
 // Restyle: change style, keep same ideas, show current idea with new style
 // Restyle: show style preview (sticker example + description + OK button)
-bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
+bot.action(/^asst_idea_restyle:([^:]+):(\d+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6518,6 +6556,20 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
 
   const styleId = ctx.match[1];
   const ideaIndex = parseInt(ctx.match[2], 10);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[3] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_restyle", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_restyle", "stale_callback");
+    return;
+  }
+  const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
 
   const preset = await getStylePresetV2ById(styleId);
   if (!preset) return;
@@ -6545,7 +6597,7 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
   const okText = "✅ ОК";
   const keyboard = {
     inline_keyboard: [[
-      { text: okText, callback_data: `asst_idea_restyle_ok:${styleId}:${ideaIndex}:${stickerMsgId}` },
+      { text: okText, callback_data: sessionRef ? `asst_idea_restyle_ok:${styleId}:${ideaIndex}:${stickerMsgId}:${sessionRef}` : `asst_idea_restyle_ok:${styleId}:${ideaIndex}:${stickerMsgId}` },
     ]],
   };
 
@@ -6553,7 +6605,7 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)$/, async (ctx) => {
 });
 
 // Restyle OK: apply selected style and return to idea card
-bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)$/, async (ctx) => {
+bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6566,7 +6618,19 @@ bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)$/, async (ctx) => {
   const ideaIndex = parseInt(ctx.match[2], 10);
   const stickerMsgId = parseInt(ctx.match[3], 10);
 
-  const session = await getActiveSession(user.id);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[4] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_restyle_ok", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_restyle_ok", "stale_callback");
+    return;
+  }
   if (!session?.sticker_ideas_state) {
     console.error("[asst_idea_restyle_ok] No sticker_ideas_state, session:", session?.id);
     await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
@@ -6607,7 +6671,7 @@ bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)$/, async (ctx) => {
 });
 
 // Holiday OFF — generate 1 normal idea, reset holiday, keep photoDescription
-bot.action(/^asst_idea_holiday_off:(\d+)$/, async (ctx) => {
+bot.action(/^asst_idea_holiday_off:(\d+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6616,7 +6680,19 @@ bot.action(/^asst_idea_holiday_off:(\d+)$/, async (ctx) => {
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_holiday_off", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_holiday_off", "stale_callback");
+    return;
+  }
   if (!session?.sticker_ideas_state) {
     await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
     return;
@@ -6664,7 +6740,7 @@ bot.action(/^asst_idea_holiday_off:(\d+)$/, async (ctx) => {
 });
 
 // Holiday theme ON — generate 1 holiday idea, keep photoDescription
-bot.action(/^asst_idea_holiday:([^:]+):(\d+)$/, async (ctx) => {
+bot.action(/^asst_idea_holiday:([^:]+):(\d+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6674,7 +6750,19 @@ bot.action(/^asst_idea_holiday:([^:]+):(\d+)$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const holidayId = ctx.match[1];
-  const session = await getActiveSession(user.id);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[3] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_holiday", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_holiday", "stale_callback");
+    return;
+  }
   if (!session?.sticker_ideas_state) {
     await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
     return;
@@ -7977,19 +8065,19 @@ async function showStickerIdeaCard(ctx: any, opts: {
       ? `${holiday.emoji} ${holidayName}: on`
       : `${holiday.emoji} ${holidayName}: off`;
     const holidayCallback = isHolidayActive
-      ? `asst_idea_holiday_off:${ideaIndex}`
-      : `asst_idea_holiday:${holiday.id}:${ideaIndex}`;
+      ? (sessionRef ? `asst_idea_holiday_off:${ideaIndex}:${sessionRef}` : `asst_idea_holiday_off:${ideaIndex}`)
+      : (sessionRef ? `asst_idea_holiday:${holiday.id}:${ideaIndex}:${sessionRef}` : `asst_idea_holiday:${holiday.id}:${ideaIndex}`);
     holidayNextRow.push(Markup.button.callback(holidayLabel, holidayCallback));
   }
   holidayNextRow.push(Markup.button.callback(
     isRu ? "➡️ Другая" : "➡️ Next",
-    `asst_idea_next:${ideaIndex}`
+    sessionRef ? `asst_idea_next:${ideaIndex}:${sessionRef}` : `asst_idea_next:${ideaIndex}`
   ));
   rows.push(holidayNextRow);
 
   rows.push([Markup.button.callback(
     isRu ? "🔄 Другой стиль" : "🔄 Change style",
-    `asst_idea_style:${ideaIndex}`
+    sessionRef ? `asst_idea_style:${ideaIndex}:${sessionRef}` : `asst_idea_style:${ideaIndex}`
   )]);
 
   rows.push([Markup.button.callback(
