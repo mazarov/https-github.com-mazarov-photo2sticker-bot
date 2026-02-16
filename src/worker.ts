@@ -504,7 +504,7 @@ async function runPackAssembleJob(job: any) {
 
   const { data: contentSet } = await supabase
     .from("pack_content_sets")
-    .select("labels, labels_en, sticker_count, is_active")
+    .select("labels, labels_en, sticker_count, name_ru, name_en, is_active")
     .eq("id", session.pack_content_set_id)
     .maybeSingle();
   
