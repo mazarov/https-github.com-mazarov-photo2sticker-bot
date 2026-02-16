@@ -452,15 +452,11 @@ ${packTaskBlock}`
   });
   const approveBtn = await getText(lang, "btn.approve_pack", { price: remainingCredits });
   const regenerateBtn = await getText(lang, "btn.regenerate_pack");
-  const backBtn = await getText(lang, "btn.back_to_styles");
 
   const previewResult = await sendPhoto(telegramId, bufferToSend, caption, {
     inline_keyboard: [
       [{ text: approveBtn, callback_data: "pack_approve" }],
-      [
-        { text: regenerateBtn, callback_data: "pack_regenerate" },
-        { text: backBtn, callback_data: "pack_back" },
-      ],
+      [{ text: regenerateBtn, callback_data: "pack_regenerate" }],
     ],
   });
 

@@ -2483,8 +2483,8 @@ bot.on("photo", async (ctx) => {
       })
       .eq("id", session.id);
 
-    // Send style selector + preview offer (reuses shared style menu)
-    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
+    // Send style selector (pack flow: always show Back to poses)
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
     return;
   }
 
@@ -2737,15 +2737,63 @@ bot.hears(["📦 Сделать пак", "📦 Make a pack"], async (ctx) => {
     return;
   }
 
-  // Step 1: short CTA → button leads to carousel (no pack.preview_offer)
-  const invitationBtn = await getText(lang, "pack.invitation_btn");
-  const shortTitle = lang === "ru" ? (template.name_ru || "Пак") : (template.name_en || "Pack");
+  const templateId = template.id;
+  const { data: contentSets } = await supabase
+    .from("pack_content_sets")
+    .select("*")
+    .eq("pack_template_id", templateId)
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true });
+  if (!contentSets?.length) {
+    await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
+    return;
+  }
+
+  await supabase.from("sessions").update({ is_active: false }).eq("user_id", user.id).eq("is_active", true).eq("env", config.appEnv);
+  let selectedPackStyleId: string | null = null;
+  try {
+    const defaultPackStyle = await pickStyleForIdeas(user);
+    selectedPackStyleId = defaultPackStyle?.id || null;
+  } catch (_) {}
+
+  const { data: session, error: sessErr } = await supabase
+    .from("sessions")
+    .insert({
+      user_id: user.id,
+      state: "wait_pack_carousel",
+      is_active: true,
+      pack_template_id: templateId,
+      pack_carousel_index: 0,
+      selected_style_id: selectedPackStyleId,
+      env: config.appEnv,
+    })
+    .select()
+    .single();
+  if (sessErr || !session) {
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    return;
+  }
+
+  const set = contentSets[0];
+  const setName = lang === "ru" ? set.name_ru : set.name_en;
+  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+  const intro = await getText(lang, "pack.carousel_intro");
+  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
+  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const keyboard = {
-    inline_keyboard: [[
-      { text: `📦 ${invitationBtn}`, callback_data: `pack_show_carousel:${template.id}` },
-    ]],
+    inline_keyboard: [
+      [
+        { text: "◀️", callback_data: "pack_carousel_prev" },
+        { text: `1/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: "▶️", callback_data: "pack_carousel_next" },
+      ],
+      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+    ],
   };
-  await ctx.reply(shortTitle, { reply_markup: keyboard });
+  const msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+  if (msg?.message_id && ctx.chat?.id) {
+    await supabase.from("sessions").update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id }).eq("id", session.id);
+  }
 });
 
 // Callback: pack_start — user tapped "Попробовать" on template CTA
@@ -2821,8 +2869,8 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
   }
 
   if (existingPhoto) {
-    // Photo already available — skip to style selection + preview payment
-    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
+    // Photo already available — skip to style selection (pack flow: always Back to poses)
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
   } else {
     // No photo — ask user to send one
     await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
@@ -2884,7 +2932,8 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const set = contentSets[0];
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-  const carouselCaption = `*${setName}*\n${setDesc}`;
+  const intro = await getText(lang, "pack.carousel_intro");
+  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const keyboard = {
     inline_keyboard: [
@@ -2942,7 +2991,8 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
 
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-  const carouselCaption = `*${setName}*\n${setDesc}`;
+  const intro = await getText(lang, "pack.carousel_intro");
+  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const keyboard = {
     inline_keyboard: [
@@ -3020,7 +3070,8 @@ bot.action("pack_back_to_carousel", async (ctx) => {
   const set = contentSets[0];
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-  const carouselCaption = `*${setName}*\n${setDesc}`;
+  const intro = await getText(lang, "pack.carousel_intro");
+  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const keyboard = {
     inline_keyboard: [
@@ -3032,9 +3083,16 @@ bot.action("pack_back_to_carousel", async (ctx) => {
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
     ],
   };
-  try {
-    await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-  } catch (_) {}
+  if (session.progress_message_id && session.progress_chat_id) {
+    try {
+      await ctx.telegram.editMessageText(session.progress_chat_id, session.progress_message_id, carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+    } catch (_) {}
+  } else {
+    const sent = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+    if (sent?.message_id && ctx.chat?.id) {
+      await supabase.from("sessions").update({ progress_message_id: sent.message_id, progress_chat_id: ctx.chat.id }).eq("id", session.id);
+    }
+  }
 });
 
 // Callback: pack_preview_pay — user pays 1 credit for preview
@@ -3371,7 +3429,7 @@ bot.action("pack_back", async (ctx) => {
     .update({ state: "wait_pack_preview_payment", is_active: true })
     .eq("id", session.id);
   try { await ctx.deleteMessage(); } catch {}
-  await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
+  await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
 });
 
 // Callback: pack_cancel — user cancels pack
@@ -4381,9 +4439,9 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
     // Delete description message (current message with buttons)
     try { await ctx.deleteMessage(); } catch {}
 
-    // Send fresh style list (new message; previous list was deleted when opening preview)
+    // Send fresh style list (pack flow: always show Back to poses)
     if (session?.state === "wait_pack_preview_payment") {
-      await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: !!session.progress_message_id });
+      await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
     } else {
       await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session?.selected_style_id || null });
     }
@@ -4423,7 +4481,7 @@ bot.action(/^style_v2:(.+)$/, async (ctx) => {
         .update({ selected_style_id: preset.id, is_active: true })
         .eq("id", session.id);
       try { await ctx.deleteMessage(); } catch {}
-      await sendPackStyleSelectionStep(ctx, lang, preset.id);
+      await sendPackStyleSelectionStep(ctx, lang, preset.id, undefined, { useBackButton: true });
       return;
     }
 
