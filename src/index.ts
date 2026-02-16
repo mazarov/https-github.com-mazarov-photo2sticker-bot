@@ -2519,6 +2519,8 @@ bot.on("photo", async (ctx) => {
       totalIdeas: 0, // unlimited
       style: randomStyle,
       lang,
+      sessionId: session.id,
+      sessionRev: session.session_rev,
     });
     return;
   }
@@ -2538,11 +2540,15 @@ bot.on("photo", async (ctx) => {
       Markup.inlineKeyboard([
         [Markup.button.callback(
           lang === "ru" ? "✅ Новое фото" : "✅ New photo",
-          "assistant_new_photo"
+            formatCallbackSessionRef(session.id, session.session_rev)
+              ? `assistant_new_photo:${formatCallbackSessionRef(session.id, session.session_rev)}`
+              : "assistant_new_photo"
         )],
         [Markup.button.callback(
           lang === "ru" ? "❌ Оставить прежнее" : "❌ Keep current",
-          "assistant_keep_photo"
+            formatCallbackSessionRef(session.id, session.session_rev)
+              ? `assistant_keep_photo:${formatCallbackSessionRef(session.id, session.session_rev)}`
+              : "assistant_keep_photo"
         )],
       ])
     );
@@ -4147,7 +4153,9 @@ bot.on("text", async (ctx) => {
             Markup.inlineKeyboard([
               [Markup.button.callback(
                 lang === "ru" ? "✅ Подтвердить" : "✅ Confirm",
-                "assistant_confirm"
+                formatCallbackSessionRef(session.id, session.session_rev)
+                  ? `assistant_confirm:${formatCallbackSessionRef(session.id, session.session_rev)}`
+                  : "assistant_confirm"
               )],
             ])
           );
@@ -6150,7 +6158,7 @@ bot.action(/^assistant_pick_style:(.+)$/, async (ctx) => {
 });
 
 // Callback: assistant confirm — user presses [✅ Confirm] button
-bot.action("assistant_confirm", async (ctx) => {
+bot.action(/^assistant_confirm(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6159,9 +6167,23 @@ bot.action("assistant_confirm", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
-
-  if (!session?.id || !session.state?.startsWith("assistant_")) return;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "assistant_confirm", "session_not_found");
+    return;
+  }
+  if (!session.state?.startsWith("assistant_")) {
+    await rejectSessionEvent(ctx, lang, "assistant_confirm", "wrong_state");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "assistant_confirm", "stale_callback");
+    return;
+  }
 
   // Check if user qualifies for trial credit — route through AI for grant/deny decision
   const qualifiesForTrial = (user.credits || 0) === 0
@@ -6275,7 +6297,7 @@ bot.action("assistant_confirm", async (ctx) => {
 // ============================================================
 
 // Generate sticker with selected idea
-bot.action(/^asst_idea_gen:(\d+)$/, async (ctx) => {
+bot.action(/^asst_idea_gen:(\d+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6284,7 +6306,19 @@ bot.action(/^asst_idea_gen:(\d+)$/, async (ctx) => {
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_gen", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_gen", "stale_callback");
+    return;
+  }
   if (!session?.sticker_ideas_state) {
     console.error("[asst_idea_gen] No sticker_ideas_state, session:", session?.id, "state:", session?.state);
     await ctx.reply(lang === "ru" ? "⚠️ Сессия устарела. Пришли фото заново." : "⚠️ Session expired. Send a photo again.");
@@ -6390,6 +6424,8 @@ bot.action(/^asst_idea_next:(\d+)$/, async (ctx) => {
     style: preset,
     lang,
     currentHolidayId: state.holidayId,
+    sessionId: session.id,
+    sessionRev: session.session_rev,
   });
 });
 
@@ -6463,6 +6499,8 @@ bot.action(/^asst_idea_back:(\d+)$/, async (ctx) => {
     style: preset,
     lang,
     currentHolidayId: state.holidayId,
+    sessionId: session.id,
+    sessionRev: session.session_rev,
   });
 });
 
@@ -6563,6 +6601,8 @@ bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)$/, async (ctx) => {
     style: preset,
     lang,
     currentHolidayId: state.holidayId,
+    sessionId: session.id,
+    sessionRev: session.session_rev,
   });
 });
 
@@ -6618,6 +6658,8 @@ bot.action(/^asst_idea_holiday_off:(\d+)$/, async (ctx) => {
   await showStickerIdeaCard(ctx, {
     idea, ideaIndex: 0, totalIdeas: 0, style: preset, lang,
     currentHolidayId: null,
+    sessionId: session.id,
+    sessionRev: session.session_rev,
   });
 });
 
@@ -6679,11 +6721,13 @@ bot.action(/^asst_idea_holiday:([^:]+):(\d+)$/, async (ctx) => {
   await showStickerIdeaCard(ctx, {
     idea, ideaIndex: 0, totalIdeas: 0, style: preset, lang,
     currentHolidayId: holidayId,
+    sessionId: session.id,
+    sessionRev: session.session_rev,
   });
 });
 
 // Custom idea — switch to assistant chat
-bot.action("asst_idea_custom", async (ctx) => {
+bot.action(/^asst_idea_custom(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6692,13 +6736,26 @@ bot.action("asst_idea_custom", async (ctx) => {
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
-  if (!session?.id) return;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_custom", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_custom", "stale_callback");
+    return;
+  }
 
   // Switch to assistant_chat mode
   await supabase.from("sessions").update({
     state: "assistant_chat",
     is_active: true,
+    flow_kind: "assistant",
+    session_rev: (session.session_rev || 1) + 1,
   }).eq("id", session.id);
 
   try { await ctx.deleteMessage(); } catch {}
@@ -6711,7 +6768,7 @@ bot.action("asst_idea_custom", async (ctx) => {
 });
 
 // Skip ideas — switch to normal assistant dialog
-bot.action("asst_idea_skip", async (ctx) => {
+bot.action(/^asst_idea_skip(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6720,13 +6777,26 @@ bot.action("asst_idea_skip", async (ctx) => {
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
-  if (!session?.id) return;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_skip", "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_skip", "stale_callback");
+    return;
+  }
 
   // Switch to assistant_chat mode
   await supabase.from("sessions").update({
     state: "assistant_chat",
     is_active: true,
+    flow_kind: "assistant",
+    session_rev: (session.session_rev || 1) + 1,
   }).eq("id", session.id);
 
   try { await ctx.deleteMessage(); } catch {}
@@ -6752,7 +6822,7 @@ bot.action("assistant_restart", async (ctx) => {
 });
 
 // Callback: assistant new photo — user chose to use new photo
-bot.action("assistant_new_photo", async (ctx) => {
+bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -6761,8 +6831,23 @@ bot.action("assistant_new_photo", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
-  if (!session?.id) return;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "assistant_new_photo", "session_not_found");
+    return;
+  }
+  if (!session.state?.startsWith("assistant_")) {
+    await rejectSessionEvent(ctx, lang, "assistant_new_photo", "wrong_state");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "assistant_new_photo", "stale_callback");
+    return;
+  }
 
   const aSession = await getActiveAssistantSession(user.id);
   const newPhotoFileId = aSession?.pending_photo_file_id;
@@ -6805,6 +6890,8 @@ bot.action("assistant_new_photo", async (ctx) => {
         current_photo_file_id: newPhotoFileId,
         state: "assistant_chat",
         is_active: true,
+        flow_kind: "assistant",
+        session_rev: (session.session_rev || 1) + 1,
       })
       .eq("id", session.id);
 
@@ -6830,9 +6917,30 @@ bot.action("assistant_new_photo", async (ctx) => {
 });
 
 // Callback: assistant keep photo — user chose to keep current photo
-bot.action("assistant_keep_photo", async (ctx) => {
+bot.action(/^assistant_keep_photo(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
-  const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  const lang = user?.lang || ((ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en");
+  if (!user?.id) return;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "assistant_keep_photo", "session_not_found");
+    return;
+  }
+  if (!session.state?.startsWith("assistant_")) {
+    await rejectSessionEvent(ctx, lang, "assistant_keep_photo", "wrong_state");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "assistant_keep_photo", "stale_callback");
+    return;
+  }
   const msg = lang === "ru" ? "Хорошо, работаем с текущим фото!" : "Ok, keeping the current photo!";
   await ctx.reply(msg);
 });
@@ -7835,9 +7943,12 @@ async function showStickerIdeaCard(ctx: any, opts: {
   style: StylePresetV2;
   lang: string;
   currentHolidayId?: string | null;
+  sessionId?: string | null;
+  sessionRev?: number | null;
 }) {
-  const { idea, ideaIndex, totalIdeas, style, lang, currentHolidayId } = opts;
+  const { idea, ideaIndex, totalIdeas, style, lang, currentHolidayId, sessionId, sessionRev } = opts;
   const isRu = lang === "ru";
+  const sessionRef = formatCallbackSessionRef(sessionId, sessionRev);
 
   const text = [
     `💡 ${isRu ? "Идея" : "Idea"} ${ideaIndex + 1}`,
@@ -7852,7 +7963,7 @@ async function showStickerIdeaCard(ctx: any, opts: {
 
   rows.push([Markup.button.callback(
     isRu ? `🎨 Сгенерить (1💎)` : `🎨 Generate (1💎)`,
-    `asst_idea_gen:${ideaIndex}`
+    sessionRef ? `asst_idea_gen:${ideaIndex}:${sessionRef}` : `asst_idea_gen:${ideaIndex}`
   )]);
 
   // Holiday button + Next idea
@@ -7883,12 +7994,12 @@ async function showStickerIdeaCard(ctx: any, opts: {
 
   rows.push([Markup.button.callback(
     isRu ? "✏️ Своя идея" : "✏️ Custom idea",
-    "asst_idea_custom"
+    sessionRef ? `asst_idea_custom:${sessionRef}` : "asst_idea_custom"
   )]);
 
   rows.push([Markup.button.callback(
     isRu ? "⏭️ Пропустить" : "⏭️ Skip",
-    "asst_idea_skip"
+    sessionRef ? `asst_idea_skip:${sessionRef}` : "asst_idea_skip"
   )]);
 
   await ctx.reply(text, Markup.inlineKeyboard(rows));
