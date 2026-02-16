@@ -994,14 +994,12 @@ async function getUser(telegramId: number) {
 // Helper: get persistent menu keyboard
 function getMainMenuKeyboard(lang: string) {
   const row1 = lang === "ru"
-    ? ["🤖 Помощник", "🎨 Стили"]
-    : ["🤖 Assistant", "🎨 Styles"];
+    ? ["🤖 Сделать 1 стикер"]
+    : ["🤖 Make 1 sticker"];
   const row2 = lang === "ru"
     ? ["📦 Сделать пак", "💰 Баланс"]
     : ["📦 Make a pack", "💰 Balance"];
-  const row3 = lang === "ru"
-    ? ["❓ Помощь"]
-    : ["❓ Help"];
+  const row3 = ["❓"]; // icon only, no text
 
   return Markup.keyboard([row1, row2, row3]).resize().persistent();
 }
@@ -2536,8 +2534,8 @@ bot.on("photo", async (ctx) => {
 // Persistent menu handlers (Reply Keyboard)
 // ============================================
 
-// Menu: 🤖 Помощник — launch or continue AI assistant dialog
-bot.hears(["🤖 Помощник", "🤖 Assistant"], async (ctx) => {
+// Menu: 🤖 Сделать 1 стикер — launch or continue AI assistant dialog
+bot.hears(["🤖 Сделать 1 стикер", "🤖 Make 1 sticker"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -2627,8 +2625,8 @@ bot.hears(["💰 Баланс", "💰 Balance"], async (ctx) => {
   await sendBuyCreditsMenu(ctx, user);
 });
 
-// Menu: ❓ Помощь
-bot.hears(["❓ Помощь", "❓ Help"], async (ctx) => {
+// Menu: ❓ (help, icon only)
+bot.hears(["❓"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -3534,11 +3532,11 @@ bot.on("text", async (ctx) => {
 
   // Skip menu button texts — they are handled by bot.hears() above
   const menuButtons = [
-    "🤖 Помощник", "🤖 Assistant",
-    "🎨 Стили", "🎨 Styles",
+    "🤖 Сделать 1 стикер", "🤖 Make 1 sticker",
+    "🎨 Стили", "🎨 Styles", // legacy, button hidden
     "📦 Сделать пак", "📦 Make a pack",
     "💰 Баланс", "💰 Balance",
-    "❓ Помощь", "❓ Help",
+    "❓",
   ];
   if (menuButtons.includes(ctx.message.text?.trim())) return;
 
@@ -3922,8 +3920,8 @@ bot.on("text", async (ctx) => {
         // Level 3: escape to manual mode
         await closeAssistantSession(aSession.id, "error");
         const escapeMsg = lang === "ru"
-          ? "К сожалению, помощник временно недоступен 😔\nНажми 🎨 Стили, чтобы выбрать стиль вручную."
-          : "Unfortunately, the assistant is temporarily unavailable 😔\nTap 🎨 Styles to choose a style manually.";
+          ? "К сожалению, помощник временно недоступен 😔\nПопробуй отправить фото ещё раз или позже."
+          : "Unfortunately, the assistant is temporarily unavailable 😔\nTry sending a photo again or later.";
         await ctx.reply(escapeMsg, getMainMenuKeyboard(lang));
       } else {
         // Level 2: soft fallback
@@ -4126,8 +4124,8 @@ bot.on("text", async (ctx) => {
       // Suggest they start a new assistant dialog or use manual mode
       console.log("confirm_sticker text fallback: user sent text but no active assistant. Text:", ctx.message.text?.slice(0, 50));
       const msg = lang === "ru"
-        ? "Нажми 🤖 Помощник, чтобы создать новый стикер, или 🎨 Стили для ручного режима."
-        : "Tap 🤖 Assistant to create a new sticker, or 🎨 Styles for manual mode.";
+        ? "Нажми «Сделать 1 стикер», чтобы создать новый стикер."
+        : "Tap «Make 1 sticker» to create a new sticker.";
       await ctx.reply(msg, getMainMenuKeyboard(lang));
     }
     return;
@@ -5680,8 +5678,8 @@ bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)$/, async (ctx) => {
       await ctx.reply(replyText, getMainMenuKeyboard(lang));
     } else {
       await ctx.reply(lang === "ru"
-        ? `Стиль: ${styleName}. Нажми 🤖 Помощник чтобы начать.`
-        : `Style: ${styleName}. Tap 🤖 Assistant to start.`);
+        ? `Стиль: ${styleName}. Нажми «Сделать 1 стикер», чтобы начать.`
+        : `Style: ${styleName}. Tap «Make 1 sticker» to start.`);
     }
   } catch (err: any) {
     console.error("assistant_style_preview_ok error:", err.message);
@@ -5728,8 +5726,8 @@ bot.action(/^assistant_pick_style:(.+)$/, async (ctx) => {
     } else {
       // No active assistant session — just acknowledge
       await ctx.reply(lang === "ru"
-        ? `Стиль: ${styleName}. Нажми 🤖 Помощник чтобы начать.`
-        : `Style: ${styleName}. Tap 🤖 Assistant to start.`);
+        ? `Стиль: ${styleName}. Нажми «Сделать 1 стикер», чтобы начать.`
+        : `Style: ${styleName}. Tap «Make 1 sticker» to start.`);
     }
   } catch (err: any) {
     console.error("assistant_pick_style callback error:", err.message);
