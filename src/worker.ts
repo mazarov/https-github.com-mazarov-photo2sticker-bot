@@ -455,8 +455,8 @@ ${packTaskBlock}`
 
   const previewResult = await sendPhoto(telegramId, bufferToSend, caption, {
     inline_keyboard: [
-      [{ text: approveBtn, callback_data: "pack_approve" }],
-      [{ text: regenerateBtn, callback_data: "pack_regenerate" }],
+      [{ text: approveBtn, callback_data: `pack_approve:${session.id}` }],
+      [{ text: regenerateBtn, callback_data: `pack_regenerate:${session.id}` }],
     ],
   });
 
