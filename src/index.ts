@@ -454,7 +454,7 @@ async function sendStyleExamplesKeyboard(ctx: any, lang: string, selectedStyleId
       const isSelected = selectedStyleId && selectedStyleId === allPresets[j].id;
       row.push(Markup.button.callback(
         `${isSelected ? "✅ " : ""}${allPresets[j].emoji} ${isRu ? allPresets[j].name_ru : allPresets[j].name_en}`,
-        sessionRef ? `assistant_style_preview:${allPresets[j].id}:${sessionRef}` : `assistant_style_preview:${allPresets[j].id}`
+        appendSessionRefIfFits(`assistant_style_preview:${allPresets[j].id}`, sessionRef)
       ));
     }
     buttons.push(row);
@@ -1591,6 +1591,13 @@ function formatCallbackSessionRef(sessionId?: string | null, sessionRev?: number
   return sessionId;
 }
 
+function appendSessionRefIfFits(baseCallbackData: string, sessionRef?: string | null): string {
+  if (!sessionRef) return baseCallbackData;
+  const withRef = `${baseCallbackData}:${sessionRef}`;
+  // Telegram callback_data limit is 64 bytes.
+  return withRef.length <= 64 ? withRef : baseCallbackData;
+}
+
 async function isStrictSessionRevEnabled(): Promise<boolean> {
   const value = await getAppConfig("strict_session_rev_enabled", "false");
   return String(value).toLowerCase() === "true";
@@ -1625,6 +1632,19 @@ async function getSessionByIdForUser(userId: string, sessionId?: string | null) 
     .eq("id", sessionId)
     .eq("user_id", userId)
     .eq("env", config.appEnv)
+    .maybeSingle();
+  return data;
+}
+
+async function getLatestAssistantFlowSession(userId: string) {
+  const { data } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .eq("flow_kind", "assistant")
+    .order("updated_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
   return data;
 }
@@ -6079,7 +6099,9 @@ bot.action(/^assistant_style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
 
     const styleId = ctx.match[1];
     const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-    const session = await resolveSessionForCallback(user.id, explicitSessionId);
+    const session = explicitSessionId
+      ? await getSessionByIdForUser(user.id, explicitSessionId)
+      : await getLatestAssistantFlowSession(user.id);
     if (!session?.id) {
       await rejectSessionEvent(ctx, lang, "assistant_style_preview", "session_not_found");
       return;
@@ -6119,7 +6141,7 @@ bot.action(/^assistant_style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
     const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
     const keyboard = {
       inline_keyboard: [[
-        { text: "✅ ОК", callback_data: sessionRef ? `assistant_style_preview_ok:${styleId}:${stickerMsgId}:${sessionRef}` : `assistant_style_preview_ok:${styleId}:${stickerMsgId}` },
+        { text: "✅ ОК", callback_data: appendSessionRefIfFits(`assistant_style_preview_ok:${styleId}:${stickerMsgId}`, sessionRef) },
       ]],
     };
 
@@ -6150,7 +6172,9 @@ bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)(?::(.+))?$/, async (ctx) =
     if (!user?.id) return;
     const lang = user.lang || "en";
     const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[3] || null);
-    const session = await resolveSessionForCallback(user.id, explicitSessionId);
+    const session = explicitSessionId
+      ? await getSessionByIdForUser(user.id, explicitSessionId)
+      : await getLatestAssistantFlowSession(user.id);
     if (!session?.id) {
       await rejectSessionEvent(ctx, lang, "assistant_style_preview_ok", "session_not_found");
       return;
@@ -6214,7 +6238,9 @@ bot.action(/^assistant_pick_style:([^:]+)(?::(.+))?$/, async (ctx) => {
     if (!user?.id) return;
     const lang = user.lang || "en";
     const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-    const session = await resolveSessionForCallback(user.id, explicitSessionId);
+    const session = explicitSessionId
+      ? await getSessionByIdForUser(user.id, explicitSessionId)
+      : await getLatestAssistantFlowSession(user.id);
     if (!session?.id) {
       await rejectSessionEvent(ctx, lang, "assistant_pick_style", "session_not_found");
       return;
@@ -6410,7 +6436,7 @@ bot.action(/^assistant_confirm(?::(.+))?$/, async (ctx) => {
 
 // Generate sticker with selected idea
 bot.action(/^asst_idea_gen:(\d+)(?::(.+))?$/, async (ctx) => {
-  safeAnswerCbQuery(ctx);
+  safeAnswerCbQuery(ctx, "🚀 Starting generation...");
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -6462,6 +6488,11 @@ bot.action(/^asst_idea_gen:(\d+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
+  // Immediate UI feedback while prompt is being prepared.
+  const preparingMsg = await ctx.reply(
+    lang === "ru" ? "⏳ Готовлю промпт..." : "⏳ Preparing prompt..."
+  ).catch(() => null);
+
   console.log("[asst_idea_gen] Generating idea:", ideaIndex, idea.titleEn, "style:", preset.id);
   console.log("[asst_idea_gen] prompt_hint:", preset.prompt_hint);
   console.log("[asst_idea_gen] promptModification:", idea.promptModification);
@@ -6477,6 +6508,10 @@ bot.action(/^asst_idea_gen:(\d+)(?::(.+))?$/, async (ctx) => {
 
   // Save last used style for future ideas
   await supabase.from("users").update({ last_style_id: state.styleId }).eq("id", user.id);
+
+  if (preparingMsg?.message_id) {
+    try { await ctx.deleteMessage(preparingMsg.message_id); } catch {}
+  }
 
   await startGeneration(ctx, user, { ...session, session_rev: nextRev }, lang, {
     generationType: "style",
@@ -6606,7 +6641,7 @@ bot.action(/^asst_idea_style:(\d+)(?::(.+))?$/, async (ctx) => {
       const p = allPresets[j];
       row.push(Markup.button.callback(
         `${p.emoji} ${isRu ? p.name_ru : p.name_en}`,
-        sessionRef ? `asst_idea_restyle:${p.id}:${ideaIndex}:${sessionRef}` : `asst_idea_restyle:${p.id}:${ideaIndex}`
+        appendSessionRefIfFits(`asst_idea_restyle:${p.id}:${ideaIndex}`, sessionRef)
       ));
     }
     buttons.push(row);
@@ -6614,7 +6649,7 @@ bot.action(/^asst_idea_style:(\d+)(?::(.+))?$/, async (ctx) => {
   // Back button
   buttons.push([Markup.button.callback(
     isRu ? "⬅️ Назад" : "⬅️ Back",
-    sessionRef ? `asst_idea_back:${ideaIndex}:${sessionRef}` : `asst_idea_back:${ideaIndex}`
+    appendSessionRefIfFits(`asst_idea_back:${ideaIndex}`, sessionRef)
   )]);
 
   try { await ctx.deleteMessage(); } catch {}
@@ -6684,7 +6719,9 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)(?::(.+))?$/, async (ctx) => {
   const styleId = ctx.match[1];
   const ideaIndex = parseInt(ctx.match[2], 10);
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[3] || null);
-  const session = await resolveSessionForCallback(user.id, explicitSessionId);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getLatestAssistantFlowSession(user.id);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_restyle", "session_not_found");
     return;
@@ -6722,7 +6759,7 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)(?::(.+))?$/, async (ctx) => {
   const okText = "✅ ОК";
   const keyboard = {
     inline_keyboard: [[
-      { text: okText, callback_data: sessionRef ? `asst_idea_restyle_ok:${styleId}:${ideaIndex}:${stickerMsgId}:${sessionRef}` : `asst_idea_restyle_ok:${styleId}:${ideaIndex}:${stickerMsgId}` },
+      { text: okText, callback_data: appendSessionRefIfFits(`asst_idea_restyle_ok:${styleId}:${ideaIndex}:${stickerMsgId}`, sessionRef) },
     ]],
   };
 
@@ -6744,7 +6781,9 @@ bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)(?::(.+))?$/, async (ctx) =
   const stickerMsgId = parseInt(ctx.match[3], 10);
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[4] || null);
-  const session = await resolveSessionForCallback(user.id, explicitSessionId);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getLatestAssistantFlowSession(user.id);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_restyle_ok", "session_not_found");
     return;
