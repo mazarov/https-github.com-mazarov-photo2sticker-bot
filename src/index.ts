@@ -1591,6 +1591,11 @@ async function isStrictSessionRevEnabled(): Promise<boolean> {
   return String(value).toLowerCase() === "true";
 }
 
+async function isSessionRouterEnabled(): Promise<boolean> {
+  const value = await getAppConfig("session_router_enabled", "false");
+  return String(value).toLowerCase() === "true";
+}
+
 async function rejectSessionEvent(
   ctx: any,
   lang: string,
@@ -1617,6 +1622,18 @@ async function getSessionByIdForUser(userId: string, sessionId?: string | null) 
     .eq("env", config.appEnv)
     .maybeSingle();
   return data;
+}
+
+async function resolveSessionForCallback(
+  userId: string,
+  explicitSessionId?: string | null,
+  fallback?: () => Promise<any | null>
+) {
+  if (explicitSessionId) return await getSessionByIdForUser(userId, explicitSessionId);
+  const routerEnabled = await isSessionRouterEnabled();
+  if (routerEnabled) return null;
+  if (fallback) return await fallback();
+  return await getActiveSession(userId);
 }
 
 async function rejectPackEvent(
@@ -1646,9 +1663,10 @@ async function resolvePackSessionForEvent(
   expectedStates: string[],
   explicitSessionId?: string | null
 ): Promise<{ session: any | null; reasonCode?: "session_not_found" | "wrong_state" }> {
+  const routerEnabled = await isSessionRouterEnabled();
   const session = explicitSessionId
     ? await getPackFlowSessionById(userId, explicitSessionId)
-    : await getPackFlowSession(userId);
+    : (routerEnabled ? null : await getPackFlowSession(userId));
   if (!session) return { session: null, reasonCode: "session_not_found" };
   if (!expectedStates.includes(session.state)) return { session, reasonCode: "wrong_state" };
   return { session };
@@ -4801,9 +4819,11 @@ bot.action(/^style_v2:([^:]+)(?::(.+))?$/, async (ctx) => {
     const lang = user.lang || "en";
     const styleId = ctx.match[1];
     const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-    const session = explicitSessionId
-      ? await getSessionByIdForUser(user.id, explicitSessionId)
-      : await getSessionForStyleSelection(user.id);
+    const session = await resolveSessionForCallback(
+      user.id,
+      explicitSessionId,
+      () => getSessionForStyleSelection(user.id)
+    );
     if (!session?.id) {
       await rejectSessionEvent(ctx, lang, "style_v2", "session_not_found");
       return;
@@ -5542,11 +5562,16 @@ bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
-  // Get or create active session
+  // Get or create active session (legacy fallback only when router is disabled)
+  const routerEnabled = await isSessionRouterEnabled();
   let session = explicitSessionId
     ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+    : (routerEnabled ? null : await getActiveSession(user.id));
   if (!session?.id) {
+    if (routerEnabled) {
+      await rejectSessionEvent(ctx, lang, "change_emotion", "session_not_found");
+      return;
+    }
     const { data: newSession } = await supabase
       .from("sessions")
       .insert({ user_id: user.id, state: "wait_emotion", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
@@ -5626,9 +5651,7 @@ bot.action(/^emotion_([^:]+)(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
   const emotionId = ctx.match[1];
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "emotion_select", "session_not_found");
     return;
@@ -5706,11 +5729,16 @@ bot.action(/^change_motion:([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
-  // Get or create active session
+  // Get or create active session (legacy fallback only when router is disabled)
+  const routerEnabled = await isSessionRouterEnabled();
   let session = explicitSessionId
     ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+    : (routerEnabled ? null : await getActiveSession(user.id));
   if (!session?.id) {
+    if (routerEnabled) {
+      await rejectSessionEvent(ctx, lang, "change_motion", "session_not_found");
+      return;
+    }
     const { data: newSession } = await supabase
       .from("sessions")
       .insert({ user_id: user.id, state: "wait_motion", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
@@ -5790,9 +5818,7 @@ bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
   const motionId = ctx.match[1];
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "motion_select", "session_not_found");
     return;
@@ -6032,9 +6058,7 @@ bot.action(/^assistant_style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
 
     const styleId = ctx.match[1];
     const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-    const session = explicitSessionId
-      ? await getSessionByIdForUser(user.id, explicitSessionId)
-      : await getActiveSession(user.id);
+    const session = await resolveSessionForCallback(user.id, explicitSessionId);
     if (!session?.id) {
       await rejectSessionEvent(ctx, lang, "assistant_style_preview", "session_not_found");
       return;
@@ -6105,9 +6129,7 @@ bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)(?::(.+))?$/, async (ctx) =
     if (!user?.id) return;
     const lang = user.lang || "en";
     const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[3] || null);
-    const session = explicitSessionId
-      ? await getSessionByIdForUser(user.id, explicitSessionId)
-      : await getActiveSession(user.id);
+    const session = await resolveSessionForCallback(user.id, explicitSessionId);
     if (!session?.id) {
       await rejectSessionEvent(ctx, lang, "assistant_style_preview_ok", "session_not_found");
       return;
@@ -6171,9 +6193,7 @@ bot.action(/^assistant_pick_style:([^:]+)(?::(.+))?$/, async (ctx) => {
     if (!user?.id) return;
     const lang = user.lang || "en";
     const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-    const session = explicitSessionId
-      ? await getSessionByIdForUser(user.id, explicitSessionId)
-      : await getActiveSession(user.id);
+    const session = await resolveSessionForCallback(user.id, explicitSessionId);
     if (!session?.id) {
       await rejectSessionEvent(ctx, lang, "assistant_pick_style", "session_not_found");
       return;
@@ -6241,9 +6261,7 @@ bot.action(/^assistant_confirm(?::(.+))?$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "assistant_confirm", "session_not_found");
     return;
@@ -6380,9 +6398,7 @@ bot.action(/^asst_idea_gen:(\d+)(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_gen", "session_not_found");
     return;
@@ -6441,9 +6457,7 @@ bot.action(/^asst_idea_next:(\d+)(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_next", "session_not_found");
     return;
@@ -6530,9 +6544,7 @@ bot.action(/^asst_idea_style:(\d+)(?::(.+))?$/, async (ctx) => {
 
   const ideaIndex = parseInt(ctx.match[1], 10);
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_style", "session_not_found");
     return;
@@ -6583,9 +6595,7 @@ bot.action(/^asst_idea_back:(\d+)(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_back", "session_not_found");
     return;
@@ -6634,9 +6644,7 @@ bot.action(/^asst_idea_restyle:([^:]+):(\d+)(?::(.+))?$/, async (ctx) => {
   const styleId = ctx.match[1];
   const ideaIndex = parseInt(ctx.match[2], 10);
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[3] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_restyle", "session_not_found");
     return;
@@ -6696,9 +6704,7 @@ bot.action(/^asst_idea_restyle_ok:([^:]+):(\d+):(\d+)(?::(.+))?$/, async (ctx) =
   const stickerMsgId = parseInt(ctx.match[3], 10);
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[4] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_restyle_ok", "session_not_found");
     return;
@@ -6761,9 +6767,7 @@ bot.action(/^asst_idea_holiday_off:(\d+)(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_holiday_off", "session_not_found");
     return;
@@ -6834,9 +6838,7 @@ bot.action(/^asst_idea_holiday:([^:]+):(\d+)(?::(.+))?$/, async (ctx) => {
 
   const holidayId = ctx.match[1];
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[3] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_holiday", "session_not_found");
     return;
@@ -6911,9 +6913,7 @@ bot.action(/^asst_idea_custom(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_custom", "session_not_found");
     return;
@@ -6952,9 +6952,7 @@ bot.action(/^asst_idea_skip(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "asst_idea_skip", "session_not_found");
     return;
@@ -7019,9 +7017,7 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "assistant_new_photo", "session_not_found");
     return;
@@ -7112,9 +7108,7 @@ bot.action(/^assistant_keep_photo(?::(.+))?$/, async (ctx) => {
   const lang = user?.lang || ((ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en");
   if (!user?.id) return;
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "assistant_keep_photo", "session_not_found");
     return;

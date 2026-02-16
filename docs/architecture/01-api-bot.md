@@ -212,9 +212,10 @@ flowchart TD
 Получает активную сессию. Есть fallback: если `is_active = true` не находит,
 ищет последнюю не-canceled сессию (workaround для бага с `is_active`).
 
-### Session Router (pack callbacks)
-- Для критичных callback-событий pack flow используется резолв сессии по `session_id` из `callback_data`.
+### Session Router (pack/single/assistant callbacks)
+- Для критичных callback-событий pack/single/assistant flow используется резолв сессии по `session_id` из `callback_data`.
 - В callback поддерживаются форматы `action:sid` и `action:sid:rev`.
+- При `session_router_enabled=true` legacy fallback на "текущую активную сессию" отключается: callback без `sid` отклоняется как `session_not_found`.
 - При включенном флаге `strict_session_rev_enabled=true` stale-кнопки отбрасываются с user-facing reason через `answerCbQuery`.
 
 ### `getUserPhotoFileId(user, session)`
