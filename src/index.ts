@@ -2746,13 +2746,17 @@ bot.hears(["✨ Создать стикер", "✨ Create sticker"], async (ctx)
 
   const lang = user.lang || "en";
 
-  // If already in assistant dialog — ignore
-  const session = await getActiveSession(user.id);
-  if (session?.state?.startsWith("assistant_")) {
+  // If assistant dialog is already active — don't restart silently.
+  const activeAssistant = await getActiveAssistantSession(user.id);
+  if (activeAssistant?.status === "active") {
+    await ctx.reply(
+      lang === "ru" ? "Продолжаем диалог 👇" : "Let's continue the dialog 👇",
+      getMainMenuKeyboard(lang)
+    );
     return;
   }
 
-  // Start new assistant dialog (implemented in step 4)
+  // Start new assistant dialog
   await startAssistantDialog(ctx, user, lang);
 });
 
