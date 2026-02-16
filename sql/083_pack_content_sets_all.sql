@@ -1,6 +1,20 @@
 -- 083_pack_content_sets_all.sql
 -- All content sets for couple_v1 from docs/16-02-pack-content-sets.md (section 3).
--- Romance already exists (082); this upserts all 8 sets for consistency.
+-- IDs: romance, everyday, humor, ... (no template prefix).
+
+-- One-time cleanup: point sessions to new ids, then remove old content set rows
+UPDATE sessions SET pack_content_set_id = 'romance'   WHERE pack_content_set_id = 'couple_v1_romance';
+UPDATE sessions SET pack_content_set_id = 'everyday'  WHERE pack_content_set_id = 'couple_v1_everyday';
+UPDATE sessions SET pack_content_set_id = 'humor'     WHERE pack_content_set_id = 'couple_v1_humor';
+UPDATE sessions SET pack_content_set_id = 'support'   WHERE pack_content_set_id = 'couple_v1_support';
+UPDATE sessions SET pack_content_set_id = 'sweet'     WHERE pack_content_set_id = 'couple_v1_sweet';
+UPDATE sessions SET pack_content_set_id = 'sass'       WHERE pack_content_set_id = 'couple_v1_sass';
+UPDATE sessions SET pack_content_set_id = 'reactions'  WHERE pack_content_set_id = 'couple_v1_reactions';
+UPDATE sessions SET pack_content_set_id = 'holiday'    WHERE pack_content_set_id = 'couple_v1_holiday';
+
+DELETE FROM pack_content_sets
+WHERE pack_template_id = 'couple_v1'
+  AND id IN ('couple_v1_romance', 'couple_v1_everyday', 'couple_v1_humor', 'couple_v1_support', 'couple_v1_sweet', 'couple_v1_sass', 'couple_v1_reactions', 'couple_v1_holiday');
 
 -- 1. Романтика
 INSERT INTO pack_content_sets (
@@ -8,7 +22,7 @@ INSERT INTO pack_content_sets (
   carousel_description_ru, carousel_description_en,
   labels, labels_en, scene_descriptions, sort_order, is_active, mood
 ) VALUES (
-  'couple_v1_romance',
+  'romance',
   'couple_v1',
   'Романтика',
   'Romance',
@@ -48,7 +62,7 @@ INSERT INTO pack_content_sets (
   carousel_description_ru, carousel_description_en,
   labels, labels_en, scene_descriptions, sort_order, is_active, mood
 ) VALUES (
-  'couple_v1_everyday',
+  'everyday',
   'couple_v1',
   'Быт и уют',
   'Everyday',
@@ -88,7 +102,7 @@ INSERT INTO pack_content_sets (
   carousel_description_ru, carousel_description_en,
   labels, labels_en, scene_descriptions, sort_order, is_active, mood
 ) VALUES (
-  'couple_v1_humor',
+  'humor',
   'couple_v1',
   'С юмором',
   'With humor',
@@ -128,7 +142,7 @@ INSERT INTO pack_content_sets (
   carousel_description_ru, carousel_description_en,
   labels, labels_en, scene_descriptions, sort_order, is_active, mood
 ) VALUES (
-  'couple_v1_support',
+  'support',
   'couple_v1',
   'Поддержка',
   'Support',
@@ -168,7 +182,7 @@ INSERT INTO pack_content_sets (
   carousel_description_ru, carousel_description_en,
   labels, labels_en, scene_descriptions, sort_order, is_active, mood
 ) VALUES (
-  'couple_v1_sweet',
+  'sweet',
   'couple_v1',
   'Ласка и комплименты',
   'Sweet',
@@ -208,7 +222,7 @@ INSERT INTO pack_content_sets (
   carousel_description_ru, carousel_description_en,
   labels, labels_en, scene_descriptions, sort_order, is_active, mood
 ) VALUES (
-  'couple_v1_sass',
+  'sass',
   'couple_v1',
   'Сарказм',
   'Sass',
@@ -248,7 +262,7 @@ INSERT INTO pack_content_sets (
   carousel_description_ru, carousel_description_en,
   labels, labels_en, scene_descriptions, sort_order, is_active, mood
 ) VALUES (
-  'couple_v1_reactions',
+  'reactions',
   'couple_v1',
   'На каждый день',
   'Daily reactions',
@@ -288,7 +302,7 @@ INSERT INTO pack_content_sets (
   carousel_description_ru, carousel_description_en,
   labels, labels_en, scene_descriptions, sort_order, is_active, mood
 ) VALUES (
-  'couple_v1_holiday',
+  'holiday',
   'couple_v1',
   'Праздник',
   'Holiday',

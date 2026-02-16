@@ -33,7 +33,7 @@ INSERT INTO pack_content_sets (
   is_active,
   mood
 ) VALUES (
-  'couple_v1_romance',
+  'romance',
   'couple_v1',
   'Романтика',
   'Romance',

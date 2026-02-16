@@ -6,7 +6,7 @@ import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
 import { getText } from "./lib/texts";
-import { sendAlert, sendNotification } from "./lib/alerts";
+import { sendAlert, sendNotification, sendPackPreviewAlert } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
 import { addWhiteBorder, addTextToSticker } from "./lib/image-utils";
@@ -444,10 +444,7 @@ ${packTaskBlock}`
     console.log("[PackPreview] Resized for Telegram limit, size:", Math.round(bufferToSend.length / 1024), "KB");
   }
 
-  if (session.progress_message_id && session.progress_chat_id) {
-    try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
-  }
-
+  // Keep progress message in chat; send preview as a separate message (user paid for it)
   const remainingCredits = stickerCount - 1;
   const caption = await getText(lang, "pack.preview_caption", {
     count: stickerCount,
@@ -469,6 +466,13 @@ ${packTaskBlock}`
 
   const sheetFileId = previewResult?.file_id || "";
   console.log("[PackPreview] Preview sent, file_id:", sheetFileId?.substring(0, 30));
+
+  if (session.selected_style_id) {
+    sendPackPreviewAlert(session.selected_style_id, bufferToSend, {
+      user: `@${user.username || telegramId}`,
+      batchId: batch.id,
+    }).catch((err) => console.warn("[PackPreview] sendPackPreviewAlert failed:", err?.message));
+  }
 
   await supabase
     .from("sessions")

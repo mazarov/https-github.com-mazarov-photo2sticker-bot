@@ -349,6 +349,17 @@ async function getStyleStickerFileId(styleId: string): Promise<string | null> {
   return anyData?.telegram_file_id || null;
 }
 
+/** Pack flow: get pack example image file_id for style (from style_presets_v2.pack_example_file_id). */
+async function getPackStyleExampleFileId(styleId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from("style_presets_v2")
+    .select("pack_example_file_id")
+    .eq("id", styleId)
+    .not("pack_example_file_id", "is", null)
+    .maybeSingle();
+  return data?.pack_example_file_id || null;
+}
+
 /**
  * Style carousel: show 2 styles at a time with sticker examples.
  * Sends stickers (if available) + 1 text message with names and buttons.
@@ -2643,13 +2654,19 @@ async function getPackStylePrompt(lang: string, selectedStyleId?: string | null)
     : `Choose a pack style and tap “See preview”\nCurrent style: ${styleName}`;
 }
 
-async function sendPackStyleSelectionStep(ctx: any, lang: string, selectedStyleId?: string | null, messageId?: number) {
-  const previewOffer = await getText(lang, "pack.preview_offer");
+async function sendPackStyleSelectionStep(
+  ctx: any,
+  lang: string,
+  selectedStyleId?: string | null,
+  messageId?: number,
+  options?: { useBackButton?: boolean }
+) {
   const stylePrompt = await getPackStylePrompt(lang, selectedStyleId);
   const previewBtn = await getText(lang, "btn.preview_pack");
+  const backBtn = await getText(lang, "pack.back_to_poses");
   const cancelBtn = await getText(lang, "btn.cancel_pack");
 
-  let headerText = `${previewOffer}\n\n${stylePrompt}`;
+  let headerText = stylePrompt;
   const telegramId = ctx.from?.id;
   if (telegramId) {
     const user = await getUser(telegramId);
@@ -2669,13 +2686,17 @@ async function sendPackStyleSelectionStep(ctx: any, lang: string, selectedStyleI
     }
   }
 
+  const bottomButton = options?.useBackButton
+    ? [{ text: `◀️ ${backBtn}`, callback_data: "pack_back_to_carousel" }]
+    : [{ text: cancelBtn, callback_data: "pack_cancel" }];
+
   return sendStyleKeyboardFlat(ctx, lang, messageId, {
     includeCustom: false,
     headerText,
     selectedStyleId: selectedStyleId ?? undefined,
     extraButtons: [
       [{ text: previewBtn, callback_data: "pack_preview_pay" }],
-      [{ text: cancelBtn, callback_data: "pack_cancel" }],
+      bottomButton,
     ],
   });
 }
@@ -2716,15 +2737,15 @@ bot.hears(["📦 Сделать пак", "📦 Make a pack"], async (ctx) => {
     return;
   }
 
-  // Step 1: invitation — "Want to see how your sticker pack will look?" → button leads to carousel
-  const invitationText = await getText(lang, "pack.preview_offer");
+  // Step 1: short CTA → button leads to carousel (no pack.preview_offer)
   const invitationBtn = await getText(lang, "pack.invitation_btn");
+  const shortTitle = lang === "ru" ? (template.name_ru || "Пак") : (template.name_en || "Pack");
   const keyboard = {
     inline_keyboard: [[
       { text: `📦 ${invitationBtn}`, callback_data: `pack_show_carousel:${template.id}` },
     ]],
   };
-  await ctx.reply(invitationText, { reply_markup: keyboard });
+  await ctx.reply(shortTitle, { reply_markup: keyboard });
 });
 
 // Callback: pack_start — user tapped "Попробовать" on template CTA
@@ -2875,7 +2896,14 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
     ],
   };
-  await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+  await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+  await supabase
+    .from("sessions")
+    .update({
+      progress_message_id: ctx.callbackQuery?.message?.message_id,
+      progress_chat_id: ctx.chat?.id,
+    })
+    .eq("id", session.id);
 });
 
 bot.action("pack_carousel_noop", (ctx) => safeAnswerCbQuery(ctx));
@@ -2959,10 +2987,54 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
     .eq("id", session.id);
 
   if (existingPhoto) {
-    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, session.progress_message_id ?? undefined, { useBackButton: true });
   } else {
     await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
   }
+});
+
+// Callback: pack_back_to_carousel — back from style selection to pose carousel (same message)
+bot.action("pack_back_to_carousel", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session || session.state !== "wait_pack_preview_payment" || !session.pack_template_id) return;
+
+  const { data: contentSets } = await supabase
+    .from("pack_content_sets")
+    .select("*")
+    .eq("pack_template_id", session.pack_template_id)
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true });
+  if (!contentSets?.length) return;
+
+  await supabase
+    .from("sessions")
+    .update({ state: "wait_pack_carousel", pack_carousel_index: 0 })
+    .eq("id", session.id);
+
+  const set = contentSets[0];
+  const setName = lang === "ru" ? set.name_ru : set.name_en;
+  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+  const carouselCaption = `*${setName}*\n${setDesc}`;
+  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "◀️", callback_data: "pack_carousel_prev" },
+        { text: `1/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: "▶️", callback_data: "pack_carousel_next" },
+      ],
+      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+    ],
+  };
+  try {
+    await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+  } catch (_) {}
 });
 
 // Callback: pack_preview_pay — user pays 1 credit for preview
@@ -4242,16 +4314,25 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
     // Delete style list message
     try { await ctx.deleteMessage(); } catch {}
 
-    // Send sticker example (above description)
+    // In pack flow prefer pack example image; else single-sticker example
     let stickerMsgId: number = 0;
     try {
-      const fileId = await getStyleStickerFileId(preset.id);
-      if (fileId) {
-        const stickerMsg = await ctx.replyWithSticker(fileId);
-        stickerMsgId = stickerMsg.message_id;
+      if (session.state === "wait_pack_preview_payment") {
+        const packFileId = await getPackStyleExampleFileId(preset.id);
+        if (packFileId) {
+          const photoMsg = await ctx.replyWithPhoto(packFileId);
+          stickerMsgId = photoMsg.message_id;
+        }
+      }
+      if (stickerMsgId === 0) {
+        const fileId = await getStyleStickerFileId(preset.id);
+        if (fileId) {
+          const stickerMsg = await ctx.replyWithSticker(fileId);
+          stickerMsgId = stickerMsg.message_id;
+        }
       }
     } catch (err: any) {
-      console.error("[StylePreview] Failed to send sticker:", err.message);
+      console.error("[StylePreview] Failed to send example:", err.message);
     }
 
     // Build description text
@@ -4300,9 +4381,9 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
     // Delete description message (current message with buttons)
     try { await ctx.deleteMessage(); } catch {}
 
-    // Send fresh style list
+    // Send fresh style list (new message; previous list was deleted when opening preview)
     if (session?.state === "wait_pack_preview_payment") {
-      await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id);
+      await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: !!session.progress_message_id });
     } else {
       await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session?.selected_style_id || null });
     }
@@ -6373,6 +6454,38 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
 
   console.log("Marked as example:", stickerId, "style:", sticker.style_preset_id);
   await ctx.editMessageText(`✅ Добавлен как пример для стиля "${sticker.style_preset_id}"`);
+});
+
+// Callback: pack_make_example (admin only — from alert channel, pack preview "Сделать примером")
+bot.action(/^pack_make_example:(.+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
+
+  const styleId = ctx.match[1];
+  const msg = ctx.callbackQuery?.message as any;
+  const photo = msg?.photo;
+  if (!Array.isArray(photo) || photo.length === 0) {
+    await ctx.editMessageText("❌ Нет фото в сообщении");
+    return;
+  }
+  const fileId = photo[photo.length - 1]?.file_id;
+  if (!fileId) {
+    await ctx.editMessageText("❌ Не удалось получить file_id");
+    return;
+  }
+
+  const { error } = await supabase
+    .from("style_presets_v2")
+    .update({ pack_example_file_id: fileId })
+    .eq("id", styleId);
+
+  if (error) {
+    console.error("[pack_make_example] Update failed:", error);
+    await ctx.editMessageText("❌ Ошибка сохранения");
+    return;
+  }
+  await ctx.editMessageText(`✅ Сохранено как пример пака для стиля "${styleId}"`);
 });
 
 // Callback: admin_discount — admin sends discount offer to user from alert channel
