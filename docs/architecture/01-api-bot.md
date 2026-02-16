@@ -128,9 +128,9 @@ flowchart TD
 
 #### Модификации стикера (после генерации)
 - `change_style` / `change_style:ID` — изменить стиль
-- `change_emotion` / `change_emotion:ID` — изменить эмоцию
+- `change_emotion` / `change_emotion:ID[:SESSION_ID[:REV]]` — изменить эмоцию
 - `emotion_ID` — выбрать пресет эмоции
-- `change_motion` / `change_motion:ID` — изменить движение
+- `change_motion` / `change_motion:ID[:SESSION_ID[:REV]]` — изменить движение
 - `motion_ID` — выбрать пресет движения
 - `add_text:ID` — добавить текст
 - `toggle_border:ID` — вкл/выкл белую рамку
@@ -177,7 +177,7 @@ flowchart TD
 #### Другое
 - `rate:ID:SCORE` — оценить стикер (1-5)
 - `make_example:ID` — пометить как пример стиля (admin)
-- `retry_generation:ID` — повторить генерацию
+- `retry_generation:SESSION_ID[:REV]` — повторить генерацию
 - `new_photo` — загрузить новое фото
 - `cancel` — отменить
 - `noop` — пустое действие (для неактивных кнопок)

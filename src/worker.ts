@@ -1020,9 +1020,12 @@ async function runJob(job: any) {
       ? "⚠️ Не удалось обработать это фото в выбранном стиле.\n\nПопробуй другое фото или другой стиль.\nКредит возвращён на баланс."
       : "⚠️ Could not process this photo with the chosen style.\n\nTry a different photo or style.\nCredit has been refunded.";
     const retryBtnBlocked = lang === "ru" ? "🔄 Повторить" : "🔄 Retry";
+    const retrySessionRef = Number.isInteger(Number(session.session_rev))
+      ? `${session.id}:${session.session_rev}`
+      : session.id;
     await sendMessage(telegramId, blockedMsg, {
       inline_keyboard: [[
-        { text: retryBtnBlocked, callback_data: `retry_generation:${session.id}` },
+        { text: retryBtnBlocked, callback_data: `retry_generation:${retrySessionRef}` },
       ]],
     });
 
@@ -1518,7 +1521,7 @@ async function poll() {
       try {
         const { data: session } = await supabase
           .from("sessions")
-          .select("user_id, photos, credits_spent")
+          .select("user_id, photos, credits_spent, session_rev")
           .eq("id", job.session_id)
           .maybeSingle();
 
@@ -1545,9 +1548,12 @@ async function poll() {
                 ? "❌ Произошла ошибка при генерации стикера.\n\nКредиты возвращены на баланс."
                 : "❌ An error occurred during sticker generation.\n\nCredits have been refunded.";
               const retryBtn = rlang === "ru" ? "🔄 Повторить" : "🔄 Retry";
+              const retrySessionRef = Number.isInteger(Number(session.session_rev))
+                ? `${job.session_id}:${session.session_rev}`
+                : job.session_id;
               await sendMessage(refundUser.telegram_id, errorText, {
                 inline_keyboard: [[
-                  { text: retryBtn, callback_data: `retry_generation:${job.session_id}` },
+                  { text: retryBtn, callback_data: `retry_generation:${retrySessionRef}` },
                 ]],
               });
             }
