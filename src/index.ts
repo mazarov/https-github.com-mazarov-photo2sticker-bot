@@ -3219,7 +3219,7 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
   const session = explicitSessionId
     ? await getPackFlowSessionById(user.id, explicitSessionId)
     : await getPackFlowSession(user.id);
-  if (!session || session.state !== "wait_pack_preview_payment") {
+  if (!session || !["wait_pack_preview_payment", "wait_pack_carousel"].includes(session.state)) {
     console.log("[pack_back_to_carousel] Session not found or wrong state:", session?.id, session?.state);
     return;
   }
@@ -3235,8 +3235,11 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
     return;
   }
 
-  // Restore carousel index if session had one, otherwise use 0
-  const carouselIndex = session.pack_carousel_index ?? 0;
+  // Restore carousel index if session had one. If missing, try to map from selected content set.
+  const selectedBySet = session.pack_content_set_id
+    ? Math.max(0, contentSets.findIndex((s: any) => s.id === session.pack_content_set_id))
+    : 0;
+  const carouselIndex = session.pack_carousel_index ?? selectedBySet;
   const targetSetIndex = Math.min(carouselIndex, contentSets.length - 1);
   const targetSet = contentSets[targetSetIndex] || contentSets[0];
 
@@ -3264,6 +3267,16 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
       [{ text: tryBtn, callback_data: `pack_try:${targetSet.id}` }],
     ],
   };
+  const callbackMsgId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+  const callbackChatId = (ctx.callbackQuery as any)?.message?.chat?.id as number | undefined;
+  if (callbackMsgId && callbackChatId) {
+    try {
+      await ctx.telegram.editMessageText(callbackChatId, callbackMsgId, undefined, carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+      await supabase.from("sessions").update({ progress_message_id: callbackMsgId, progress_chat_id: callbackChatId }).eq("id", session.id);
+      return;
+    } catch (_) {}
+  }
+
   if (session.progress_message_id && session.progress_chat_id) {
     try {
       await ctx.telegram.editMessageText(session.progress_chat_id, session.progress_message_id, undefined, carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
@@ -3297,6 +3310,17 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   const session = explicitSessionId
     ? await getPackFlowSessionById(user.id, explicitSessionId)
     : await getPackFlowSession(user.id);
+
+  // Stale preview button from old style message: user is already back in carousel.
+  if (session?.state === "wait_pack_carousel") {
+    try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
+    const msg = lang === "ru"
+      ? "Сначала выбери набор поз и нажми «Попробовать с ...», затем «Посмотреть превью»."
+      : "First choose a pose set and tap “Try with ...”, then tap “See preview”.";
+    await ctx.answerCbQuery(msg, { show_alert: false }).catch(() => {});
+    return;
+  }
+
   if (!session || session.state !== "wait_pack_preview_payment") {
     // If already generating, ignore duplicate click
     if (session?.state === "generating_pack_preview") {
