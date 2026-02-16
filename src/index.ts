@@ -2878,8 +2878,8 @@ async function sendPackStyleSelectionStep(
   });
 }
 
-// Menu: 📦 Создать пак — show template CTA screen
-bot.hears(["📦 Создать пак", "📦 Create pack"], async (ctx) => {
+// Shared: entry into pack flow (menu button or broadcast "Попробовать")
+async function handlePackMenuEntry(ctx: any) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -2897,7 +2897,7 @@ bot.hears(["📦 Создать пак", "📦 Create pack"], async (ctx) => {
     await updateAssistantSession(activeAssistant.id, { status: "completed" });
   }
 
-  // Get first active content set (no longer need pack_templates)
+  // Get first active content set
   const { data: contentSets } = await supabase
     .from("pack_content_sets")
     .select("*")
@@ -2956,6 +2956,15 @@ bot.hears(["📦 Создать пак", "📦 Create pack"], async (ctx) => {
   if (msg?.message_id && ctx.chat?.id) {
     await supabase.from("sessions").update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id }).eq("id", session.id);
   }
+}
+
+// Menu: 📦 Создать пак — show template CTA screen
+bot.hears(["📦 Создать пак", "📦 Create pack"], handlePackMenuEntry);
+
+// Broadcast "Попробовать" — same as tapping "Создать пак"
+bot.action("broadcast_try_pack", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  await handlePackMenuEntry(ctx);
 });
 
 // Callback: pack_start — user tapped "Попробовать" on template CTA (DEPRECATED: now uses content_set_id)
