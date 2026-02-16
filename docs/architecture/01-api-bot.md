@@ -200,6 +200,7 @@ flowchart TD
   - использовать новое фото,
   - или оставить текущее.
 - Это правило применяется для `assistant`, `pack` и `single` flow (кроме hard-processing состояний).
+- Источник "рабочего фото" централизован: `session.current_photo_file_id || user.last_photo_file_id`.
 
 ## Ключевые функции
 

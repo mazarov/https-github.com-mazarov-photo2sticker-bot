@@ -2416,6 +2416,18 @@ function getUserPhotoFileId(user: any, session: any): string | null {
   return session?.current_photo_file_id || user?.last_photo_file_id || null;
 }
 
+/**
+ * Resolve authoritative "working photo" for any flow.
+ * Priority: session.current_photo_file_id -> user.last_photo_file_id.
+ */
+function resolveWorkingPhoto(session: any, user: any): { hasWorkingPhoto: boolean; workingPhotoFileId: string | null } {
+  const workingPhotoFileId = session?.current_photo_file_id || user?.last_photo_file_id || null;
+  return {
+    hasWorkingPhoto: !!workingPhotoFileId,
+    workingPhotoFileId,
+  };
+}
+
 // Photo handler
 bot.on("photo", async (ctx) => {
   const telegramId = ctx.from?.id;
@@ -2477,9 +2489,9 @@ bot.on("photo", async (ctx) => {
     "generating_pack_preview",
     "processing_pack",
   ];
-  const hasCurrentPhoto = !!session.current_photo_file_id;
+  const { hasWorkingPhoto, workingPhotoFileId } = resolveWorkingPhoto(session, user);
   const isHardProcessing = hardProcessingStates.includes(String(session.state || ""));
-  if (hasCurrentPhoto && !isHardProcessing) {
+  if (hasWorkingPhoto && !isHardProcessing) {
     const flowType =
       session.state?.startsWith("assistant_")
         ? "assistant"
@@ -2500,6 +2512,7 @@ bot.on("photo", async (ctx) => {
       .from("sessions")
       .update({
         photos: nextPhotos,
+        current_photo_file_id: session.current_photo_file_id || workingPhotoFileId,
         pending_photo_file_id: photo.file_id,
         is_active: true,
         session_rev: nextRev,
@@ -4035,9 +4048,11 @@ bot.action(/^pack_keep_photo(?::(.+))?$/, async (ctx) => {
     return;
   }
 
+  const { workingPhotoFileId } = resolveWorkingPhoto(session, user);
   await supabase
     .from("sessions")
     .update({
+      current_photo_file_id: session.current_photo_file_id || workingPhotoFileId,
       pending_photo_file_id: null,
       is_active: true,
       flow_kind: "pack",
