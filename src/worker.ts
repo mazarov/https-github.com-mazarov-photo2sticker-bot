@@ -215,6 +215,31 @@ async function runPackPreviewJob(job: any) {
     .maybeSingle();
   if (!template) throw new Error("Pack template not found");
 
+  // Scene descriptions: from content set if session has one, else from template
+  const stickerCountForScenes = template.sticker_count || 4;
+  let sceneDescriptionsSource: string[] = template.scene_descriptions || [];
+  console.log("[PackPreview] session.pack_content_set_id:", session.pack_content_set_id ?? "(not set)");
+  if (session.pack_content_set_id) {
+    const { data: contentSet, error: contentSetErr } = await supabase
+      .from("pack_content_sets")
+      .select("scene_descriptions, is_active")
+      .eq("id", session.pack_content_set_id)
+      .eq("pack_template_id", template.id)
+      .maybeSingle();
+    if (contentSetErr) {
+      console.warn("[PackPreview] Content set fetch error:", contentSetErr.message);
+    } else if (!contentSet) {
+      console.warn("[PackPreview] Content set not found:", session.pack_content_set_id, "template:", template.id);
+    } else if (!contentSet.is_active) {
+      console.warn("[PackPreview] Content set inactive:", session.pack_content_set_id);
+    } else if (!Array.isArray(contentSet.scene_descriptions) || contentSet.scene_descriptions.length !== stickerCountForScenes) {
+      console.warn("[PackPreview] Content set scene_descriptions length mismatch: got", contentSet.scene_descriptions?.length ?? 0, "expected", stickerCountForScenes);
+    } else {
+      sceneDescriptionsSource = contentSet.scene_descriptions;
+      console.log("[PackPreview] Using scene_descriptions from content set:", session.pack_content_set_id);
+    }
+  }
+
   // Unified flow: session.prompt_final = same as single sticker (agent + composition suffix from API).
   // Fallback when empty: preset.prompt_hint only.
   const promptFinalRaw = (session.prompt_final ?? "").trim();
@@ -274,7 +299,7 @@ async function runPackPreviewJob(job: any) {
   const stickerCount = template.sticker_count || 4;
   const cols = Math.ceil(Math.sqrt(stickerCount));
   const rows = Math.ceil(stickerCount / cols);
-  const sceneDescriptions: string[] = template.scene_descriptions || [];
+  const sceneDescriptions: string[] = sceneDescriptionsSource;
   const sceneList = sceneDescriptions
     .map((desc: string, i: number) => `${i + 1}. ${desc}`)
     .join("\n");
@@ -499,6 +524,21 @@ async function runPackAssembleJob(job: any) {
     .maybeSingle();
   if (!template) throw new Error("Pack template not found");
 
+  // Labels: from content set if session has one, else from template
+  let labelsSource: string[] = (lang === "ru" ? template.labels : (template.labels_en || template.labels)) || [];
+  if (session.pack_content_set_id) {
+    const { data: contentSet } = await supabase
+      .from("pack_content_sets")
+      .select("labels, labels_en, is_active")
+      .eq("id", session.pack_content_set_id)
+      .eq("pack_template_id", template.id)
+      .maybeSingle();
+    if (contentSet?.is_active && Array.isArray(contentSet.labels) && contentSet.labels.length === (template.sticker_count || 4)) {
+      labelsSource = lang === "ru" ? (contentSet.labels || []) : (contentSet.labels_en || contentSet.labels || []);
+      console.log("[PackAssemble] Using labels from content set:", session.pack_content_set_id);
+    }
+  }
+
   // Helper: update progress message
   async function updatePackProgress(text: string) {
     if (!session.progress_message_id || !session.progress_chat_id) return;
@@ -591,7 +631,7 @@ async function runPackAssembleJob(job: any) {
   await updatePackProgress(await getText(lang, "pack.progress_finishing"));
 
   // Process each cell: white border (same as single sticker), then label via addTextToSticker
-  const labels: string[] = (lang === "ru" ? template.labels : (template.labels_en || template.labels)) || [];
+  const labels: string[] = labelsSource;
   const stickerBuffers: Buffer[] = [];
 
   for (let i = 0; i < noBgCells.length; i++) {

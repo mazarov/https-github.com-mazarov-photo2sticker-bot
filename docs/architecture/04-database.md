@@ -79,7 +79,27 @@ erDiagram
 | `photos` | jsonb | — | Фото сессии |
 | `sticker_ideas_state` | jsonb | — | Состояние идей стикеров (Sticker Ideas After Photo) |
 | `selected_style_group` | text | — | Выбранная группа стилей |
+| `pack_template_id` | text | — | FK → pack_templates (flow «Сделать пак») |
+| `pack_content_set_id` | text | — | FK → pack_content_sets (выбранный набор подписей/сцен) |
+| `pack_carousel_index` | int | — | Индекс текущей карточки в карусели наборов |
+| `pack_sheet_file_id` | text | — | file_id сгенерированного листа превью |
 | `env` | text | 'prod' | Окружение |
+
+### `pack_content_sets` — Наборы подписей и сцен для пака
+
+Привязаны к шаблону пака. Пользователь выбирает набор в карусели (состояние `wait_pack_carousel`); при генерации превью и сборке используются `scene_descriptions` и `labels`/`labels_en` из набора.
+
+| Колонка | Тип | Описание |
+|---------|-----|----------|
+| `id` | text | PK (например couple_v1_romance) |
+| `pack_template_id` | text | FK → pack_templates |
+| `name_ru` / `name_en` | text | Название набора для пользователя |
+| `carousel_description_ru` / `carousel_description_en` | text | Описание в карточке карусели |
+| `labels` / `labels_en` | jsonb | Массивы подписей (порядок = порядок стикеров в сетке) |
+| `scene_descriptions` | jsonb | Массив описаний сцен для Gemini (EN) |
+| `sort_order` | int | Порядок в карусели |
+| `is_active` | boolean | Активен ли набор |
+| `mood` | text | Опционально: для автоподбора (romance, everyday, humor, …) |
 
 ### `jobs` — Очередь заданий
 

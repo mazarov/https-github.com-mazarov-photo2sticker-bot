@@ -117,7 +117,7 @@ flowchart TD
 ## Pack flow в Worker (preview + assemble)
 
 - `runPackPreviewJob`:
-  - берёт `pack_templates.scene_descriptions` и `style_prompt_base`
+  - сцены: при `sessions.pack_content_set_id` берёт `pack_content_sets.scene_descriptions` (проверка: is_active, длина = template.sticker_count), иначе `pack_templates.scene_descriptions`
   - добавляет выбранный пользователем `sessions.selected_style_id` (`style_presets_v2.prompt_hint`) в промпт
   - включает блок `identity preservation` (сохранение facial identity)
   - генерирует лист NxN и сохраняет `pack_sheet_file_id`
@@ -128,7 +128,7 @@ flowchart TD
     - ключ: `bg_removal_primary` (prod) / `bg_removal_primary_test` (test)
     - значения: `rembg` или `pixian`
     - fallback: если primary упал, используется второй провайдер
-  - накладывает labels (`pack_templates.labels` / `labels_en`)
+  - подписи: при `sessions.pack_content_set_id` берёт `pack_content_sets.labels` / `labels_en`, иначе `pack_templates.labels` / `labels_en`
   - собирает Telegram sticker set (`createNewStickerSet` + `addStickerToSet`)
 
 ## Цепочка генерации (бизнес-логика)

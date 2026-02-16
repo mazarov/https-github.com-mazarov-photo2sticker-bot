@@ -61,6 +61,7 @@ stateDiagram-v2
 | `processing_text` | Генерация стикера (текст) |
 | `confirm_sticker` | Стикер готов — выбор действий |
 | `waiting_custom_idea` | Ждём описание идеи для пака |
+| `wait_pack_carousel` | Карусель наборов контента (подписи/сцены) для шаблона пака |
 | `wait_pack_photo` | Flow "Сделать пак" — ждём фото |
 | `wait_pack_preview_payment` | Фото есть — выбор style preset v2 + кнопка превью за 1 кредит |
 | `generating_pack_preview` | Генерация превью-листа пака |
@@ -149,7 +150,10 @@ flowchart TD
 - `custom_idea` / `idea_generate_custom` — кастомная идея
 
 #### "Сделать пак"
-- `pack_start:TEMPLATE_ID` — старт flow по выбранному template
+- `pack_show_carousel:TEMPLATE_ID` — шаг 2: показать карусель наборов контента (после приглашения)
+- `pack_carousel_prev` / `pack_carousel_next` / `pack_carousel_noop` — навигация по карусели
+- `pack_try:CONTENT_SET_ID` — выбрать набор и перейти к фото/стилю (wait_pack_photo или wait_pack_preview_payment)
+- `pack_start:TEMPLATE_ID` — старт flow по выбранному template (fallback, без карусели)
 - `pack_style:STYLE_ID` — выбрать style preset v2 перед preview
 - `pack_preview_pay` — оплатить превью (1 кредит)
 - `pack_approve` — оплатить сборку (N-1) и запустить assemble

@@ -2649,9 +2649,29 @@ async function sendPackStyleSelectionStep(ctx: any, lang: string, selectedStyleI
   const previewBtn = await getText(lang, "btn.preview_pack");
   const cancelBtn = await getText(lang, "btn.cancel_pack");
 
+  let headerText = `${previewOffer}\n\n${stylePrompt}`;
+  const telegramId = ctx.from?.id;
+  if (telegramId) {
+    const user = await getUser(telegramId);
+    if (user) {
+      const session = await getActiveSession(user.id);
+      if (session?.pack_content_set_id) {
+        const { data: contentSet } = await supabase
+          .from("pack_content_sets")
+          .select("name_ru, name_en")
+          .eq("id", session.pack_content_set_id)
+          .maybeSingle();
+        if (contentSet) {
+          const setName = lang === "ru" ? contentSet.name_ru : contentSet.name_en;
+          headerText += "\n\n" + (await getText(lang, "pack.selected_set", { name: setName }));
+        }
+      }
+    }
+  }
+
   return sendStyleKeyboardFlat(ctx, lang, messageId, {
     includeCustom: false,
-    headerText: `${previewOffer}\n\n${stylePrompt}`,
+    headerText,
     selectedStyleId: selectedStyleId ?? undefined,
     extraButtons: [
       [{ text: previewBtn, callback_data: "pack_preview_pay" }],
@@ -2841,11 +2861,9 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   }
 
   const set = contentSets[0];
-  const templateName = lang === "ru" ? template.name_ru : template.name_en;
-  const templateDesc = lang === "ru" ? (template.description_ru || "") : (template.description_en || "");
-  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const setName = lang === "ru" ? set.name_ru : set.name_en;
-  const carouselCaption = `*${templateName}*\n${templateDesc}\n\n${setDesc}`;
+  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+  const carouselCaption = `*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const keyboard = {
     inline_keyboard: [
@@ -2888,24 +2906,15 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
     .order("sort_order", { ascending: true });
   if (!contentSets?.length) return;
 
-  const { data: template } = await supabase
-    .from("pack_templates")
-    .select("name_ru, name_en, description_ru, description_en")
-    .eq("id", session.pack_template_id)
-    .maybeSingle();
-  if (!template) return;
-
   const currentIndex = (session.pack_carousel_index ?? 0) + delta;
   const idx = ((currentIndex % contentSets.length) + contentSets.length) % contentSets.length;
   const set = contentSets[idx];
 
   await supabase.from("sessions").update({ pack_carousel_index: idx }).eq("id", session.id);
 
-  const templateName = lang === "ru" ? template.name_ru : template.name_en;
-  const templateDesc = lang === "ru" ? (template.description_ru || "") : (template.description_en || "");
-  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const setName = lang === "ru" ? set.name_ru : set.name_en;
-  const carouselCaption = `*${templateName}*\n${templateDesc}\n\n${setDesc}`;
+  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+  const carouselCaption = `*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const keyboard = {
     inline_keyboard: [
@@ -2945,6 +2954,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
       pack_carousel_index: null,
       current_photo_file_id: existingPhoto || null,
       photos: existingPhoto ? [existingPhoto] : [],
+      is_active: true,
     })
     .eq("id", session.id);
 
@@ -3057,6 +3067,7 @@ bot.action("pack_preview_pay", async (ctx) => {
     return;
   }
   console.log("[pack_preview_pay] session.prompt_final saved, length:", (packPromptFinal || "").length, "preview:", (packPromptFinal || "").slice(0, 120));
+  console.log("[pack_preview_pay] session.pack_content_set_id:", session.pack_content_set_id ?? "(not set)");
 
   // Enqueue pack_preview job
   await supabase.from("jobs").insert({
