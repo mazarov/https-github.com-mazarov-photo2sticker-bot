@@ -159,3 +159,19 @@ bot.launch({ dropPendingUpdates: true });
 1. Хендлер "Стили" сбрасывает state в `wait_photo` перед проверкой фото
 2. Фото-хендлер при `assistant_wait_photo` без `assistant_session` —
    fallthrough в ручной режим вместо silent return
+
+---
+
+## 11. Stale inline callbacks в pack flow
+
+**Проблема**: старые inline-кнопки из предыдущих сообщений могут попадать в новую
+сессию и вызывать гонки по состояниям.
+
+**Текущее решение**:
+1. Критичные callback'и pack flow привязаны к `session_id` в `callback_data`.
+2. Поддержан формат `action:sid:rev` для проверки актуальности кнопки.
+3. Добавлены `sessions.session_rev` и `strict_session_rev_enabled` (feature flag).
+
+**Режим rollout**:
+- сначала `strict_session_rev_enabled=false` (совместимость),
+- затем включить strict после smoke-тестов на `test`.

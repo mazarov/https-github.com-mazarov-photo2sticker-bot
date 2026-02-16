@@ -155,10 +155,11 @@ flowchart TD
 - `pack_try:CONTENT_SET_ID` — выбрать набор и перейти к фото/стилю (wait_pack_photo или wait_pack_preview_payment)
 - `pack_start:TEMPLATE_ID` — старт flow по выбранному template (fallback, без карусели)
 - `pack_style:STYLE_ID` — выбрать style preset v2 перед preview
-- `pack_preview_pay` — оплатить превью (1 кредит)
-- `pack_approve` — оплатить сборку (N-1) и запустить assemble
-- `pack_regenerate` — перегенерировать preview (1 кредит)
-- `pack_cancel` — отменить pack flow
+- `pack_preview_pay:SESSION_ID[:REV]` — оплатить превью (1 кредит)
+- `pack_back_to_carousel:SESSION_ID[:REV]` — вернуться к выбору поз
+- `pack_approve:SESSION_ID[:REV]` — оплатить сборку (N-1) и запустить assemble
+- `pack_regenerate:SESSION_ID[:REV]` — перегенерировать preview (1 кредит)
+- `pack_cancel:SESSION_ID[:REV]` — отменить pack flow
 
 #### Идеи стикеров (ассистент, assistant_wait_idea)
 - `asst_idea_gen` — сгенерировать выбранную идею
@@ -205,6 +206,11 @@ flowchart TD
 ### `getActiveSession(userId)`
 Получает активную сессию. Есть fallback: если `is_active = true` не находит,
 ищет последнюю не-canceled сессию (workaround для бага с `is_active`).
+
+### Session Router (pack callbacks)
+- Для критичных callback-событий pack flow используется резолв сессии по `session_id` из `callback_data`.
+- В callback поддерживаются форматы `action:sid` и `action:sid:rev`.
+- При включенном флаге `strict_session_rev_enabled=true` stale-кнопки отбрасываются с user-facing reason через `answerCbQuery`.
 
 ### `getUserPhotoFileId(user, session)`
 Ищет фото: сначала `session.current_photo_file_id`, потом `user.last_photo_file_id`.
