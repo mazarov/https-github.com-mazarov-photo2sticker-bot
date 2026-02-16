@@ -2467,18 +2467,41 @@ bot.on("photo", async (ctx) => {
     }
   }
 
-  // === AI Assistant: replacement photo router (chat + ideas) ===
-  // For active assistant flow we always ask which photo to use.
-  if (session.state === "assistant_chat" || session.state === "assistant_wait_idea") {
-    const assistantPhotos = Array.isArray(session.photos) ? session.photos : [];
-    const nextPhotos = [...assistantPhotos, photo.file_id];
+  // === Global replacement photo router (all user flows) ===
+  // Rule: if a working photo already exists in the current flow, ask whether to use new or keep current.
+  const hardProcessingStates = [
+    "processing",
+    "processing_emotion",
+    "processing_motion",
+    "processing_text",
+    "generating_pack_preview",
+    "processing_pack",
+  ];
+  const hasCurrentPhoto = !!session.current_photo_file_id;
+  const isHardProcessing = hardProcessingStates.includes(String(session.state || ""));
+  if (hasCurrentPhoto && !isHardProcessing) {
+    const flowType =
+      session.state?.startsWith("assistant_")
+        ? "assistant"
+        : (
+            session.state?.startsWith("wait_pack_")
+            || ["generating_pack_preview", "processing_pack"].includes(String(session.state || ""))
+          )
+          ? "pack"
+          : "single";
+    const flowLabel = flowType === "assistant"
+      ? (lang === "ru" ? "стикером" : "sticker")
+      : flowType === "pack"
+      ? (lang === "ru" ? "паком" : "pack")
+      : (lang === "ru" ? "стикером" : "sticker");
+    const nextPhotos = [...(Array.isArray(session.photos) ? session.photos : []), photo.file_id];
     const nextRev = (session.session_rev || 1) + 1;
-    await supabase.from("sessions")
+    await supabase
+      .from("sessions")
       .update({
         photos: nextPhotos,
         pending_photo_file_id: photo.file_id,
         is_active: true,
-        flow_kind: "assistant",
         session_rev: nextRev,
       })
       .eq("id", session.id);
@@ -2486,25 +2509,30 @@ bot.on("photo", async (ctx) => {
     session.pending_photo_file_id = photo.file_id;
     session.session_rev = nextRev;
 
-    const aSession = await getActiveAssistantSession(user.id);
-    if (aSession) {
-      await updateAssistantSession(aSession.id, { pending_photo_file_id: photo.file_id });
+    if (flowType === "assistant") {
+      const aSession = await getActiveAssistantSession(user.id);
+      if (aSession) await updateAssistantSession(aSession.id, { pending_photo_file_id: photo.file_id });
     }
 
     const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
+    const newCb = flowType === "assistant"
+      ? (sessionRef ? `assistant_new_photo:${sessionRef}` : "assistant_new_photo")
+      : flowType === "pack"
+      ? (sessionRef ? `pack_new_photo:${sessionRef}` : "pack_new_photo")
+      : (sessionRef ? `single_new_photo:${sessionRef}` : "single_new_photo");
+    const keepCb = flowType === "assistant"
+      ? (sessionRef ? `assistant_keep_photo:${sessionRef}` : "assistant_keep_photo")
+      : flowType === "pack"
+      ? (sessionRef ? `pack_keep_photo:${sessionRef}` : "pack_keep_photo")
+      : (sessionRef ? `single_keep_photo:${sessionRef}` : "single_keep_photo");
+
     await ctx.reply(
       lang === "ru"
-        ? "Вижу новое фото! С каким будем работать?"
-        : "New photo! Which one should we use?",
+        ? `Вижу новое фото! С каким продолжаем работу над ${flowLabel}?`
+        : `I see a new photo! Which one should we use for the ${flowLabel}?`,
       Markup.inlineKeyboard([
-        [Markup.button.callback(
-          lang === "ru" ? "✅ Новое фото" : "✅ New photo",
-          sessionRef ? `assistant_new_photo:${sessionRef}` : "assistant_new_photo"
-        )],
-        [Markup.button.callback(
-          lang === "ru" ? "❌ Оставить прежнее" : "❌ Keep current",
-          sessionRef ? `assistant_keep_photo:${sessionRef}` : "assistant_keep_photo"
-        )],
+        [Markup.button.callback(lang === "ru" ? "✅ Новое фото" : "✅ New photo", newCb)],
+        [Markup.button.callback(lang === "ru" ? "❌ Оставить текущее" : "❌ Keep current", keepCb)],
       ])
     );
     return;
@@ -3934,7 +3962,7 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
-    ["wait_pack_preview_payment", "wait_pack_approval"],
+    ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_approval"],
     explicitSessionId
   );
   if (!session || reasonCode === "wrong_state") {
@@ -3961,7 +3989,7 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
       photos,
       current_photo_file_id: newPhotoFileId,
       pending_photo_file_id: null,
-      state: "wait_pack_preview_payment",
+      state: session.state === "wait_pack_carousel" ? "wait_pack_carousel" : "wait_pack_preview_payment",
       pack_batch_id: null,
       pack_sheet_file_id: null,
       is_active: true,
@@ -3969,6 +3997,15 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
       session_rev: (session.session_rev || 1) + 1,
     })
     .eq("id", session.id);
+
+  if (session.state === "wait_pack_carousel") {
+    await ctx.reply(
+      lang === "ru"
+        ? "Новое фото принято. Выбери набор в карусели и нажми «Попробовать»."
+        : "New photo accepted. Choose a set in the carousel and tap Try."
+    );
+    return;
+  }
 
   await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
 });
@@ -3985,7 +4022,7 @@ bot.action(/^pack_keep_photo(?::(.+))?$/, async (ctx) => {
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
-    ["wait_pack_preview_payment", "wait_pack_approval"],
+    ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_approval"],
     explicitSessionId
   );
   if (!session || reasonCode === "wrong_state") {
@@ -4008,6 +4045,15 @@ bot.action(/^pack_keep_photo(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
+  if (session.state === "wait_pack_carousel") {
+    await ctx.reply(
+      lang === "ru"
+        ? "Оставляем текущее фото. Выбери набор в карусели и нажми «Попробовать»."
+        : "Keeping current photo. Choose a set in the carousel and tap Try."
+    );
+    return;
+  }
+
   if (session.state === "wait_pack_approval") {
     await ctx.reply(
       lang === "ru"
@@ -4018,6 +4064,94 @@ bot.action(/^pack_keep_photo(?::(.+))?$/, async (ctx) => {
   }
 
   await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
+});
+
+// Callback: single_new_photo — use newly sent photo in single flow
+bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "single_new_photo", "session_not_found");
+    return;
+  }
+  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "processing_pack"].includes(session.state)) {
+    await rejectSessionEvent(ctx, lang, "single_new_photo", "wrong_state");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "single_new_photo", "stale_callback");
+    return;
+  }
+
+  const newPhotoFileId = session.pending_photo_file_id;
+  if (!newPhotoFileId) {
+    await ctx.reply(lang === "ru" ? "Фото не найдено, пришли ещё раз." : "Photo not found, please send again.");
+    return;
+  }
+
+  const photos = Array.isArray(session.photos) ? session.photos : [];
+  if (!photos.includes(newPhotoFileId)) photos.push(newPhotoFileId);
+  const nextRev = (session.session_rev || 1) + 1;
+  await supabase
+    .from("sessions")
+    .update({
+      photos,
+      current_photo_file_id: newPhotoFileId,
+      pending_photo_file_id: null,
+      state: "wait_style",
+      is_active: true,
+      flow_kind: "single",
+      session_rev: nextRev,
+    })
+    .eq("id", session.id);
+
+  await sendStyleKeyboardFlat(ctx, lang, session.id, { selectedStyleId: session.selected_style_id || null, sessionRev: nextRev });
+});
+
+// Callback: single_keep_photo — keep current photo in single flow
+bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "single_keep_photo", "session_not_found");
+    return;
+  }
+  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "processing_pack"].includes(session.state)) {
+    await rejectSessionEvent(ctx, lang, "single_keep_photo", "wrong_state");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "single_keep_photo", "stale_callback");
+    return;
+  }
+
+  await supabase
+    .from("sessions")
+    .update({
+      pending_photo_file_id: null,
+      is_active: true,
+      flow_kind: "single",
+      session_rev: (session.session_rev || 1) + 1,
+    })
+    .eq("id", session.id);
+
+  await ctx.reply(lang === "ru" ? "Оставляем текущее фото." : "Keeping current photo.");
 });
 
 // Text handler (style description)

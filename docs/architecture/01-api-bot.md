@@ -190,8 +190,16 @@ flowchart TD
 - `make_example:ID` — пометить как пример стиля (admin)
 - `retry_generation:SESSION_ID[:REV]` — повторить генерацию
 - `new_photo` — загрузить новое фото
+- `single_new_photo:SESSION_ID[:REV]` — использовать новое фото в single flow (переход к выбору стиля)
+- `single_keep_photo:SESSION_ID[:REV]` — оставить текущее фото в single flow
 - `cancel` — отменить
 - `noop` — пустое действие (для неактивных кнопок)
+
+### Unified replacement-photo rule
+- Если в текущей session уже есть `current_photo_file_id`, при отправке нового фото бот сначала спрашивает выбор:
+  - использовать новое фото,
+  - или оставить текущее.
+- Это правило применяется для `assistant`, `pack` и `single` flow (кроме hard-processing состояний).
 
 ## Ключевые функции
 
