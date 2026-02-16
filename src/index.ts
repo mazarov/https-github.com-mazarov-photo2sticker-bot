@@ -3215,6 +3215,7 @@ async function handlePackMenuEntry(ctx: any) {
     return;
   }
   const lang = user.lang || "en";
+  const existingPhoto = user.last_photo_file_id || null;
 
   // Close any active assistant session to prevent ideas from showing
   const activeAssistant = await getActiveAssistantSession(user.id);
@@ -3547,19 +3548,6 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
     return;
   }
 
-  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
-  const subjectMode = normalizeSubjectMode(session.subject_mode);
-  const visibleSets = subjectFilterEnabled
-    ? filterPackContentSetsBySubjectMode(contentSets, subjectMode)
-    : contentSets;
-  if (!visibleSets.length) {
-    await ctx.reply(
-      lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-      getMainMenuKeyboard(lang)
-    );
-    return;
-  }
-
   const currentIndex = (session.pack_carousel_index ?? 0) + delta;
   const idx = ((currentIndex % visibleSets.length) + visibleSets.length) % visibleSets.length;
   const set = visibleSets[idx];
@@ -3685,6 +3673,19 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
   if (!contentSets?.length) return;
+
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  const subjectMode = normalizeSubjectMode(session.subject_mode);
+  const visibleSets = subjectFilterEnabled
+    ? filterPackContentSetsBySubjectMode(contentSets, subjectMode)
+    : contentSets;
+  if (!visibleSets.length) {
+    await ctx.reply(
+      lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
+      getMainMenuKeyboard(lang)
+    );
+    return;
+  }
 
   await supabase
     .from("sessions")
