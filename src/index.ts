@@ -6443,6 +6443,25 @@ bot.action(/^asst_idea_gen:(\d+)(?::(.+))?$/, async (ctx) => {
   const preset = await getStylePresetV2ById(state.styleId);
   if (!preset) return;
 
+  // Atomic guard against double-clicks: only one callback may advance this revision.
+  const currentRev = Number(session.session_rev || 1);
+  const nextRev = currentRev + 1;
+  const { data: revLockedSession } = await supabase
+    .from("sessions")
+    .update({
+      session_rev: nextRev,
+      flow_kind: "assistant",
+      is_active: true,
+    })
+    .eq("id", session.id)
+    .eq("session_rev", currentRev)
+    .select("id, session_rev")
+    .maybeSingle();
+  if (!revLockedSession?.id) {
+    await rejectSessionEvent(ctx, lang, "asst_idea_gen", "stale_callback");
+    return;
+  }
+
   console.log("[asst_idea_gen] Generating idea:", ideaIndex, idea.titleEn, "style:", preset.id);
   console.log("[asst_idea_gen] prompt_hint:", preset.prompt_hint);
   console.log("[asst_idea_gen] promptModification:", idea.promptModification);
@@ -6459,7 +6478,7 @@ bot.action(/^asst_idea_gen:(\d+)(?::(.+))?$/, async (ctx) => {
   // Save last used style for future ideas
   await supabase.from("users").update({ last_style_id: state.styleId }).eq("id", user.id);
 
-  await startGeneration(ctx, user, session, lang, {
+  await startGeneration(ctx, user, { ...session, session_rev: nextRev }, lang, {
     generationType: "style",
     promptFinal,
     userInput: `[assistant_idea] ${preset.name_en}: ${idea.titleEn}`,
