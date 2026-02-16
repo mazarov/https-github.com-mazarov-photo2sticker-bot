@@ -208,37 +208,34 @@ async function runPackPreviewJob(job: any) {
     .maybeSingle();
   if (!batch) throw new Error("Pack batch not found");
 
-  const { data: template } = await supabase
-    .from("pack_templates")
-    .select("*")
-    .eq("id", batch.template_id)
-    .maybeSingle();
-  if (!template) throw new Error("Pack template not found");
-
-  // Scene descriptions: from content set if session has one, else from template
-  const stickerCountForScenes = template.sticker_count || 4;
-  let sceneDescriptionsSource: string[] = template.scene_descriptions || [];
-  console.log("[PackPreview] session.pack_content_set_id:", session.pack_content_set_id ?? "(not set)");
-  if (session.pack_content_set_id) {
-    const { data: contentSet, error: contentSetErr } = await supabase
-      .from("pack_content_sets")
-      .select("scene_descriptions, is_active")
-      .eq("id", session.pack_content_set_id)
-      .eq("pack_template_id", template.id)
-      .maybeSingle();
-    if (contentSetErr) {
-      console.warn("[PackPreview] Content set fetch error:", contentSetErr.message);
-    } else if (!contentSet) {
-      console.warn("[PackPreview] Content set not found:", session.pack_content_set_id, "template:", template.id);
-    } else if (!contentSet.is_active) {
-      console.warn("[PackPreview] Content set inactive:", session.pack_content_set_id);
-    } else if (!Array.isArray(contentSet.scene_descriptions) || contentSet.scene_descriptions.length !== stickerCountForScenes) {
-      console.warn("[PackPreview] Content set scene_descriptions length mismatch: got", contentSet.scene_descriptions?.length ?? 0, "expected", stickerCountForScenes);
-    } else {
-      sceneDescriptionsSource = contentSet.scene_descriptions;
-      console.log("[PackPreview] Using scene_descriptions from content set:", session.pack_content_set_id);
-    }
+  // Get content set (required, no longer using pack_templates)
+  if (!session.pack_content_set_id) {
+    throw new Error("Pack content set ID not found in session");
   }
+
+  const { data: contentSet } = await supabase
+    .from("pack_content_sets")
+    .select("scene_descriptions, sticker_count, is_active")
+    .eq("id", session.pack_content_set_id)
+    .maybeSingle();
+  
+  if (!contentSet) {
+    throw new Error(`Pack content set not found: ${session.pack_content_set_id}`);
+  }
+  if (!contentSet.is_active) {
+    throw new Error(`Pack content set inactive: ${session.pack_content_set_id}`);
+  }
+
+  const stickerCountForScenes = contentSet.sticker_count || 9;
+  const sceneDescriptionsSource: string[] = Array.isArray(contentSet.scene_descriptions) 
+    ? contentSet.scene_descriptions 
+    : [];
+  
+  if (sceneDescriptionsSource.length !== stickerCountForScenes) {
+    throw new Error(`Scene descriptions length mismatch: got ${sceneDescriptionsSource.length}, expected ${stickerCountForScenes}`);
+  }
+  
+  console.log("[PackPreview] Using content set:", session.pack_content_set_id, "sticker_count:", stickerCountForScenes);
 
   // Unified flow: session.prompt_final = same as single sticker (agent + composition suffix from API).
   // Fallback when empty: preset.prompt_hint only.
@@ -274,29 +271,14 @@ async function runPackPreviewJob(job: any) {
   const photoBase64 = photoBuffer.toString("base64");
   const photoMime = filePath.endsWith(".png") ? "image/png" : "image/jpeg";
 
-  // Download collage/style reference image if available
+  // Download collage/style reference image if available (deprecated, kept for backward compatibility)
+  // Note: collage_file_id/collage_url were in pack_templates, now removed
+  // Can be added to pack_content_sets if needed in future
   let collageBase64: string | null = null;
   let collageMime = "image/png";
-  if (template.collage_file_id || template.collage_url) {
-    try {
-      let collageBuf: Buffer;
-      if (template.collage_file_id) {
-        const collagePath = await getFilePath(template.collage_file_id);
-        collageBuf = await downloadFile(collagePath);
-      } else {
-        const resp = await axios.get(template.collage_url, { responseType: "arraybuffer", timeout: 15000 });
-        collageBuf = Buffer.from(resp.data);
-      }
-      collageBase64 = collageBuf.toString("base64");
-      collageMime = template.collage_url?.endsWith(".png") ? "image/png" : "image/jpeg";
-      console.log("[PackPreview] Collage loaded, size:", Math.round(collageBuf.length / 1024), "KB");
-    } catch (collageErr: any) {
-      console.warn("[PackPreview] Failed to load collage, proceeding without:", collageErr.message);
-    }
-  }
 
   // Build prompt
-  const stickerCount = template.sticker_count || 4;
+  const stickerCount = stickerCountForScenes;
   const cols = Math.ceil(Math.sqrt(stickerCount));
   const rows = Math.ceil(stickerCount / cols);
   const sceneDescriptions: string[] = sceneDescriptionsSource;
@@ -515,27 +497,34 @@ async function runPackAssembleJob(job: any) {
     .maybeSingle();
   if (!batch) throw new Error("Pack batch not found");
 
-  const { data: template } = await supabase
-    .from("pack_templates")
-    .select("*")
-    .eq("id", batch.template_id)
-    .maybeSingle();
-  if (!template) throw new Error("Pack template not found");
-
-  // Labels: from content set if session has one, else from template
-  let labelsSource: string[] = (lang === "ru" ? template.labels : (template.labels_en || template.labels)) || [];
-  if (session.pack_content_set_id) {
-    const { data: contentSet } = await supabase
-      .from("pack_content_sets")
-      .select("labels, labels_en, is_active")
-      .eq("id", session.pack_content_set_id)
-      .eq("pack_template_id", template.id)
-      .maybeSingle();
-    if (contentSet?.is_active && Array.isArray(contentSet.labels) && contentSet.labels.length === (template.sticker_count || 4)) {
-      labelsSource = lang === "ru" ? (contentSet.labels || []) : (contentSet.labels_en || contentSet.labels || []);
-      console.log("[PackAssemble] Using labels from content set:", session.pack_content_set_id);
-    }
+  // Get content set (required, no longer using pack_templates)
+  if (!session.pack_content_set_id) {
+    throw new Error("Pack content set ID not found in session");
   }
+
+  const { data: contentSet } = await supabase
+    .from("pack_content_sets")
+    .select("labels, labels_en, sticker_count, is_active")
+    .eq("id", session.pack_content_set_id)
+    .maybeSingle();
+  
+  if (!contentSet) {
+    throw new Error(`Pack content set not found: ${session.pack_content_set_id}`);
+  }
+  if (!contentSet.is_active) {
+    throw new Error(`Pack content set inactive: ${session.pack_content_set_id}`);
+  }
+
+  const stickerCount = contentSet.sticker_count || 9;
+  const labelsSource: string[] = Array.isArray(contentSet.labels) 
+    ? (lang === "ru" ? contentSet.labels : (contentSet.labels_en || contentSet.labels || []))
+    : [];
+  
+  if (labelsSource.length !== stickerCount) {
+    throw new Error(`Labels length mismatch: got ${labelsSource.length}, expected ${stickerCount}`);
+  }
+  
+  console.log("[PackAssemble] Using content set:", session.pack_content_set_id, "sticker_count:", stickerCount);
 
   // Helper: update progress message
   async function updatePackProgress(text: string) {
@@ -555,7 +544,7 @@ async function runPackAssembleJob(job: any) {
   const sheetMeta = await sharp(sheetBuffer).metadata();
   const sheetW = sheetMeta.width || 1024;
   const sheetH = sheetMeta.height || 1024;
-  const stickerCount = template.sticker_count || 4;
+  const stickerCount = contentSet.sticker_count || 9;
   // User already paid 1 credit for preview, so on assemble failure
   // we refund only the second payment (N-1 credits).
   const assembleRefundAmount = Math.max(0, stickerCount - 1);

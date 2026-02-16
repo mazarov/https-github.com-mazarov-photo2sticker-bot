@@ -2518,10 +2518,43 @@ bot.on("photo", async (ctx) => {
     return;
   }
 
-  // === Pack flow: photo sent on carousel step — use as pack photo and go to style selection ===
+  // === Pack flow: photo sent on carousel step — ask if use new photo if already have one ===
   if (session.state === "wait_pack_carousel") {
-    console.log("Pack carousel: photo received, session:", session.id);
-    await supabase
+    console.log("Pack carousel: photo received, session:", session.id, "state:", session.state);
+    const existingPhoto = session.current_photo_file_id || (Array.isArray(session.photos) && session.photos.length > 0 ? session.photos[0] : null);
+    
+    if (existingPhoto) {
+      // Save new photo temporarily and ask user
+      await supabase
+        .from("sessions")
+        .update({
+          pending_photo_file_id: photo.file_id,
+          is_active: true,
+        })
+        .eq("id", session.id);
+      
+      await ctx.reply(
+        lang === "ru"
+          ? "Вижу новое фото! Использовать его для пака?"
+          : "New photo! Use it for the pack?",
+        Markup.inlineKeyboard([
+          [Markup.button.callback(
+            lang === "ru" ? "✅ Использовать новое фото" : "✅ Use new photo",
+            "pack_new_photo"
+          )],
+          [Markup.button.callback(
+            lang === "ru" ? "❌ Оставить прежнее" : "❌ Keep current",
+            "pack_keep_photo"
+          )],
+        ])
+      );
+      console.log("Pack carousel: asked user about new photo, returning");
+      return;
+    }
+    
+    // No existing photo — use new photo immediately
+    console.log("Pack carousel: no existing photo, using new photo, updating to wait_pack_preview_payment");
+    const { error: updateErr } = await supabase
       .from("sessions")
       .update({
         photos: [photo.file_id],
@@ -2530,13 +2563,55 @@ bot.on("photo", async (ctx) => {
         is_active: true,
       })
       .eq("id", session.id);
-    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
+    if (updateErr) {
+      console.error("Pack carousel: failed to update session:", updateErr.message);
+      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+      return;
+    }
+    try {
+      await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
+      console.log("Pack carousel: sent style selection step, returning");
+    } catch (err: any) {
+      console.error("Pack carousel: sendPackStyleSelectionStep error:", err?.message || err);
+      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    }
     return;
   }
 
-  // === Pack flow: photo sent on style step — update photo and stay on style selection ===
+  // === Pack flow: photo sent on style step — ask if use new photo if already have one ===
   if (session.state === "wait_pack_preview_payment") {
-    console.log("Pack style step: photo updated, session:", session.id);
+    console.log("Pack style step: photo received, session:", session.id);
+    const existingPhoto = session.current_photo_file_id;
+    
+    if (existingPhoto) {
+      // Save new photo temporarily and ask user
+      await supabase
+        .from("sessions")
+        .update({
+          pending_photo_file_id: photo.file_id,
+          is_active: true,
+        })
+        .eq("id", session.id);
+      
+      await ctx.reply(
+        lang === "ru"
+          ? "Вижу новое фото! Использовать его для пака?"
+          : "New photo! Use it for the pack?",
+        Markup.inlineKeyboard([
+          [Markup.button.callback(
+            lang === "ru" ? "✅ Использовать новое фото" : "✅ Use new photo",
+            "pack_new_photo"
+          )],
+          [Markup.button.callback(
+            lang === "ru" ? "❌ Оставить прежнее" : "❌ Keep current",
+            "pack_keep_photo"
+          )],
+        ])
+      );
+      return;
+    }
+    
+    // No existing photo — use new photo immediately
     const packPhotos = Array.isArray(session.photos) ? [...session.photos] : [];
     packPhotos.push(photo.file_id);
     await supabase
@@ -2556,6 +2631,15 @@ bot.on("photo", async (ctx) => {
   // === Pack flow: other states — don't switch to assistant, just acknowledge ===
   if (["generating_pack_preview", "wait_pack_approval", "processing_pack"].includes(session.state)) {
     const msg = lang === "ru" ? "Фото сохранено. Пак в работе — дождись завершения." : "Photo saved. Pack in progress — please wait.";
+    await ctx.reply(msg, getMainMenuKeyboard(lang));
+    return;
+  }
+
+  // === Safety check: if session was in pack flow, don't switch to manual mode ===
+  const wasPackFlow = session.state?.startsWith("wait_pack_") || session.pack_content_set_id;
+  if (wasPackFlow) {
+    console.error("Photo handler: session was in pack flow but fell through to manual mode! session.state:", session.state, "pack_content_set_id:", session.pack_content_set_id);
+    const msg = lang === "ru" ? "Произошла ошибка. Попробуй отправить фото ещё раз." : "An error occurred. Please try sending the photo again.";
     await ctx.reply(msg, getMainMenuKeyboard(lang));
     return;
   }
@@ -2792,32 +2876,17 @@ bot.hears(["📦 Создать пак", "📦 Create pack"], async (ctx) => {
     await updateAssistantSession(activeAssistant.id, { status: "completed" });
   }
 
-  // Get first active template
-  const { data: template } = await supabase
-    .from("pack_templates")
+  // Get first active content set (no longer need pack_templates)
+  const { data: contentSets } = await supabase
+    .from("pack_content_sets")
     .select("*")
     .eq("is_active", true)
-    .order("sort_order", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (!template) {
+    .order("sort_order", { ascending: true });
+  if (!contentSets?.length) {
     await ctx.reply(
       lang === "ru" ? "Паки скоро будут доступны!" : "Packs coming soon!",
       getMainMenuKeyboard(lang)
     );
-    return;
-  }
-
-  const templateId = template.id;
-  const { data: contentSets } = await supabase
-    .from("pack_content_sets")
-    .select("*")
-    .eq("pack_template_id", templateId)
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true });
-  if (!contentSets?.length) {
-    await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
     return;
   }
 
@@ -2834,7 +2903,7 @@ bot.hears(["📦 Создать пак", "📦 Create pack"], async (ctx) => {
       user_id: user.id,
       state: "wait_pack_carousel",
       is_active: true,
-      pack_template_id: templateId,
+      pack_content_set_id: contentSets[0].id,
       pack_carousel_index: 0,
       selected_style_id: selectedPackStyleId,
       env: config.appEnv,
@@ -2868,7 +2937,7 @@ bot.hears(["📦 Создать пак", "📦 Create pack"], async (ctx) => {
   }
 });
 
-// Callback: pack_start — user tapped "Попробовать" on template CTA
+// Callback: pack_start — user tapped "Попробовать" on template CTA (DEPRECATED: now uses content_set_id)
 bot.action(/^pack_start:(.+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -2878,19 +2947,19 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const templateId = ctx.match[1];
+  const contentSetId = ctx.match[1];
 
-  // Verify template exists
-  const { data: template } = await supabase
-    .from("pack_templates")
+  // Verify content set exists
+  const { data: contentSet } = await supabase
+    .from("pack_content_sets")
     .select("*")
-    .eq("id", templateId)
+    .eq("id", contentSetId)
     .eq("is_active", true)
     .maybeSingle();
 
-  if (!template) {
+  if (!contentSet) {
     await ctx.reply(
-      lang === "ru" ? "Шаблон не найден." : "Template not found.",
+      lang === "ru" ? "Набор не найден." : "Content set not found.",
       getMainMenuKeyboard(lang)
     );
     return;
@@ -2925,7 +2994,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
       user_id: user.id,
       state: initialState,
       is_active: true,
-      pack_template_id: templateId,
+      pack_content_set_id: contentSetId,
       selected_style_id: selectedPackStyleId,
       current_photo_file_id: existingPhoto,
       photos: existingPhoto ? [existingPhoto] : [],
@@ -2957,22 +3026,23 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
-  const templateId = ctx.match[1];
+  const contentSetId = ctx.match[1];
 
-  const { data: template } = await supabase.from("pack_templates").select("*").eq("id", templateId).eq("is_active", true).maybeSingle();
-  if (!template) {
-    await ctx.reply(lang === "ru" ? "Шаблон не найден." : "Template not found.", getMainMenuKeyboard(lang));
-    return;
-  }
-
+  // Get all active content sets for carousel
   const { data: contentSets } = await supabase
     .from("pack_content_sets")
     .select("*")
-    .eq("pack_template_id", templateId)
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
   if (!contentSets?.length) {
     await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
+    return;
+  }
+
+  // Find the selected content set
+  const selectedSet = contentSets.find(s => s.id === contentSetId);
+  if (!selectedSet) {
+    await ctx.reply(lang === "ru" ? "Набор не найден." : "Content set not found.", getMainMenuKeyboard(lang));
     return;
   }
 
@@ -2983,14 +3053,15 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
     selectedPackStyleId = defaultPackStyle?.id || null;
   } catch (_) {}
 
+  const selectedSetIndex = contentSets.findIndex(s => s.id === contentSetId);
   const { data: session, error: sessErr } = await supabase
     .from("sessions")
     .insert({
       user_id: user.id,
       state: "wait_pack_carousel",
       is_active: true,
-      pack_template_id: templateId,
-      pack_carousel_index: 0,
+      pack_content_set_id: contentSetId,
+      pack_carousel_index: selectedSetIndex >= 0 ? selectedSetIndex : 0,
       selected_style_id: selectedPackStyleId,
       env: config.appEnv,
     })
@@ -3045,12 +3116,12 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   if (!user) return;
   const lang = user.lang || "en";
   const session = await getPackFlowSession(user.id);
-  if (!session || session.state !== "wait_pack_carousel" || !session.pack_template_id) return;
+  if (!session || session.state !== "wait_pack_carousel") return;
 
+  // Get all active content sets (no longer filtered by pack_template_id)
   const { data: contentSets } = await supabase
     .from("pack_content_sets")
     .select("*")
-    .eq("pack_template_id", session.pack_template_id)
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
   if (!contentSets?.length) return;
@@ -3124,12 +3195,12 @@ bot.action("pack_back_to_carousel", async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
   const session = await getPackFlowSession(user.id);
-  if (!session || session.state !== "wait_pack_preview_payment" || !session.pack_template_id) return;
+  if (!session || session.state !== "wait_pack_preview_payment") return;
 
+  // Get all active content sets (no longer filtered by pack_template_id)
   const { data: contentSets } = await supabase
     .from("pack_content_sets")
     .select("*")
-    .eq("pack_template_id", session.pack_template_id)
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
   if (!contentSets?.length) return;
@@ -3173,17 +3244,54 @@ bot.action("pack_preview_pay", async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
+  // Send progress message IMMEDIATELY (before any DB queries) so user sees instant feedback
+  const langFromCtx = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
+  let progressMsg = await ctx.reply(await getText(langFromCtx, "pack.progress_preparing"));
+
   const user = await getUser(telegramId);
-  if (!user) return;
+  if (!user) {
+    try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
+    return;
+  }
   const lang = user.lang || "en";
 
   const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_preview_payment") {
+    // If already generating, ignore duplicate click
+    if (session?.state === "generating_pack_preview") {
+      const msg = lang === "ru" ? "Превью уже генерируется, подожди..." : "Preview is already generating, please wait...";
+      await ctx.answerCbQuery(msg, { show_alert: false }).catch(() => {});
+      try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
+      return;
+    }
+    try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
     return;
   }
 
-  // Progress message immediately so user sees feedback (before slow generatePrompt/DB)
-  let progressMsg = await ctx.reply(await getText(lang, "pack.progress_preparing"));
+  // CRITICAL: Atomically set state to generating_pack_preview IMMEDIATELY (before any heavy operations) to prevent double-click
+  const { data: updatedSession, error: stateErr } = await supabase
+    .from("sessions")
+    .update({ state: "generating_pack_preview", is_active: true })
+    .eq("id", session.id)
+    .eq("state", "wait_pack_preview_payment")
+    .select()
+    .single();
+  
+  if (stateErr || !updatedSession) {
+    // State was already changed (double-click or race condition)
+    console.log("[pack_preview_pay] Double-click detected or state changed");
+    try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
+    const msg = lang === "ru" ? "Превью уже генерируется, подожди..." : "Preview is already generating, please wait...";
+    await ctx.answerCbQuery(msg, { show_alert: false }).catch(() => {});
+    return;
+  }
+
+  // Update progress message if language changed
+  if (lang !== langFromCtx && progressMsg?.message_id) {
+    try {
+      await ctx.telegram.editMessageText(ctx.chat!.id, progressMsg.message_id, undefined, await getText(lang, "pack.progress_preparing"));
+    } catch (_) {}
+  }
 
   // Same prompt as single sticker: agent + composition suffix (unified flow)
   let packPromptFinal: string | null = null;
@@ -3201,16 +3309,23 @@ bot.action("pack_preview_pay", async (ctx) => {
     }
   }
 
-  // Load template to get sticker_count
-  const { data: packTemplate } = await supabase
-    .from("pack_templates")
-    .select("sticker_count")
-    .eq("id", session.pack_template_id)
-    .maybeSingle();
-  const packSize = packTemplate?.sticker_count || 4;
+  // Get sticker_count from pack_content_sets
+  let packSize = 9; // default
+  if (session.pack_content_set_id) {
+    const { data: contentSet } = await supabase
+      .from("pack_content_sets")
+      .select("sticker_count")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (contentSet?.sticker_count) {
+      packSize = contentSet.sticker_count;
+    }
+  }
 
   // Check credits
   if ((user.credits || 0) < 1) {
+    // Rollback state since we can't proceed
+    await supabase.from("sessions").update({ state: "wait_pack_preview_payment" }).eq("id", session.id).eq("state", "generating_pack_preview");
     try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
     await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
     await sendBuyCreditsMenu(ctx, user);
@@ -3224,6 +3339,8 @@ bot.action("pack_preview_pay", async (ctx) => {
   });
 
   if (!deducted) {
+    // Rollback state since we can't proceed
+    await supabase.from("sessions").update({ state: "wait_pack_preview_payment" }).eq("id", session.id).eq("state", "generating_pack_preview");
     try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
     await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
     await sendBuyCreditsMenu(ctx, user);
@@ -3236,7 +3353,7 @@ bot.action("pack_preview_pay", async (ctx) => {
     .insert({
       session_id: session.id,
       user_id: user.id,
-      template_id: session.pack_template_id,
+      template_id: session.pack_content_set_id || null, // DEPRECATED: kept for backward compatibility
       size: packSize,
       status: "preview",
       credits_spent: 1,
@@ -3248,6 +3365,8 @@ bot.action("pack_preview_pay", async (ctx) => {
   if (batchErr || !batch) {
     console.error("Failed to create pack_batch:", batchErr?.message);
     try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
+    // Rollback state to wait_pack_preview_payment
+    await supabase.from("sessions").update({ state: "wait_pack_preview_payment" }).eq("id", session.id).eq("state", "generating_pack_preview");
     // Refund credit
     const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
     await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
@@ -3255,18 +3374,17 @@ bot.action("pack_preview_pay", async (ctx) => {
     return;
   }
 
-  // Update session (must set prompt_final so worker uses correct style)
+  // Update session with batch_id and prompt (state already set to generating_pack_preview above)
   const sessionUpdate = {
-    state: "generating_pack_preview",
     pack_batch_id: batch.id,
     prompt_final: packPromptFinal,
     user_input: packStyleUserInput,
-    is_active: true,
   };
   const { error: updateErr } = await supabase
     .from("sessions")
     .update(sessionUpdate)
-    .eq("id", session.id);
+    .eq("id", session.id)
+    .eq("state", "generating_pack_preview"); // Only update if still generating (prevent race condition)
   if (updateErr) {
     console.error("[pack_preview_pay] Session update failed:", updateErr.message);
     try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
@@ -3314,7 +3432,7 @@ bot.action("pack_preview_pay", async (ctx) => {
     message: "Pack preview ordered",
     details: {
       user: `@${user.username || user.telegram_id}`,
-      template: session.pack_template_id,
+      template: session.pack_content_set_id || null,
       batchId: batch.id,
     },
   }).catch(console.error);
@@ -3335,14 +3453,18 @@ bot.action("pack_approve", async (ctx) => {
     return;
   }
 
-  // Get template for sticker count
-  const { data: template } = await supabase
-    .from("pack_templates")
-    .select("sticker_count")
-    .eq("id", session.pack_template_id)
-    .maybeSingle();
-
-  const stickerCount = template?.sticker_count || 4;
+  // Get sticker count from pack_content_sets
+  let stickerCount = 9; // default
+  if (session.pack_content_set_id) {
+    const { data: contentSet } = await supabase
+      .from("pack_content_sets")
+      .select("sticker_count")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (contentSet?.sticker_count) {
+      stickerCount = contentSet.sticker_count;
+    }
+  }
   const remainingCredits = stickerCount - 1; // already paid 1 for preview
 
   // Check credits
@@ -3404,7 +3526,7 @@ bot.action("pack_approve", async (ctx) => {
     message: "Pack approved",
     details: {
       user: `@${user.username || user.telegram_id}`,
-      template: session.pack_template_id,
+      template: session.pack_content_set_id || null,
       batchId: session.pack_batch_id,
       credits: stickerCount,
     },
@@ -3495,7 +3617,7 @@ bot.action("pack_regenerate", async (ctx) => {
     message: "Pack preview regenerated",
     details: {
       user: `@${user.username || user.telegram_id}`,
-      template: session.pack_template_id,
+      template: session.pack_content_set_id || null,
       batchId: session.pack_batch_id,
     },
   }).catch(console.error);
@@ -3552,6 +3674,121 @@ bot.action("pack_cancel", async (ctx) => {
     .eq("id", session.id);
 
   await ctx.reply(await getText(lang, "pack.cancelled"), getMainMenuKeyboard(lang));
+});
+
+// Callback: pack_new_photo — user chose to use new photo in pack flow
+bot.action("pack_new_photo", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const session = await getPackFlowSession(user.id);
+  if (!session || !["wait_pack_carousel", "wait_pack_preview_payment"].includes(session.state)) {
+    return;
+  }
+
+  const newPhotoFileId = session.pending_photo_file_id;
+  if (!newPhotoFileId) {
+    await ctx.reply(lang === "ru" ? "Фото не найдено, пришли ещё раз." : "Photo not found, please send again.");
+    return;
+  }
+
+  const packPhotos = Array.isArray(session.photos) ? [...session.photos] : [];
+  if (!packPhotos.includes(newPhotoFileId)) {
+    packPhotos.push(newPhotoFileId);
+  }
+
+  if (session.state === "wait_pack_carousel") {
+    // Update photo and go to style selection
+    await supabase
+      .from("sessions")
+      .update({
+        photos: [newPhotoFileId],
+        current_photo_file_id: newPhotoFileId,
+        pending_photo_file_id: null,
+        state: "wait_pack_preview_payment",
+        is_active: true,
+      })
+      .eq("id", session.id);
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
+  } else if (session.state === "wait_pack_preview_payment") {
+    // Update photo and stay on style selection
+    await supabase
+      .from("sessions")
+      .update({
+        photos: packPhotos,
+        current_photo_file_id: newPhotoFileId,
+        pending_photo_file_id: null,
+        is_active: true,
+      })
+      .eq("id", session.id);
+    const msg = lang === "ru" ? "Фото обновлено. Выбери стиль пака ниже 👇" : "Photo updated. Choose pack style below 👇";
+    await ctx.reply(msg, getMainMenuKeyboard(lang));
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
+  }
+});
+
+// Callback: pack_keep_photo — user chose to keep current photo in pack flow
+bot.action("pack_keep_photo", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+
+  const session = await getPackFlowSession(user.id);
+  if (!session || !["wait_pack_carousel", "wait_pack_preview_payment"].includes(session.state)) {
+    return;
+  }
+
+  // Clear pending photo and stay on current step
+  await supabase
+    .from("sessions")
+    .update({
+      pending_photo_file_id: null,
+      is_active: true,
+    })
+    .eq("id", session.id);
+
+  if (session.state === "wait_pack_carousel") {
+    // Show carousel again
+    // Get all active content sets (no longer filtered by pack_template_id)
+    const { data: contentSets } = await supabase
+      .from("pack_content_sets")
+      .select("*")
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true });
+    if (contentSets?.length) {
+      const set = contentSets[session.pack_carousel_index ?? 0] || contentSets[0];
+      const setName = lang === "ru" ? set.name_ru : set.name_en;
+      const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+      const intro = await getText(lang, "pack.carousel_intro");
+      const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
+      const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: "◀️", callback_data: "pack_carousel_prev" },
+            { text: `${(session.pack_carousel_index ?? 0) + 1}/${contentSets.length}`, callback_data: "pack_carousel_noop" },
+            { text: "▶️", callback_data: "pack_carousel_next" },
+          ],
+          [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+        ],
+      };
+      await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+    }
+  } else if (session.state === "wait_pack_preview_payment") {
+    // Show style selection again
+    const msg = lang === "ru" ? "Хорошо, работаем с текущим фото! Выбери стиль пака ниже 👇" : "Ok, keeping the current photo! Choose pack style below 👇";
+    await ctx.reply(msg, getMainMenuKeyboard(lang));
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
+  }
 });
 
 // Text handler (style description)

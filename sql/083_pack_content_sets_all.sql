@@ -20,7 +20,7 @@ WHERE pack_template_id = 'couple_v1'
 INSERT INTO pack_content_sets (
   id, pack_template_id, name_ru, name_en,
   carousel_description_ru, carousel_description_en,
-  labels, labels_en, scene_descriptions, sort_order, is_active, mood
+  labels, labels_en, scene_descriptions, sticker_count, sort_order, is_active, mood
 ) VALUES (
   'romance',
   'couple_v1',
@@ -41,6 +41,7 @@ INSERT INTO pack_content_sets (
     "man holding out red gift box wrapped with white ribbon",
     "man with arm around woman, both smiling at camera, together forever"
   ]'::jsonb,
+  9,
   1,
   true,
   'romance'
@@ -52,6 +53,7 @@ INSERT INTO pack_content_sets (
   labels = EXCLUDED.labels,
   labels_en = EXCLUDED.labels_en,
   scene_descriptions = EXCLUDED.scene_descriptions,
+  sticker_count = EXCLUDED.sticker_count,
   sort_order = EXCLUDED.sort_order,
   is_active = EXCLUDED.is_active,
   mood = EXCLUDED.mood;
@@ -60,7 +62,7 @@ INSERT INTO pack_content_sets (
 INSERT INTO pack_content_sets (
   id, pack_template_id, name_ru, name_en,
   carousel_description_ru, carousel_description_en,
-  labels, labels_en, scene_descriptions, sort_order, is_active, mood
+  labels, labels_en, scene_descriptions, sticker_count, sort_order, is_active, mood
 ) VALUES (
   'everyday',
   'couple_v1',
@@ -68,6 +70,48 @@ INSERT INTO pack_content_sets (
   'Everyday',
   'Домашние ситуации: спим?, где еда?, вырубайся, устал, диван, мимими.',
   'Home vibes: sleep?, where is food?, pass out, tired, couch, aww.',
+  '["Спим?", "Где еда?", "Вырубайся", "Устал", "Диван", "Мимими", "Обнимашки", "Кофе?", "Тихий час"]'::jsonb,
+  '["Sleep?", "Where food?", "Pass out", "Tired", "Couch", "Aww", "Cuddles", "Coffee?", "Quiet time"]'::jsonb,
+  '[
+    "person on couch yawning with eyes closed, head tilted back, sleeping vibe",
+    "person in kitchen standing at open fridge looking inside, curious expression",
+    "person on couch dozing off, relaxed smile",
+    "person exhausted slumping on sofa, tired expression",
+    "person cuddling under blanket on couch, cozy",
+    "close-up of person making cute kissy face at camera",
+    "person hugging pillow on couch, cozy",
+    "person holding coffee mug, taking a sip, morning vibe",
+    "person lying on bed resting, peaceful expression"
+  ]'::jsonb,
+  9,
+  2,
+  true,
+  'everyday'
+) ON CONFLICT (id) DO UPDATE SET
+  name_ru = EXCLUDED.name_ru,
+  name_en = EXCLUDED.name_en,
+  carousel_description_ru = EXCLUDED.carousel_description_ru,
+  carousel_description_en = EXCLUDED.carousel_description_en,
+  labels = EXCLUDED.labels,
+  labels_en = EXCLUDED.labels_en,
+  scene_descriptions = EXCLUDED.scene_descriptions,
+  sticker_count = EXCLUDED.sticker_count,
+  sort_order = EXCLUDED.sort_order,
+  is_active = EXCLUDED.is_active,
+  mood = EXCLUDED.mood;
+
+-- 2.5. Для пары (быт и уют для двух персонажей)
+INSERT INTO pack_content_sets (
+  id, pack_template_id, name_ru, name_en,
+  carousel_description_ru, carousel_description_en,
+  labels, labels_en, scene_descriptions, sticker_count, sort_order, is_active, mood
+) VALUES (
+  'couple_everyday',
+  'couple_v1',
+  'Для пары',
+  'For couple',
+  'Домашние ситуации для двоих: спим?, где еда?, вырубайся, устал, диван, мимими.',
+  'Home vibes for two: sleep?, where is food?, pass out, tired, couch, aww.',
   '["Спим?", "Где еда?", "Вырубайся", "Устал", "Диван", "Мимими", "Обнимашки", "Кофе?", "Тихий час"]'::jsonb,
   '["Sleep?", "Where food?", "Pass out", "Tired", "Couch", "Aww", "Cuddles", "Coffee?", "Quiet time"]'::jsonb,
   '[
@@ -81,7 +125,8 @@ INSERT INTO pack_content_sets (
     "man holding two coffee mugs, offering one to woman",
     "both lying on bed resting, peaceful"
   ]'::jsonb,
-  2,
+  9,
+  2.5,
   true,
   'everyday'
 ) ON CONFLICT (id) DO UPDATE SET
@@ -92,6 +137,7 @@ INSERT INTO pack_content_sets (
   labels = EXCLUDED.labels,
   labels_en = EXCLUDED.labels_en,
   scene_descriptions = EXCLUDED.scene_descriptions,
+  sticker_count = EXCLUDED.sticker_count,
   sort_order = EXCLUDED.sort_order,
   is_active = EXCLUDED.is_active,
   mood = EXCLUDED.mood;
@@ -100,7 +146,7 @@ INSERT INTO pack_content_sets (
 INSERT INTO pack_content_sets (
   id, pack_template_id, name_ru, name_en,
   carousel_description_ru, carousel_description_en,
-  labels, labels_en, scene_descriptions, sort_order, is_active, mood
+  labels, labels_en, scene_descriptions, sticker_count, sort_order, is_active, mood
 ) VALUES (
   'humor',
   'couple_v1',
@@ -121,6 +167,7 @@ INSERT INTO pack_content_sets (
     "both nodding with exaggerated serious faces",
     "woman with hand over man mouth, both laughing"
   ]'::jsonb,
+  9,
   3,
   true,
   'humor'
@@ -132,6 +179,7 @@ INSERT INTO pack_content_sets (
   labels = EXCLUDED.labels,
   labels_en = EXCLUDED.labels_en,
   scene_descriptions = EXCLUDED.scene_descriptions,
+  sticker_count = EXCLUDED.sticker_count,
   sort_order = EXCLUDED.sort_order,
   is_active = EXCLUDED.is_active,
   mood = EXCLUDED.mood;
@@ -140,7 +188,7 @@ INSERT INTO pack_content_sets (
 INSERT INTO pack_content_sets (
   id, pack_template_id, name_ru, name_en,
   carousel_description_ru, carousel_description_en,
-  labels, labels_en, scene_descriptions, sort_order, is_active, mood
+  labels, labels_en, scene_descriptions, sticker_count, sort_order, is_active, mood
 ) VALUES (
   'support',
   'couple_v1',
@@ -161,6 +209,7 @@ INSERT INTO pack_content_sets (
     "close-up man confident smile",
     "both with raised fists together, team pose"
   ]'::jsonb,
+  9,
   4,
   true,
   'support'
@@ -172,6 +221,7 @@ INSERT INTO pack_content_sets (
   labels = EXCLUDED.labels,
   labels_en = EXCLUDED.labels_en,
   scene_descriptions = EXCLUDED.scene_descriptions,
+  sticker_count = EXCLUDED.sticker_count,
   sort_order = EXCLUDED.sort_order,
   is_active = EXCLUDED.is_active,
   mood = EXCLUDED.mood;
@@ -180,7 +230,7 @@ INSERT INTO pack_content_sets (
 INSERT INTO pack_content_sets (
   id, pack_template_id, name_ru, name_en,
   carousel_description_ru, carousel_description_en,
-  labels, labels_en, scene_descriptions, sort_order, is_active, mood
+  labels, labels_en, scene_descriptions, sticker_count, sort_order, is_active, mood
 ) VALUES (
   'sweet',
   'couple_v1',
@@ -201,6 +251,7 @@ INSERT INTO pack_content_sets (
     "couple nose to nose, playful affection",
     "woman resting head on man chest, peaceful"
   ]'::jsonb,
+  9,
   5,
   true,
   'romance'
@@ -212,6 +263,7 @@ INSERT INTO pack_content_sets (
   labels = EXCLUDED.labels,
   labels_en = EXCLUDED.labels_en,
   scene_descriptions = EXCLUDED.scene_descriptions,
+  sticker_count = EXCLUDED.sticker_count,
   sort_order = EXCLUDED.sort_order,
   is_active = EXCLUDED.is_active,
   mood = EXCLUDED.mood;
@@ -220,7 +272,7 @@ INSERT INTO pack_content_sets (
 INSERT INTO pack_content_sets (
   id, pack_template_id, name_ru, name_en,
   carousel_description_ru, carousel_description_en,
-  labels, labels_en, scene_descriptions, sort_order, is_active, mood
+  labels, labels_en, scene_descriptions, sticker_count, sort_order, is_active, mood
 ) VALUES (
   'sass',
   'couple_v1',
@@ -241,6 +293,7 @@ INSERT INTO pack_content_sets (
     "woman with finger to chin, fake thinking pose",
     "both with deadpan expressions, arms crossed"
   ]'::jsonb,
+  9,
   6,
   true,
   'sarcasm'
@@ -252,6 +305,7 @@ INSERT INTO pack_content_sets (
   labels = EXCLUDED.labels,
   labels_en = EXCLUDED.labels_en,
   scene_descriptions = EXCLUDED.scene_descriptions,
+  sticker_count = EXCLUDED.sticker_count,
   sort_order = EXCLUDED.sort_order,
   is_active = EXCLUDED.is_active,
   mood = EXCLUDED.mood;
@@ -260,7 +314,7 @@ INSERT INTO pack_content_sets (
 INSERT INTO pack_content_sets (
   id, pack_template_id, name_ru, name_en,
   carousel_description_ru, carousel_description_en,
-  labels, labels_en, scene_descriptions, sort_order, is_active, mood
+  labels, labels_en, scene_descriptions, sticker_count, sort_order, is_active, mood
 ) VALUES (
   'reactions',
   'couple_v1',
@@ -281,6 +335,7 @@ INSERT INTO pack_content_sets (
     "man nodding with neutral okay expression",
     "woman waving at camera, friendly hello"
   ]'::jsonb,
+  9,
   7,
   true,
   'reactions'
@@ -292,6 +347,7 @@ INSERT INTO pack_content_sets (
   labels = EXCLUDED.labels,
   labels_en = EXCLUDED.labels_en,
   scene_descriptions = EXCLUDED.scene_descriptions,
+  sticker_count = EXCLUDED.sticker_count,
   sort_order = EXCLUDED.sort_order,
   is_active = EXCLUDED.is_active,
   mood = EXCLUDED.mood;
@@ -300,7 +356,7 @@ INSERT INTO pack_content_sets (
 INSERT INTO pack_content_sets (
   id, pack_template_id, name_ru, name_en,
   carousel_description_ru, carousel_description_en,
-  labels, labels_en, scene_descriptions, sort_order, is_active, mood
+  labels, labels_en, scene_descriptions, sticker_count, sort_order, is_active, mood
 ) VALUES (
   'holiday',
   'couple_v1',
@@ -321,6 +377,7 @@ INSERT INTO pack_content_sets (
     "both with party hats or celebration props",
     "couple hugging, festive confetti around"
   ]'::jsonb,
+  9,
   8,
   true,
   'holiday'
@@ -332,6 +389,7 @@ INSERT INTO pack_content_sets (
   labels = EXCLUDED.labels,
   labels_en = EXCLUDED.labels_en,
   scene_descriptions = EXCLUDED.scene_descriptions,
+  sticker_count = EXCLUDED.sticker_count,
   sort_order = EXCLUDED.sort_order,
   is_active = EXCLUDED.is_active,
   mood = EXCLUDED.mood;
