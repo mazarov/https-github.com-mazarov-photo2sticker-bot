@@ -1,3 +1,5 @@
+import axios from "axios";
+import FormData from "form-data";
 import { config } from "../config";
 
 type AlertType = 
@@ -259,38 +261,43 @@ export async function sendNotification(options: NotificationOptions): Promise<vo
   }
 }
 
-/** Send pack preview image to alert channel with "Make pack example" button (for this style). */
+/** Send pack preview image to alert channel with "Make pack example" button when styleId is set. */
 export async function sendPackPreviewAlert(
-  styleId: string,
+  styleId: string | null,
   imageBuffer: Buffer,
   details?: { user?: string; batchId?: string }
 ): Promise<void> {
   const channelId = config.alertChannelId;
   if (!channelId) return;
 
-  const caption = `📦 Pack preview\nStyle: ${styleId}${details?.user ? `\nUser: ${details.user}` : ""}${details?.batchId ? `\nBatch: ${details.batchId}` : ""}`;
+  const caption = `📦 Pack preview\nStyle: ${styleId ?? "—"}${details?.user ? `\nUser: ${details.user}` : ""}${details?.batchId ? `\nBatch: ${details.batchId}` : ""}`;
 
   try {
-    const formData = new FormData();
-    formData.append("chat_id", channelId);
-    formData.append("caption", caption);
-    formData.append("photo", new Blob([imageBuffer], { type: "image/png" }), "pack_preview.png");
-    formData.append("reply_markup", JSON.stringify({
-      inline_keyboard: [[
-        { text: "✅ Сделать примером", callback_data: `pack_make_example:${styleId}` },
-      ]],
-    }));
+    const form = new FormData();
+    form.append("chat_id", channelId);
+    form.append("caption", caption);
+    form.append("photo", imageBuffer, {
+      filename: "pack_preview.png",
+      contentType: "image/png",
+    });
+    if (styleId) {
+      form.append("reply_markup", JSON.stringify({
+        inline_keyboard: [[
+          { text: "✅ Сделать примером", callback_data: `pack_make_example:${styleId}` },
+        ]],
+      }));
+    }
 
-    const response = await fetch(
+    const response = await axios.post(
       `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`,
-      { method: "POST", body: formData }
+      form,
+      { headers: form.getHeaders(), timeout: 30000 }
     );
 
-    if (!response.ok) {
-      const err = await response.text();
-      console.error("[Alert] sendPackPreviewAlert failed:", err);
+    if (!response.data?.ok) {
+      console.error("[Alert] sendPackPreviewAlert failed:", response.data);
     }
-  } catch (err) {
-    console.error("[Alert] sendPackPreviewAlert error:", err);
+  } catch (err: any) {
+    console.error("[Alert] sendPackPreviewAlert error:", err?.response?.data || err);
   }
 }

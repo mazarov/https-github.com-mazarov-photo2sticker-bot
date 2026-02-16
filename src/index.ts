@@ -2226,7 +2226,16 @@ bot.on("photo", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
+  let session = await getActiveSession(user.id);
+  // Prefer pack flow session when user is in pack flow (getActiveSession may return assistant session)
+  const packStates: string[] = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "generating_pack_preview", "wait_pack_approval", "processing_pack"];
+  if (!session?.state || !packStates.includes(session.state)) {
+    const packSession = await getPackFlowSession(user.id);
+    if (packSession) {
+      session = packSession;
+      console.log("Photo handler: using pack session for photo", session.id, "state:", session.state);
+    }
+  }
   console.log("Photo handler - session:", session?.id, "state:", session?.state);
   if (!session?.id) {
     await ctx.reply(await getText(lang, "start.need_start"));
@@ -2506,6 +2515,48 @@ bot.on("photo", async (ctx) => {
 
     // Send style selector (pack flow: always show Back to poses)
     await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
+    return;
+  }
+
+  // === Pack flow: photo sent on carousel step — use as pack photo and go to style selection ===
+  if (session.state === "wait_pack_carousel") {
+    console.log("Pack carousel: photo received, session:", session.id);
+    await supabase
+      .from("sessions")
+      .update({
+        photos: [photo.file_id],
+        current_photo_file_id: photo.file_id,
+        state: "wait_pack_preview_payment",
+        is_active: true,
+      })
+      .eq("id", session.id);
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
+    return;
+  }
+
+  // === Pack flow: photo sent on style step — update photo and stay on style selection ===
+  if (session.state === "wait_pack_preview_payment") {
+    console.log("Pack style step: photo updated, session:", session.id);
+    const packPhotos = Array.isArray(session.photos) ? [...session.photos] : [];
+    packPhotos.push(photo.file_id);
+    await supabase
+      .from("sessions")
+      .update({
+        photos: packPhotos,
+        current_photo_file_id: photo.file_id,
+        is_active: true,
+      })
+      .eq("id", session.id);
+    const msg = lang === "ru" ? "Фото обновлено. Выбери стиль пака ниже 👇" : "Photo updated. Choose pack style below 👇";
+    await ctx.reply(msg, getMainMenuKeyboard(lang));
+    await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true });
+    return;
+  }
+
+  // === Pack flow: other states — don't switch to assistant, just acknowledge ===
+  if (["generating_pack_preview", "wait_pack_approval", "processing_pack"].includes(session.state)) {
+    const msg = lang === "ru" ? "Фото сохранено. Пак в работе — дождись завершения." : "Photo saved. Pack in progress — please wait.";
+    await ctx.reply(msg, getMainMenuKeyboard(lang));
     return;
   }
 
@@ -3131,6 +3182,9 @@ bot.action("pack_preview_pay", async (ctx) => {
     return;
   }
 
+  // Progress message immediately so user sees feedback (before slow generatePrompt/DB)
+  let progressMsg = await ctx.reply(await getText(lang, "pack.progress_preparing"));
+
   // Same prompt as single sticker: agent + composition suffix (unified flow)
   let packPromptFinal: string | null = null;
   let packStyleUserInput: string | null = null;
@@ -3157,6 +3211,7 @@ bot.action("pack_preview_pay", async (ctx) => {
 
   // Check credits
   if ((user.credits || 0) < 1) {
+    try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
     await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
     await sendBuyCreditsMenu(ctx, user);
     return;
@@ -3169,6 +3224,7 @@ bot.action("pack_preview_pay", async (ctx) => {
   });
 
   if (!deducted) {
+    try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
     await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
     await sendBuyCreditsMenu(ctx, user);
     return;
@@ -3191,6 +3247,7 @@ bot.action("pack_preview_pay", async (ctx) => {
 
   if (batchErr || !batch) {
     console.error("Failed to create pack_batch:", batchErr?.message);
+    try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
     // Refund credit
     const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
     await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
@@ -3212,6 +3269,7 @@ bot.action("pack_preview_pay", async (ctx) => {
     .eq("id", session.id);
   if (updateErr) {
     console.error("[pack_preview_pay] Session update failed:", updateErr.message);
+    try { if (progressMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, progressMsg.message_id); } catch (_) {}
     const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
     await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
@@ -3230,13 +3288,24 @@ bot.action("pack_preview_pay", async (ctx) => {
     env: config.appEnv,
   });
 
-  // Send progress message
-  const msg = await ctx.reply(await getText(lang, "pack.progress_generating"));
-  if (msg?.message_id && ctx.chat?.id) {
+  // Update progress message to full text (worker will update this message further)
+  const progressText = await getText(lang, "pack.progress_generating");
+  if (progressMsg?.message_id && ctx.chat?.id) {
+    try {
+      await ctx.telegram.editMessageText(ctx.chat.id, progressMsg.message_id, undefined, progressText);
+    } catch (_) {}
     await supabase
       .from("sessions")
-      .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
+      .update({ progress_message_id: progressMsg.message_id, progress_chat_id: ctx.chat.id })
       .eq("id", session.id);
+  } else {
+    const msg = await ctx.reply(progressText);
+    if (msg?.message_id && ctx.chat?.id) {
+      await supabase
+        .from("sessions")
+        .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
+        .eq("id", session.id);
+    }
   }
 
   // Alert

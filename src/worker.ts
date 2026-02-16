@@ -463,12 +463,10 @@ ${packTaskBlock}`
   const sheetFileId = previewResult?.file_id || "";
   console.log("[PackPreview] Preview sent, file_id:", sheetFileId?.substring(0, 30));
 
-  if (session.selected_style_id) {
-    sendPackPreviewAlert(session.selected_style_id, bufferToSend, {
-      user: `@${user.username || telegramId}`,
-      batchId: batch.id,
-    }).catch((err) => console.warn("[PackPreview] sendPackPreviewAlert failed:", err?.message));
-  }
+  sendPackPreviewAlert(session.selected_style_id ?? null, bufferToSend, {
+    user: `@${user.username || telegramId}`,
+    batchId: batch.id,
+  }).catch((err) => console.warn("[PackPreview] sendPackPreviewAlert failed:", err?.message));
 
   await supabase
     .from("sessions")

@@ -71,8 +71,8 @@ INSERT INTO pack_content_sets (
   '["Спим?", "Где еда?", "Вырубайся", "Устал", "Диван", "Мимими", "Обнимашки", "Кофе?", "Тихий час"]'::jsonb,
   '["Sleep?", "Where food?", "Pass out", "Tired", "Couch", "Aww", "Cuddles", "Coffee?", "Quiet time"]'::jsonb,
   '[
-    "man yawning with eyes closed, woman leaning on his shoulder",
-    "woman looking into open fridge, man behind her curious",
+    "both on couch, man yawning with eyes closed, woman already dozing with head on his shoulder, sleeping vibe",
+    "in kitchen, woman standing at open fridge looking inside, man behind her peeking into fridge, both standing",
     "both on couch, man dozing off, woman smiling",
     "man exhausted slumping on sofa, woman patting his head",
     "couple cuddling on couch under blanket",
