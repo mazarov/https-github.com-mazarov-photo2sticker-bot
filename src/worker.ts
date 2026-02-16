@@ -452,11 +452,14 @@ ${packTaskBlock}`
   });
   const approveBtn = await getText(lang, "btn.approve_pack", { price: remainingCredits });
   const regenerateBtn = await getText(lang, "btn.regenerate_pack");
+  const sessionRef = Number.isInteger(Number(session.session_rev))
+    ? `${session.id}:${session.session_rev}`
+    : session.id;
 
   const previewResult = await sendPhoto(telegramId, bufferToSend, caption, {
     inline_keyboard: [
-      [{ text: approveBtn, callback_data: `pack_approve:${session.id}` }],
-      [{ text: regenerateBtn, callback_data: `pack_regenerate:${session.id}` }],
+      [{ text: approveBtn, callback_data: `pack_approve:${sessionRef}` }],
+      [{ text: regenerateBtn, callback_data: `pack_regenerate:${sessionRef}` }],
     ],
   });
 

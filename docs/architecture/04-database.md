@@ -72,6 +72,8 @@ erDiagram
 | `user_input` | text | — | Ввод пользователя |
 | `progress_message_id` | bigint | — | ID progress-сообщения |
 | `progress_chat_id` | bigint | — | Chat ID для progress |
+| `ui_message_id` | bigint | — | Message ID текущего UI-экрана flow (для fallback edit) |
+| `ui_chat_id` | bigint | — | Chat ID текущего UI-экрана flow |
 | `pack_ideas` | jsonb | — | Идеи для пака |
 | `current_idea_index` | int | 0 | Текущая идея |
 | `custom_idea` | jsonb | — | Кастомная идея |
@@ -83,6 +85,8 @@ erDiagram
 | `pack_content_set_id` | text | — | FK → pack_content_sets (выбранный набор подписей/сцен) |
 | `pack_carousel_index` | int | — | Индекс текущей карточки в карусели наборов |
 | `pack_sheet_file_id` | text | — | file_id сгенерированного листа превью |
+| `flow_kind` | text | — | Вид потока (`single`/`assistant`/`pack`) |
+| `session_rev` | int | 1 | Ревизия сессии для stale-callback защиты |
 | `env` | text | 'prod' | Окружение |
 
 ### `pack_content_sets` — Наборы подписей и сцен для пака
@@ -191,6 +195,10 @@ Presets: waving, thumbs_up, facepalm, praying, flexing, shrugging, peace, heart_
 | `updated_at` | timestamptz | Время обновления |
 
 Используется для имён моделей Gemini и другой конфигурации без передеплоя.
+
+Ключи для Session Router rollout:
+- `session_router_enabled` — включение роутера резолва сессий
+- `strict_session_rev_enabled` — строгая проверка `callback rev` vs `sessions.session_rev`
 
 ### Вспомогательные таблицы
 

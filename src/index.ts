@@ -1541,6 +1541,49 @@ async function getPackFlowSessionById(userId: string, sessionId?: string | null)
   return data;
 }
 
+function parseCallbackSessionRef(raw?: string | null): { sessionId: string | null; rev: number | null } {
+  if (!raw) return { sessionId: null, rev: null };
+  const parts = raw.split(":");
+  const sessionId = parts[0] || null;
+  if (parts.length < 2) return { sessionId, rev: null };
+  const maybeRev = Number(parts[parts.length - 1]);
+  return Number.isInteger(maybeRev) && maybeRev > 0 ? { sessionId, rev: maybeRev } : { sessionId, rev: null };
+}
+
+function formatCallbackSessionRef(sessionId?: string | null, sessionRev?: number | null): string | null {
+  if (!sessionId) return null;
+  const rev = Number(sessionRev);
+  if (Number.isInteger(rev) && rev > 0) return `${sessionId}:${rev}`;
+  return sessionId;
+}
+
+async function isStrictSessionRevEnabled(): Promise<boolean> {
+  const value = await getAppConfig("strict_session_rev_enabled", "false");
+  return String(value).toLowerCase() === "true";
+}
+
+async function rejectPackEvent(
+  ctx: any,
+  lang: string,
+  event: string,
+  reasonCode: "session_not_found" | "wrong_state" | "stale_callback"
+) {
+  const message =
+    reasonCode === "session_not_found"
+      ? (lang === "ru"
+        ? "Сессия не найдена. Нажми «📦 Пак стикеров» и попробуй снова."
+        : "Session not found. Tap “📦 Sticker pack” and try again.")
+      : reasonCode === "stale_callback"
+        ? (lang === "ru"
+          ? "Кнопка устарела. Используй актуальное сообщение."
+          : "This button is stale. Please use the latest message.")
+        : (lang === "ru"
+          ? "Это действие сейчас недоступно в текущем шаге."
+          : "This action is not available in the current step.");
+  console.warn("[pack.reject]", { event, reasonCode, userId: ctx.from?.id, callbackData: (ctx.callbackQuery as any)?.data });
+  await ctx.answerCbQuery(message, { show_alert: false }).catch(() => {});
+}
+
 async function resolvePackSessionForEvent(
   userId: string,
   expectedStates: string[],
@@ -2525,6 +2568,8 @@ bot.on("photo", async (ctx) => {
         current_photo_file_id: photo.file_id,
         state: "wait_pack_preview_payment",
         is_active: true,
+        flow_kind: "pack",
+        session_rev: (session.session_rev || 1) + 1,
       })
       .eq("id", session.id);
 
@@ -2721,6 +2766,7 @@ async function sendPackStyleSelectionStep(
         ? await getPackFlowSessionById(user.id, options.sessionId)
         : await getPackFlowSession(user.id);
       targetSessionId = session?.id || targetSessionId;
+      const targetSessionRef = formatCallbackSessionRef(targetSessionId, session?.session_rev);
       if (session?.pack_content_set_id) {
         const { data: contentSet } = await supabase
           .from("pack_content_sets")
@@ -2732,6 +2778,19 @@ async function sendPackStyleSelectionStep(
           headerText += "\n\n" + (await getText(lang, "pack.selected_set", { name: setName }));
         }
       }
+      const bottomButton = options?.useBackButton
+        ? [{ text: `◀️ ${backBtn}`, callback_data: targetSessionRef ? `pack_back_to_carousel:${targetSessionRef}` : "pack_back_to_carousel" }]
+        : [{ text: cancelBtn, callback_data: targetSessionRef ? `pack_cancel:${targetSessionRef}` : "pack_cancel" }];
+
+      return sendStyleKeyboardFlat(ctx, lang, messageId, {
+        includeCustom: false,
+        headerText,
+        selectedStyleId: selectedStyleId ?? undefined,
+        extraButtons: [
+          [{ text: previewBtn, callback_data: targetSessionRef ? `pack_preview_pay:${targetSessionRef}` : "pack_preview_pay" }],
+          bottomButton,
+        ],
+      });
     }
   }
 
@@ -2811,6 +2870,8 @@ bot.hears(["📦 Пак стикеров", "📦 Sticker pack"], async (ctx) => 
       user_id: user.id,
       state: "wait_pack_carousel",
       is_active: true,
+      flow_kind: "pack",
+      session_rev: 1,
       pack_template_id: templateId,
       pack_carousel_index: 0,
       selected_style_id: selectedPackStyleId,
@@ -2841,7 +2902,15 @@ bot.hears(["📦 Пак стикеров", "📦 Sticker pack"], async (ctx) => 
   };
   const msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
   if (msg?.message_id && ctx.chat?.id) {
-    await supabase.from("sessions").update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id }).eq("id", session.id);
+    await supabase
+      .from("sessions")
+      .update({
+        progress_message_id: msg.message_id,
+        progress_chat_id: ctx.chat.id,
+        ui_message_id: msg.message_id,
+        ui_chat_id: ctx.chat.id,
+      })
+      .eq("id", session.id);
   }
 });
 
@@ -2902,6 +2971,8 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
       user_id: user.id,
       state: initialState,
       is_active: true,
+      flow_kind: "pack",
+      session_rev: 1,
       pack_template_id: templateId,
       selected_style_id: selectedPackStyleId,
       current_photo_file_id: existingPhoto,
@@ -2966,6 +3037,8 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
       user_id: user.id,
       state: "wait_pack_carousel",
       is_active: true,
+      flow_kind: "pack",
+      session_rev: 1,
       pack_template_id: templateId,
       pack_carousel_index: 0,
       selected_style_id: selectedPackStyleId,
@@ -3000,6 +3073,8 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
     .update({
       progress_message_id: ctx.callbackQuery?.message?.message_id,
       progress_chat_id: ctx.chat?.id,
+      ui_message_id: ctx.callbackQuery?.message?.message_id,
+      ui_chat_id: ctx.chat?.id,
     })
     .eq("id", session.id);
 });
@@ -3082,6 +3157,8 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
       current_photo_file_id: existingPhoto || null,
       photos: existingPhoto ? [existingPhoto] : [],
       is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
     })
     .eq("id", session.id);
 
@@ -3100,14 +3177,19 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
-  const explicitSessionId = ctx.match?.[1] || null;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_preview_payment", "wait_pack_carousel"],
     explicitSessionId
   );
-  if (!session) {
-    console.log("[pack_back_to_carousel] Session resolve failed:", reasonCode, "explicitSessionId:", explicitSessionId);
+  if (!session || reasonCode === "wrong_state") {
+    await rejectPackEvent(ctx, lang, "pack_back_to_carousel", reasonCode || "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectPackEvent(ctx, lang, "pack_back_to_carousel", "stale_callback");
     return;
   }
 
@@ -3121,7 +3203,13 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
 
   await supabase
     .from("sessions")
-    .update({ state: "wait_pack_carousel", pack_carousel_index: 0, is_active: true })
+    .update({
+      state: "wait_pack_carousel",
+      pack_carousel_index: 0,
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
+    })
     .eq("id", session.id);
 
   const set = contentSets[0];
@@ -3140,6 +3228,23 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
     ],
   };
+  const callbackMsgId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+  const callbackChatId = (ctx.callbackQuery as any)?.message?.chat?.id as number | undefined;
+  if (callbackMsgId && callbackChatId) {
+    try {
+      await ctx.telegram.editMessageText(callbackChatId, callbackMsgId, undefined, carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+      await supabase
+        .from("sessions")
+        .update({
+          progress_message_id: callbackMsgId,
+          progress_chat_id: callbackChatId,
+          ui_message_id: callbackMsgId,
+          ui_chat_id: callbackChatId,
+        })
+        .eq("id", session.id);
+      return;
+    } catch (_) {}
+  }
   if (session.progress_message_id && session.progress_chat_id) {
     try {
       await ctx.telegram.editMessageText(session.progress_chat_id, session.progress_message_id, undefined, carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
@@ -3147,7 +3252,15 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
   } else {
     const sent = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
     if (sent?.message_id && ctx.chat?.id) {
-      await supabase.from("sessions").update({ progress_message_id: sent.message_id, progress_chat_id: ctx.chat.id }).eq("id", session.id);
+      await supabase
+        .from("sessions")
+        .update({
+          progress_message_id: sent.message_id,
+          progress_chat_id: ctx.chat.id,
+          ui_message_id: sent.message_id,
+          ui_chat_id: ctx.chat.id,
+        })
+        .eq("id", session.id);
     }
   }
 });
@@ -3162,18 +3275,19 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const explicitSessionId = ctx.match?.[1] || null;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_preview_payment", "generating_pack_preview", "wait_pack_carousel"],
     explicitSessionId
   );
-  if (!session) {
-    console.error("[pack_preview_pay] Session resolve failed:", reasonCode, "explicitSessionId:", explicitSessionId);
-    const msg = lang === "ru"
-      ? "Сессия не найдена. Нажми «📦 Пак стикеров» и попробуй снова."
-      : "Session not found. Tap “📦 Sticker pack” and try again.";
-    await ctx.answerCbQuery(msg, { show_alert: false }).catch(() => {});
+  if (!session || reasonCode === "wrong_state") {
+    await rejectPackEvent(ctx, lang, "pack_preview_pay", reasonCode || "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectPackEvent(ctx, lang, "pack_preview_pay", "stale_callback");
     return;
   }
 
@@ -3263,6 +3377,8 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     prompt_final: packPromptFinal,
     user_input: packStyleUserInput,
     is_active: true,
+    flow_kind: "pack",
+    session_rev: (session.session_rev || 1) + 1,
   };
   const { error: updateErr } = await supabase
     .from("sessions")
@@ -3293,7 +3409,12 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   if (msg?.message_id && ctx.chat?.id) {
     await supabase
       .from("sessions")
-      .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
+      .update({
+        progress_message_id: msg.message_id,
+        progress_chat_id: ctx.chat.id,
+        ui_message_id: msg.message_id,
+        ui_chat_id: ctx.chat.id,
+      })
       .eq("id", session.id);
   }
 
@@ -3319,18 +3440,19 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const explicitSessionId = ctx.match?.[1] || null;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_approval"],
     explicitSessionId
   );
-  if (!session) {
-    console.warn("[pack_approve] Session resolve failed:", reasonCode, "explicitSessionId:", explicitSessionId);
-    const msg = lang === "ru"
-      ? "Это действие больше недоступно. Открой актуальное превью."
-      : "This action is no longer available. Open the latest preview.";
-    await ctx.answerCbQuery(msg, { show_alert: false }).catch(() => {});
+  if (!session || reasonCode === "wrong_state") {
+    await rejectPackEvent(ctx, lang, "pack_approve", reasonCode || "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectPackEvent(ctx, lang, "pack_approve", "stale_callback");
     return;
   }
 
@@ -3376,7 +3498,12 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
   // Update session
   await supabase
     .from("sessions")
-    .update({ state: "processing_pack", is_active: true })
+    .update({
+      state: "processing_pack",
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
+    })
     .eq("id", session.id);
 
   // Enqueue pack_assemble job
@@ -3394,7 +3521,12 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
   if (msg?.message_id && ctx.chat?.id) {
     await supabase
       .from("sessions")
-      .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
+      .update({
+        progress_message_id: msg.message_id,
+        progress_chat_id: ctx.chat.id,
+        ui_message_id: msg.message_id,
+        ui_chat_id: ctx.chat.id,
+      })
       .eq("id", session.id);
   }
 
@@ -3420,18 +3552,19 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const explicitSessionId = ctx.match?.[1] || null;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_approval"],
     explicitSessionId
   );
-  if (!session) {
-    console.warn("[pack_regenerate] Session resolve failed:", reasonCode, "explicitSessionId:", explicitSessionId);
-    const msg = lang === "ru"
-      ? "Это действие больше недоступно. Открой актуальное превью."
-      : "This action is no longer available. Open the latest preview.";
-    await ctx.answerCbQuery(msg, { show_alert: false }).catch(() => {});
+  if (!session || reasonCode === "wrong_state") {
+    await rejectPackEvent(ctx, lang, "pack_regenerate", reasonCode || "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectPackEvent(ctx, lang, "pack_regenerate", "stale_callback");
     return;
   }
 
@@ -3478,6 +3611,8 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
       pack_sheet_file_id: null,
       pack_sheet_cleaned: false,
       is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
     })
     .eq("id", session.id);
 
@@ -3495,7 +3630,12 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
   if (msg?.message_id && ctx.chat?.id) {
     await supabase
       .from("sessions")
-      .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
+      .update({
+        progress_message_id: msg.message_id,
+        progress_chat_id: ctx.chat.id,
+        ui_message_id: msg.message_id,
+        ui_chat_id: ctx.chat.id,
+      })
       .eq("id", session.id);
   }
 
@@ -3525,7 +3665,12 @@ bot.action("pack_back", async (ctx) => {
 
   await supabase
     .from("sessions")
-    .update({ state: "wait_pack_preview_payment", is_active: true })
+    .update({
+      state: "wait_pack_preview_payment",
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
+    })
     .eq("id", session.id);
   try { await ctx.deleteMessage(); } catch {}
   await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
@@ -3541,14 +3686,19 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const explicitSessionId = ctx.match?.[1] || null;
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_approval", "wait_pack_preview_payment", "wait_pack_carousel"],
     explicitSessionId
   );
-  if (!session) {
-    console.warn("[pack_cancel] Session resolve failed:", reasonCode, "explicitSessionId:", explicitSessionId);
+  if (!session || reasonCode === "wrong_state") {
+    await rejectPackEvent(ctx, lang, "pack_cancel", reasonCode || "session_not_found");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectPackEvent(ctx, lang, "pack_cancel", "stale_callback");
     return;
   }
 
@@ -3563,7 +3713,12 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
   // Deactivate session
   await supabase
     .from("sessions")
-    .update({ state: "canceled", is_active: false })
+    .update({
+      state: "canceled",
+      is_active: false,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
+    })
     .eq("id", session.id);
 
   await ctx.reply(await getText(lang, "pack.cancelled"), getMainMenuKeyboard(lang));
