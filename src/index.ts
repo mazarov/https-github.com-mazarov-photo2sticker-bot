@@ -10863,7 +10863,9 @@ bot.on("successful_payment", async (ctx) => {
             .eq("id", transaction.id);
           console.log("[metrika] Conversion sent for yclid:", resolvedYclid, "tx:", transaction.id, "target:", target, "rub:", priceRub);
         } catch (err: any) {
-          console.error("[metrika] Failed to send conversion:", err.message);
+          const status = err.response?.status;
+          const body = err.response?.data;
+          console.error("[metrika] Failed to send conversion:", err.message, "status:", status, "response:", body != null ? JSON.stringify(body).slice(0, 400) : "");
           try {
             await supabase
               .from("transactions")

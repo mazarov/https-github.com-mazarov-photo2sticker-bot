@@ -1,4 +1,5 @@
 import axios from "axios";
+import FormData from "form-data";
 import { config } from "../config";
 
 export interface ConversionParams {
@@ -47,21 +48,28 @@ export async function sendYandexConversion(params: ConversionParams): Promise<vo
     return;
   }
 
-  const datetime = new Date().toISOString().replace("T", " ").slice(0, 19);
+  // CSV: UserId = yclid, DateTime = Unix timestamp (секунды), см. https://yandex.ru/support/metrica/data/offline-conversion-data.html
+  const dateTimeUnix = Math.floor(Date.now() / 1000);
   const csv = [
     "UserId,Target,DateTime,Price,Currency",
-    `${params.yclid},${params.target},${datetime},${params.revenue},${params.currency}`,
+    `${params.yclid},${params.target},${dateTimeUnix},${params.revenue},${params.currency}`,
   ].join("\n");
 
   const url = `https://api-metrika.yandex.net/management/v1/counter/${counterId}/offline_conversions/upload`;
 
-  const response = await axios.post(url, csv, {
+  // API требует multipart/form-data с полем file, не сырой CSV
+  const form = new FormData();
+  form.append("file", Buffer.from(csv, "utf8"), { filename: "conversions.csv" });
+
+  const response = await axios.post(url, form, {
     headers: {
+      ...form.getHeaders(),
       Authorization: `OAuth ${token}`,
-      "Content-Type": "application/x-csv-with-header",
     },
     timeout: 10000,
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
   });
 
-  console.log("[metrika] API response status:", response.status, "data:", JSON.stringify(response.data).slice(0, 200));
+  console.log("[metrika] API response status:", response.status, "data:", JSON.stringify(response.data).slice(0, 300));
 }
