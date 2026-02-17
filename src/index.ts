@@ -9,7 +9,7 @@ import { sendAlert, sendNotification } from "./lib/alerts";
 import { getFilePath, downloadFile, sendSticker } from "./lib/telegram";
 import { addWhiteBorder, addTextToSticker } from "./lib/image-utils";
 import { getAppConfig } from "./lib/app-config";
-import { sendYandexConversion } from "./lib/yandex-metrika";
+import { sendYandexConversion, getMetrikaTargetForPack } from "./lib/yandex-metrika";
 import {
   appendSubjectLock,
   buildSubjectLockBlock,
@@ -2604,6 +2604,10 @@ bot.start(async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
+  const startPayload = getStartPayload(ctx);
+  const rawText = ctx.message?.text ?? "";
+  console.log("[start] telegramId:", telegramId, "raw message length:", rawText.length, "payload length:", startPayload?.length ?? 0, "payload preview:", startPayload ? startPayload.slice(0, 50) + (startPayload.length > 50 ? "..." : "") : "(empty)");
+
   let user = await getUser(telegramId);
   let isNewUser = false;
 
@@ -2612,11 +2616,9 @@ bot.start(async (ctx) => {
     const languageCode = ctx.from?.language_code || "";
     const lang = languageCode.toLowerCase().startsWith("ru") ? "ru" : "en";
 
-    // Parse UTM from start payload (t.me/bot?start=payload)
-    const startPayload = getStartPayload(ctx);
     const utm = parseStartPayload(startPayload);
     if (startPayload) {
-      console.log("New user - start_payload:", startPayload, "utm:", JSON.stringify(utm));
+      console.log("[start] New user - parsed utm:", JSON.stringify(utm));
     }
 
     console.log("New user - language_code:", languageCode, "-> lang:", lang);
@@ -2679,28 +2681,27 @@ bot.start(async (ctx) => {
     if (user.language_code !== currentLangCode) updates.language_code = currentLangCode || null;
 
     // Update UTM + yclid for returning users if they came via a new start link
-    const startPayload = getStartPayload(ctx);
     if (startPayload) {
       const utm = parseStartPayload(startPayload);
-      // Update UTM if empty
+      console.log("[start] Returning user - parsed utm:", JSON.stringify(utm), "current user.utm_source:", user.utm_source, "user.yclid:", user.yclid ? "set" : "empty");
       if (!user.utm_source && utm.source) {
         updates.start_payload = startPayload;
         updates.utm_source = utm.source;
         updates.utm_medium = utm.medium;
         updates.utm_campaign = utm.campaign;
         updates.utm_content = utm.content;
-        console.log("Returning user UTM update:", telegramId, "payload:", startPayload, "utm:", JSON.stringify(utm));
       }
-      // Update yclid if empty (or overwrite with fresh one for better attribution)
+      // First-click: сохраняем yclid только если ещё не был записан
       if (utm.yclid && !user.yclid) {
         updates.yclid = utm.yclid;
-        console.log("Returning user yclid update:", telegramId, "yclid:", utm.yclid);
       }
     }
 
     if (Object.keys(updates).length > 0) {
-      await supabase.from("users").update(updates).eq("id", user.id);
-      Object.assign(user, updates);
+      console.log("[start] Returning user - applying updates:", Object.keys(updates));
+      const { error: updateErr } = await supabase.from("users").update(updates).eq("id", user.id);
+      if (updateErr) console.error("[start] User update error:", updateErr);
+      else Object.assign(user, updates);
     }
   }
 
@@ -10834,14 +10835,19 @@ bot.on("successful_payment", async (ctx) => {
       message: `👤 @${finalUser.username || finalUser.telegram_id}\n📦 Пакет: ${creditedAmount} кредитов${bonusCredits > 0 ? ` (${transaction.amount}+${bonusCredits})` : ""}\n⭐ Сумма: ${transaction.price} Stars${isFirstPurchase ? "\n🆕 Первая покупка" : ""}`,
     }).catch(console.error);
 
-    // Yandex Metrika offline conversion (async, non-blocking)
-    if (finalUser.yclid && transaction.price > 0 && !transaction.yandex_conversion_sent_at) {
+    // Yandex Metrika offline conversion — по факту оплаты. yclid из users или из start_payload (fallback для пользователей, созданных до фикса парсера).
+    const resolvedYclid = finalUser.yclid || (finalUser.start_payload ? parseStartPayload(finalUser.start_payload).yclid : null);
+    if (resolvedYclid && transaction.price > 0 && !transaction.yandex_conversion_sent_at) {
       (async () => {
         try {
+          if (!finalUser.yclid && finalUser.start_payload) {
+            await supabase.from("users").update({ yclid: resolvedYclid }).eq("id", finalUser.id).catch(() => {});
+          }
           const priceRub = purchasedPack?.price_rub || Math.round(Number(transaction.price) * 1.04);
+          const target = getMetrikaTargetForPack(Number(transaction.amount), purchasedPack?.trialOnly);
           await sendYandexConversion({
-            yclid: finalUser.yclid,
-            target: "purchase",
+            yclid: resolvedYclid,
+            target,
             revenue: priceRub,
             currency: "RUB",
             orderId: transaction.id,
@@ -10853,7 +10859,7 @@ bot.on("successful_payment", async (ctx) => {
               yandex_conversion_attempts: (transaction.yandex_conversion_attempts || 0) + 1,
             })
             .eq("id", transaction.id);
-          console.log("[metrika] Conversion sent for yclid:", finalUser.yclid, "tx:", transaction.id, "rub:", priceRub);
+          console.log("[metrika] Conversion sent for yclid:", resolvedYclid, "tx:", transaction.id, "target:", target, "rub:", priceRub);
         } catch (err: any) {
           console.error("[metrika] Failed to send conversion:", err.message);
           await supabase
@@ -10870,6 +10876,9 @@ bot.on("successful_payment", async (ctx) => {
           }).catch(() => {});
         }
       })();
+    } else if (transaction.price > 0) {
+      const reason = !resolvedYclid ? "no yclid" : transaction.yandex_conversion_sent_at ? "already sent" : "unknown";
+      console.log("[metrika] Conversion skipped, tx:", transaction.id, "reason:", reason);
     }
 
     // Check if there's a pending session waiting for credits (paywall or normal)
