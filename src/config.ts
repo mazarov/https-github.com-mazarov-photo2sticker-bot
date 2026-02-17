@@ -33,6 +33,9 @@ export const config = {
   supportChannelId: process.env.SUPPORT_CHANNEL_ID || "",
   supportBotUsername: process.env.SUPPORT_BOT_USERNAME || "p2s_support_bot",
   adminIds: (process.env.ADMIN_IDS || "").split(",").map(id => parseInt(id.trim())).filter(id => !isNaN(id)),
+  // Yandex Metrika offline conversions
+  yandexMetrikaCounterId: process.env.YANDEX_METRIKA_COUNTER_ID || "",
+  yandexMetrikaToken: process.env.YANDEX_METRIKA_TOKEN || "",
   // Geo-filter: whitelist of language prefixes that get free credits
   allowedLangPrefixes: [
     // Россия + Беларусь
