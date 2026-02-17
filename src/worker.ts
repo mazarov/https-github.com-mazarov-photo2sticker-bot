@@ -499,10 +499,11 @@ async function runPackPreviewJob(job: any) {
   const styleBlockWithSubject = subjectLockBlock
     ? appendSubjectLock(styleBlock, subjectLockBlock)
     : styleBlock;
+  const subjectModeForPrompt = packSubjectProfile?.subjectMode || normalizeSubjectMode(session.object_mode ?? session.subject_mode);
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
   if (subjectFilterEnabled) {
     const setSubjectMode = normalizePackSetSubjectMode(baseContentSet?.subject_mode);
-    const subjectMode = packSubjectProfile?.subjectMode || normalizeSubjectMode(session.object_mode ?? session.subject_mode);
+    const subjectMode = subjectModeForPrompt;
     if (!isPackSetCompatibleWithSubject(setSubjectMode, subjectMode)) {
       console.warn("[PackPreview] blocked by subject-mode compatibility:", {
         setSubjectMode,
@@ -580,6 +581,18 @@ async function runPackPreviewJob(job: any) {
   const sceneList = sceneDescriptions
     .map((desc: string, i: number) => `${i + 1}. ${desc}`)
     .join("\n");
+  const sceneCardinalityGuard =
+    subjectModeForPrompt === "single"
+      ? `SUBJECT COUNT ENFORCEMENT:
+- The source contains exactly ONE main person.
+- Every scene MUST depict the same single person only.
+- If a scene description implies a couple or another person ("man and woman", "couple", "both", etc.), reinterpret it as a SOLO action with festive props/facial expression only.
+- Never add a second person, partner, or any prominent secondary character.`
+      : subjectModeForPrompt === "multi"
+        ? `SUBJECT COUNT ENFORCEMENT:
+- Keep the same two main people from source in every scene.
+- Do not add extra people or replace either person.`
+        : "";
   // Pack-only task: grid layout, scenes, format rules. Style + composition = styleBlock (same as single sticker).
   const packTaskBlock = `[TASK — PACK GRID ONLY]
 Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total).
@@ -589,6 +602,8 @@ Keep EXACT facial identity in every cell.
 
 Scenes (one per cell, left-to-right, top-to-bottom):
 ${sceneList}
+
+${sceneCardinalityGuard ? `${sceneCardinalityGuard}\n` : ""}
 
 CRITICAL RULES FOR THE GRID:
 1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF) in EVERY cell.
@@ -717,7 +732,7 @@ ${packTaskBlock}`
   // Send raw sheet as preview (no full-sheet rembg). Assemble will do per-cell rembg.
   let bufferToSend = sheetBuffer;
   if (sheetBuffer.length > TELEGRAM_PHOTO_MAX_BYTES) {
-    bufferToSend = await resizeBufferUnderMax(sheetBuffer, TELEGRAM_PHOTO_MAX_BYTES);
+    bufferToSend = Buffer.from(await resizeBufferUnderMax(sheetBuffer, TELEGRAM_PHOTO_MAX_BYTES));
     console.log("[PackPreview] Resized for Telegram limit, size:", Math.round(bufferToSend.length / 1024), "KB");
   }
 
