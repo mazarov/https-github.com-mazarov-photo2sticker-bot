@@ -1184,26 +1184,26 @@ async function startGeneration(
 // Credit packages: { credits, bonus_credits?, price_in_stars, label_ru, label_en, price_rub, adminOnly?, trialOnly?, hidden? }
 const CREDIT_PACKS = [
   { credits: 1, price: 1, price_rub: 1, label_ru: "🔧 Тест", label_en: "🔧 Test", adminOnly: true },
-  { credits: 5, bonus_credits: 4, price: 49, price_rub: 51, label_ru: "🎁 Попробуй", label_en: "🎁 Try", trialOnly: true },
+  { credits: 5, bonus_credits: 5, price: 49, price_rub: 51, label_ru: "🎁 Попробуй", label_en: "🎁 Try", trialOnly: true },
   { credits: 10, price: 75, price_rub: 78, label_ru: "⭐ Старт", label_en: "⭐ Start" },
   { credits: 30, price: 175, price_rub: 182, label_ru: "💎 Поп", label_en: "💎 Pop" },
   { credits: 100, price: 500, price_rub: 520, label_ru: "👑 Про", label_en: "👑 Pro" },
   { credits: 250, price: 1125, price_rub: 1170, label_ru: "🚀 Макс", label_en: "🚀 Max" },
   // Hidden discount packs (not shown in UI, used via direct callback for promos, abandoned carts, admin discounts)
   // -10%
-  { credits: 5, bonus_credits: 4, price: 44, price_rub: 46, label_ru: "🎁 Попробуй -10%", label_en: "🎁 Try -10%", hidden: true, trialOnly: true },
+  { credits: 5, bonus_credits: 5, price: 44, price_rub: 46, label_ru: "🎁 Попробуй -10%", label_en: "🎁 Try -10%", hidden: true, trialOnly: true },
   { credits: 10, price: 68, price_rub: 71, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
   { credits: 30, price: 158, price_rub: 164, label_ru: "💎 Поп -10%", label_en: "💎 Pop -10%", hidden: true },
   { credits: 100, price: 450, price_rub: 468, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true },
   { credits: 250, price: 1013, price_rub: 1054, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true },
   // -15%
-  { credits: 5, bonus_credits: 4, price: 42, price_rub: 44, label_ru: "🎁 Попробуй -15%", label_en: "🎁 Try -15%", hidden: true, trialOnly: true },
+  { credits: 5, bonus_credits: 5, price: 42, price_rub: 44, label_ru: "🎁 Попробуй -15%", label_en: "🎁 Try -15%", hidden: true, trialOnly: true },
   { credits: 10, price: 64, price_rub: 67, label_ru: "⭐ Старт -15%", label_en: "⭐ Start -15%", hidden: true },
   { credits: 30, price: 149, price_rub: 155, label_ru: "💎 Поп -15%", label_en: "💎 Pop -15%", hidden: true },
   { credits: 100, price: 425, price_rub: 442, label_ru: "👑 Про -15%", label_en: "👑 Pro -15%", hidden: true },
   { credits: 250, price: 956, price_rub: 994, label_ru: "🚀 Макс -15%", label_en: "🚀 Max -15%", hidden: true },
   // -25%
-  { credits: 5, bonus_credits: 4, price: 37, price_rub: 38, label_ru: "🎁 Попробуй -25%", label_en: "🎁 Try -25%", hidden: true, trialOnly: true },
+  { credits: 5, bonus_credits: 5, price: 37, price_rub: 38, label_ru: "🎁 Попробуй -25%", label_en: "🎁 Try -25%", hidden: true, trialOnly: true },
   { credits: 10, price: 56, price_rub: 58, label_ru: "⭐ Старт -25%", label_en: "⭐ Start -25%", hidden: true },
   { credits: 30, price: 131, price_rub: 136, label_ru: "💎 Поп -25%", label_en: "💎 Pop -25%", hidden: true },
   { credits: 100, price: 375, price_rub: 390, label_ru: "👑 Про -25%", label_en: "👑 Pro -25%", hidden: true },
@@ -1213,6 +1213,8 @@ const CREDIT_PACKS = [
 function getPackTotalCredits(pack: any): number {
   return Number(pack?.credits || 0) + Number(pack?.bonus_credits || 0);
 }
+
+const PAYMENT_ACTIVE_TX_TTL_MS = 15 * 60 * 1000;
 
 /**
  * Build balance info string for check_balance tool.
@@ -10490,37 +10492,69 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
   }
   console.log("pack validated:", pack.label_en);
 
-  // Cancel old active transactions
-  const cancelStart = Date.now();
-  await supabase
+  const txLookupStart = Date.now();
+  const { data: activeCreatedTx } = await supabase
     .from("transactions")
-    .update({ state: "canceled", is_active: false })
-    .eq("user_id", user.id)
-    .eq("is_active", true);
-  console.log("cancel old transactions took:", Date.now() - cancelStart, "ms");
-
-  // Create new transaction
-  const createStart = Date.now();
-  const { data: transaction, error: createError } = await supabase
-    .from("transactions")
-    .insert({
-      user_id: user.id,
-      amount: credits,
-      price: price,
-      state: "created",
-      is_active: true,
-      env: config.appEnv,
-    })
     .select("*")
-    .single();
-  console.log("create transaction took:", Date.now() - createStart, "ms");
+    .eq("user_id", user.id)
+    .eq("env", config.appEnv)
+    .eq("state", "created")
+    .eq("is_active", true)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  console.log("active created tx lookup took:", Date.now() - txLookupStart, "ms");
 
-  if (!transaction) {
-    console.log("PAYMENT ERROR: transaction not created, error:", createError);
-    await ctx.reply(await getText(lang, "payment.error_create"));
-    return;
+  let transaction = activeCreatedTx;
+  if (activeCreatedTx?.id) {
+    const createdAtMs = new Date(activeCreatedTx.created_at || 0).getTime();
+    const ageMs = Date.now() - createdAtMs;
+    const isFresh = Number.isFinite(createdAtMs) && ageMs <= PAYMENT_ACTIVE_TX_TTL_MS;
+    const samePack = Number(activeCreatedTx.amount) === credits && Number(activeCreatedTx.price) === price;
+
+    if (isFresh && !samePack) {
+      const lockMsg = lang === "ru"
+        ? "У тебя уже открыта другая оплата. Заверши её или подожди 15 минут."
+        : "You already have another payment in progress. Complete it or wait 15 minutes.";
+      await ctx.answerCbQuery(lockMsg, { show_alert: true }).catch(() => {});
+      return;
+    }
+    if (!isFresh) {
+      await supabase
+        .from("transactions")
+        .update({ state: "canceled", is_active: false })
+        .eq("id", activeCreatedTx.id);
+      transaction = null;
+    }
   }
-  console.log("transaction created:", transaction.id);
+
+  if (!transaction?.id) {
+    // Create new transaction only when there is no fresh active "created" transaction.
+    const createStart = Date.now();
+    const { data: createdTx, error: createError } = await supabase
+      .from("transactions")
+      .insert({
+        user_id: user.id,
+        amount: credits,
+        price: price,
+        state: "created",
+        is_active: true,
+        env: config.appEnv,
+      })
+      .select("*")
+      .single();
+    console.log("create transaction took:", Date.now() - createStart, "ms");
+
+    if (!createdTx) {
+      console.log("PAYMENT ERROR: transaction not created, error:", createError);
+      await ctx.reply(await getText(lang, "payment.error_create"));
+      return;
+    }
+    transaction = createdTx;
+    console.log("transaction created:", transaction.id);
+  } else {
+    console.log("transaction reused:", transaction.id);
+  }
 
   // Send invoice via Telegram Stars
   try {
@@ -10634,8 +10668,26 @@ bot.on("successful_payment", async (ctx) => {
     console.log("PAYMENT ERROR: update to done failed:", updateError);
   }
 
-  const transaction = updatedTransactions?.[0];
+  let transaction = updatedTransactions?.[0];
   console.log("update result - transaction found:", !!transaction, "id:", transaction?.id);
+
+  // Recovery path: transaction might have been canceled by parallel callback before successful_payment.
+  if (!transaction) {
+    const { data: recovered } = await supabase
+      .from("transactions")
+      .update({
+        state: "done",
+        is_active: false,
+        telegram_payment_charge_id: payment.telegram_payment_charge_id,
+        provider_payment_charge_id: payment.provider_payment_charge_id,
+      })
+      .eq("id", transactionId)
+      .is("telegram_payment_charge_id", null)
+      .neq("state", "done")
+      .select("*");
+    transaction = recovered?.[0];
+    console.log("recovery update result - transaction found:", !!transaction, "id:", transaction?.id);
+  }
 
   if (!transaction) {
     // Already processed or not found - this prevents double crediting
