@@ -143,6 +143,51 @@ flowchart TD
 
 Это покрывает все способы входа в оплату, потому что hidden/admin/abandoned-cart тарифы идут через тот же callback `pack_{credits}_{price}`.
 
+---
+
+## Яндекс Метрика — офлайн-конверсии
+
+**Назначение:** передавать факт оплаты в Яндекс.Метрику по yclid, чтобы Директ мог оптимизировать кампании на покупки (а не на клики). Подробный сценарий и настройка целей — в `docs/13-02-yandex-direct-conversions.md`.
+
+### Кто за что отвечает
+
+| Компонент | Роль |
+|-----------|------|
+| **Лендинг** (`/landing`) | Собирает `utm_*` и `yclid` из URL, формирует deep link в бота. События в Метрику **не** шлёт. |
+| **Бот (API)** | Парсит start payload → сохраняет `users.yclid` (first-click). При `successful_payment` отправляет офлайн-конверсию в API Метрики. |
+| **Метрика** | Принимает загрузки (multipart/form-data, CSV с UserId=yclid, Target, DateTime Unix, Price, Currency). |
+
+### Когда отправляется конверсия
+
+- В обработчике `successful_payment`, после зачисления кредитов.
+- **Условия:** у пользователя есть `yclid` (или он извлекается из `start_payload` при пустом `users.yclid`), `transaction.price > 0`, по этой транзакции ещё не отправляли (`yandex_conversion_sent_at` пусто).
+- Отправка асинхронная, не блокирует ответ пользователю. При ошибке API — алерт `metrika_error`, в `transactions` пишется `yandex_conversion_error`, повторная отправка не делается (антидубль по `yandex_conversion_sent_at`).
+
+### Цели (Target) по пакетам
+
+Бот шлёт в поле Target одно из значений; в Метрике должны быть созданы цели с **такими же идентификаторами** (тип «JavaScript-событие» для офлайн-загрузок):
+
+| Пакет | Target |
+|-------|--------|
+| Trial (5+5) | `purchase_try` |
+| Старт 10 | `purchase_start` |
+| Поп 30 | `purchase_pop` |
+| Про 100 | `purchase_pro` |
+| Макс 250 | `purchase_max` |
+| Прочее (скрытые/скидочные) | `purchase` |
+
+### Код и конфиг
+
+- **Модуль:** `src/lib/yandex-metrika.ts` — `sendYandexConversion()`, маппинг пакета в target через `getMetrikaTargetForPack()`.
+- **Env (опционально):** `YANDEX_METRIKA_COUNTER_ID`, `YANDEX_METRIKA_TOKEN` (OAuth **access token** с правом `metrika:write` или `metrika:offline_data`). Без них отправка пропускается, в лог пишется `[metrika] Skipped` или `[metrika] Conversion skipped ... reason: no yclid`.
+- **БД:** `users.yclid`, `transactions.yandex_conversion_sent_at`, `yandex_conversion_error`, `yandex_conversion_attempts` (миграция `sql/089_yclid_tracking.sql`).
+
+### First-click
+
+`users.yclid` заполняется только при первом переходе (или если поле было пусто). Повторный заход по ссылке с другим yclid не перезаписывает значение.
+
+---
+
 ## Trial Credits (AI-ассистент)
 
 AI-ассистент может давать бесплатный кредит через `grant_trial_credit`:

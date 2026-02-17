@@ -464,6 +464,9 @@ function parseDetectorPayload(raw: string): {
   return { objectMode, objectCount, objectConfidence, objectInstances };
 }
 
+const DETECTOR_TIMEOUT_MS = 45000;
+const DETECTOR_MAX_ATTEMPTS = 2;
+
 export async function detectSubjectProfileFromImageBuffer(
   imageBuffer: Buffer,
   mimeType: string
@@ -488,39 +491,62 @@ export async function detectSubjectProfileFromImageBuffer(
       "- object_instances may be empty if uncertain",
     ].join("\n");
 
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        contents: [
+    let lastError: any;
+    for (let attempt = 1; attempt <= DETECTOR_MAX_ATTEMPTS; attempt++) {
+      try {
+        const response = await axios.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
           {
-            role: "user",
-            parts: [
-              { text: prompt },
+            contents: [
               {
-                inlineData: {
-                  mimeType,
-                  data: imageBuffer.toString("base64"),
-                },
+                role: "user",
+                parts: [
+                  { text: prompt },
+                  {
+                    inlineData: {
+                      mimeType,
+                      data: imageBuffer.toString("base64"),
+                    },
+                  },
+                ],
               },
             ],
+            generationConfig: {
+              temperature: 0,
+              responseMimeType: "application/json",
+            },
           },
-        ],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: "application/json",
-        },
-      },
-      {
-        headers: { "x-goog-api-key": config.geminiApiKey },
-        timeout: 30000,
-      }
-    );
+          {
+            headers: { "x-goog-api-key": config.geminiApiKey },
+            timeout: DETECTOR_TIMEOUT_MS,
+          }
+        );
 
-    const rawText = extractTextFromGeminiResponse(response.data);
-    if (!rawText) {
-      return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null };
+        const rawText = extractTextFromGeminiResponse(response.data);
+        if (!rawText) {
+          return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null };
+        }
+        return await hardenDetectedProfile(parseDetectorPayload(rawText));
+      } catch (err: any) {
+        lastError = err;
+        const isTimeout = err?.code === "ETIMEDOUT" || err?.cause?.code === "ETIMEDOUT";
+        if (isTimeout && attempt < DETECTOR_MAX_ATTEMPTS) {
+          console.warn("[subject-profile] detector ETIMEDOUT, retrying", {
+            attempt,
+            maxAttempts: DETECTOR_MAX_ATTEMPTS,
+            timeoutMs: DETECTOR_TIMEOUT_MS,
+          });
+          continue;
+        }
+        if (isTimeout && attempt === DETECTOR_MAX_ATTEMPTS) {
+          console.warn("[subject-profile] detector ETIMEDOUT after retry, using unknown", {
+            attempts: DETECTOR_MAX_ATTEMPTS,
+          });
+        }
+        throw err;
+      }
     }
-    return await hardenDetectedProfile(parseDetectorPayload(rawText));
+    throw lastError;
   } catch (err: any) {
     console.warn("[subject-profile] detector failed:", err?.response?.data?.error?.message || err?.message || err);
     return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null };
@@ -570,4 +596,3 @@ export async function isObjectProfileShadowEnabled(): Promise<boolean> {
   const value = await getAppConfig("object_profile_shadow_enabled", "false");
   return parseBooleanConfig(value);
 }
-

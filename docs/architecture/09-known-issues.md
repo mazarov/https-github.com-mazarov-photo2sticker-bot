@@ -175,3 +175,16 @@ bot.launch({ dropPendingUpdates: true });
 **Режим rollout**:
 - сначала `strict_session_rev_enabled=false` (совместимость),
 - затем включить strict после smoke-тестов на `test`.
+
+---
+
+## 12. Subject-profile: ETIMEDOUT к Gemini
+
+**Проблема**: детектор субъекта (single/multi/unknown по фото) вызывает Gemini с большим телом (фото в base64). При сетевых задержках или нагрузке на `generativelanguage.googleapis.com` запрос может завершиться с **ETIMEDOUT**. Пользователь при этом не видит ошибку — ставится fallback `subjectMode: 'unknown'`, генерация идёт дальше; если у пользователя 0 кредитов, он попадает на paywall (wait_first_purchase).
+
+**Решение**:
+1. Таймаут детектора увеличен до 45 сек (`DETECTOR_TIMEOUT_MS` в `src/lib/subject-profile.ts`).
+2. При ETIMEDOUT выполняется один повтор (всего до 2 попыток).
+3. Для мониторинга в логах: `[subject-profile] detector ETIMEDOUT, retrying` (первая попытка), `[subject-profile] detector ETIMEDOUT after retry, using unknown` (обе попытки не удались). Поиск по тегу `detector ETIMEDOUT` даёт все такие кейсы.
+
+**Как диагностировать**: в логах API/worker искать `[subject-profile] detector ETIMEDOUT`.
