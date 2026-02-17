@@ -22,7 +22,8 @@ type AlertType =
   | "pack_completed"
   | "pack_partial"
   | "pack_failed"
-  | "pack_regenerated";
+  | "pack_regenerated"
+  | "metrika_error";
 
 interface AlertOptions {
   type: AlertType;
@@ -52,6 +53,7 @@ const EMOJI: Record<AlertType, string> = {
   pack_partial: "🟡",
   pack_failed: "🔴",
   pack_regenerated: "🔄",
+  metrika_error: "📊",
 };
 
 export async function sendAlert(options: AlertOptions): Promise<void> {

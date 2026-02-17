@@ -10841,7 +10841,9 @@ bot.on("successful_payment", async (ctx) => {
       (async () => {
         try {
           if (!finalUser.yclid && finalUser.start_payload) {
-            await supabase.from("users").update({ yclid: resolvedYclid }).eq("id", finalUser.id).catch(() => {});
+            try {
+              await supabase.from("users").update({ yclid: resolvedYclid }).eq("id", finalUser.id);
+            } catch (_) {}
           }
           const priceRub = purchasedPack?.price_rub || Math.round(Number(transaction.price) * 1.04);
           const target = getMetrikaTargetForPack(Number(transaction.amount), purchasedPack?.trialOnly);
@@ -10862,14 +10864,15 @@ bot.on("successful_payment", async (ctx) => {
           console.log("[metrika] Conversion sent for yclid:", resolvedYclid, "tx:", transaction.id, "target:", target, "rub:", priceRub);
         } catch (err: any) {
           console.error("[metrika] Failed to send conversion:", err.message);
-          await supabase
-            .from("transactions")
-            .update({
-              yandex_conversion_error: String(err.message || "unknown").slice(0, 500),
-              yandex_conversion_attempts: (transaction.yandex_conversion_attempts || 0) + 1,
-            })
-            .eq("id", transaction.id)
-            .catch(() => {});
+          try {
+            await supabase
+              .from("transactions")
+              .update({
+                yandex_conversion_error: String(err.message || "unknown").slice(0, 500),
+                yandex_conversion_attempts: (transaction.yandex_conversion_attempts || 0) + 1,
+              })
+              .eq("id", transaction.id);
+          } catch (_) {}
           sendAlert({
             type: "metrika_error",
             message: `[Metrika] Conversion failed for tx ${transaction.id}: ${err.message}`,
