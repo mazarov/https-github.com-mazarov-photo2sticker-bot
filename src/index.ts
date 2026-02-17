@@ -1210,8 +1210,8 @@ async function getUser(telegramId: number) {
 // Helper: get persistent menu keyboard (2 rows)
 function getMainMenuKeyboard(lang: string) {
   const row1 = lang === "ru"
-    ? ["✨ Создать стикер", "📦 Создать пак"]
-    : ["✨ Create sticker", "📦 Create pack"];
+    ? ["📦 Создать пак"]
+    : ["📦 Create pack"];
   const row2 = lang === "ru"
     ? ["💰 Ваш баланс", "💬 Поддержка"]
     : ["💰 Your balance", "💬 Support"];
@@ -2524,8 +2524,8 @@ bot.start(async (ctx) => {
       }
     }
 
-    // Start AI assistant dialog (cancels old sessions inside)
-    await startAssistantDialog(ctx, user, lang);
+    // Default entrypoint: start pack flow (assistant entry from /start is temporarily disabled).
+    await handlePackMenuEntry(ctx, { source: "start", autoPackEntry: true });
   } else {
     const lang = "en";
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
@@ -3219,8 +3219,11 @@ async function sendPackStyleSelectionStep(
   });
 }
 
-// Shared: entry into pack flow (menu button or broadcast "Попробовать")
-async function handlePackMenuEntry(ctx: any) {
+// Shared: entry into pack flow (menu button, /start, or broadcast "Попробовать")
+async function handlePackMenuEntry(
+  ctx: any,
+  options?: { source?: "menu" | "start" | "broadcast"; autoPackEntry?: boolean }
+) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -3231,7 +3234,26 @@ async function handlePackMenuEntry(ctx: any) {
     return;
   }
   const lang = user.lang || "en";
-  const existingPhoto = user.last_photo_file_id || null;
+  const source = options?.source || "menu";
+  const autoPackEntry = Boolean(options?.autoPackEntry);
+  const activeSession = await getActiveSession(user.id);
+  if (
+    activeSession &&
+    (activeSession.state === "generating_pack_preview" || activeSession.state === "processing_pack")
+  ) {
+    const processingMsg = lang === "ru"
+      ? "Сейчас идет обработка текущего пака. Подожди немного, я сообщу, когда все будет готово."
+      : "Your current pack is still processing. Please wait a bit - I will notify you when it's ready.";
+    await ctx.reply(processingMsg, getMainMenuKeyboard(lang));
+    console.log(
+      `[pack_entry] skipped due to active processing: source=${source} auto_pack_entry=${autoPackEntry} session=${activeSession.id} state=${activeSession.state}`
+    );
+    return;
+  }
+  const existingPhoto = activeSession?.current_photo_file_id || user.last_photo_file_id || null;
+  console.log(
+    `[pack_entry] start: source=${source} auto_pack_entry=${autoPackEntry} user=${user.id} has_photo=${Boolean(existingPhoto)}`
+  );
 
   // Close any active assistant session to prevent ideas from showing
   const activeAssistant = await getActiveAssistantSession(user.id);
@@ -3331,12 +3353,14 @@ async function handlePackMenuEntry(ctx: any) {
 }
 
 // Menu: 📦 Создать пак / 📦 Пак стикеров — show template CTA screen
-bot.hears(["📦 Создать пак", "📦 Create pack", "📦 Пак стикеров", "📦 Sticker pack"], handlePackMenuEntry);
+bot.hears(["📦 Создать пак", "📦 Create pack", "📦 Пак стикеров", "📦 Sticker pack"], async (ctx) => {
+  await handlePackMenuEntry(ctx, { source: "menu", autoPackEntry: false });
+});
 
 // Broadcast "Попробовать" — same as tapping "Пак стикеров"
 bot.action("broadcast_try_pack", async (ctx) => {
   safeAnswerCbQuery(ctx);
-  await handlePackMenuEntry(ctx);
+  await handlePackMenuEntry(ctx, { source: "broadcast", autoPackEntry: false });
 });
 
 // Callback: pack_start — user tapped "Попробовать" on template CTA
