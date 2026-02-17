@@ -88,11 +88,42 @@ const MOTION_PRESETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 let promptTemplatesCache: { data: Map<string, string>; timestamp: number } | null = null;
 const PROMPT_TEMPLATES_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// Cache for pack content sets (active rows)
+let packContentSetsCache: { data: any[]; timestamp: number } | null = null;
+const PACK_CONTENT_SETS_CACHE_TTL = 30 * 1000; // 30 seconds
+
 function safeAnswerCbQuery(ctx: any, payload?: any) {
   if (typeof ctx?.answerCbQuery !== "function") return;
   ctx.answerCbQuery(payload).catch((err: any) => {
     console.warn("answerCbQuery failed:", err?.description || err?.message || err);
   });
+}
+
+async function getActivePackContentSets(): Promise<any[]> {
+  const now = Date.now();
+  if (packContentSetsCache && now - packContentSetsCache.timestamp < PACK_CONTENT_SETS_CACHE_TTL) {
+    return packContentSetsCache.data;
+  }
+
+  const { data, error } = await supabase
+    .from("pack_content_sets")
+    .select("*")
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    console.warn("[pack_content_sets] load error:", error.message);
+    return packContentSetsCache?.data || [];
+  }
+
+  const rows = Array.isArray(data) ? data : [];
+  packContentSetsCache = { data: rows, timestamp: now };
+  return rows;
+}
+
+function getPackContentSetsForTemplate(contentSets: any[], templateId: string): any[] {
+  if (!Array.isArray(contentSets)) return [];
+  return contentSets.filter((set) => String(set?.pack_template_id || "") === String(templateId));
 }
 
 interface StylePreset {
@@ -3291,6 +3322,11 @@ async function handlePackMenuEntry(
   const lang = user.lang || "en";
   const source = options?.source || "menu";
   const autoPackEntry = Boolean(options?.autoPackEntry);
+  let openingMsg: { message_id?: number } | null = null;
+  if (source === "menu" || source === "start") {
+    const openingText = lang === "ru" ? "⏳ Открываю конструктор пака..." : "⏳ Opening pack builder...";
+    openingMsg = await ctx.reply(openingText, getMainMenuKeyboard(lang)).catch(() => null);
+  }
   const activeSession = await getActiveSession(user.id);
   if (
     activeSession &&
@@ -3316,15 +3352,8 @@ async function handlePackMenuEntry(
     await updateAssistantSession(activeAssistant.id, { status: "completed" });
   }
 
-  // Source of truth for pack catalog in current test DB: pack_content_sets.
-  const { data: contentSets, error: contentSetsErr } = await supabase
-    .from("pack_content_sets")
-    .select("*")
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true });
-  if (contentSetsErr) {
-    console.error("[pack_menu] Failed to load content sets:", contentSetsErr.message);
-  }
+  // Source of truth for pack catalog in current DB: pack_content_sets.
+  const contentSets = await getActivePackContentSets();
   if (!contentSets?.length) {
     await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
     return;
@@ -3396,7 +3425,20 @@ async function handlePackMenuEntry(
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
     ],
   };
-  const msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+  let msg: any = null;
+  if (openingMsg?.message_id && ctx.chat?.id) {
+    try {
+      await ctx.telegram.editMessageText(ctx.chat.id, openingMsg.message_id, undefined, carouselCaption, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard,
+      });
+      msg = { message_id: openingMsg.message_id };
+    } catch {
+      msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+    }
+  } else {
+    msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+  }
   if (msg?.message_id && ctx.chat?.id) {
     await supabase
       .from("sessions")
@@ -3517,15 +3559,8 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const existingPhoto = user.last_photo_file_id || null;
   const templateId = ctx.match[1];
 
-  const { data: contentSets, error: contentSetsErr } = await supabase
-    .from("pack_content_sets")
-    .select("*")
-    .eq("pack_template_id", templateId)
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true });
-  if (contentSetsErr) {
-    console.error("[pack_show_carousel] Failed to load content sets:", contentSetsErr.message);
-  }
+  const allContentSets = await getActivePackContentSets();
+  const contentSets = getPackContentSetsForTemplate(allContentSets, templateId);
   if (!contentSets?.length) {
     await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
     return;
@@ -3630,12 +3665,8 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_carousel" || !session.pack_template_id) return;
 
-  const { data: contentSets } = await supabase
-    .from("pack_content_sets")
-    .select("*")
-    .eq("pack_template_id", session.pack_template_id)
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true });
+  const allContentSets = await getActivePackContentSets();
+  const contentSets = getPackContentSetsForTemplate(allContentSets, session.pack_template_id);
   if (!contentSets?.length) return;
 
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
@@ -3678,7 +3709,8 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
 }
 
 bot.action(/^pack_try:(.+)$/, async (ctx) => {
-  safeAnswerCbQuery(ctx);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "✨ Открываю выбор стиля..." : "✨ Opening style selection...");
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
   const user = await getUser(telegramId);
@@ -3704,14 +3736,11 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
   }
 
   const existingPhoto = session.current_photo_file_id || (await supabase.from("users").select("last_photo_file_id").eq("id", user.id).single().then((r) => r.data?.last_photo_file_id)) || null;
-  if (existingPhoto) {
-    const draftSession = { ...session, current_photo_file_id: existingPhoto, photos: [existingPhoto] };
-    await ensureSubjectProfileForGeneration(draftSession, "style");
-
-    const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
-    const subjectMode = normalizeSubjectMode(draftSession.subject_mode);
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  if (existingPhoto && subjectFilterEnabled) {
+    const subjectMode = normalizeSubjectMode(session.subject_mode);
     const setSubjectMode = normalizePackSetSubjectMode(selectedContentSet.subject_mode);
-    if (subjectFilterEnabled && !isPackSetCompatibleWithSubject(setSubjectMode, subjectMode)) {
+    if (subjectMode !== "unknown" && !isPackSetCompatibleWithSubject(setSubjectMode, subjectMode)) {
       await ctx.answerCbQuery(
         lang === "ru"
           ? "Этот набор не подходит под текущее количество персонажей. Выбери другой набор."
@@ -3720,6 +3749,12 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
       ).catch(() => {});
       return;
     }
+
+    // Warm subject profile in background to keep the "Try with ..." click responsive.
+    const draftSession = { ...session, current_photo_file_id: existingPhoto, photos: [existingPhoto] };
+    void ensureSubjectProfileForGeneration(draftSession, "style").catch((err) =>
+      console.warn("[pack_try] subject profile warmup failed:", err?.message || err)
+    );
   }
 
   const initialState = existingPhoto ? "wait_pack_preview_payment" : "wait_pack_photo";
@@ -3769,12 +3804,8 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
   }
   safeAnswerCbQuery(ctx, lang === "ru" ? "↩️ Открываю наборы..." : "↩️ Opening sets...");
 
-  const { data: contentSets } = await supabase
-    .from("pack_content_sets")
-    .select("*")
-    .eq("pack_template_id", session.pack_template_id)
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true });
+  const allContentSets = await getActivePackContentSets();
+  const contentSets = getPackContentSetsForTemplate(allContentSets, session.pack_template_id);
   if (!contentSets?.length) return;
 
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
