@@ -3826,6 +3826,108 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   } catch (_) {}
 }
 
+async function renderPackCarouselForSession(
+  ctx: any,
+  session: any,
+  lang: string,
+  options?: { resetCarouselIndex?: boolean; bumpSessionRev?: boolean }
+) {
+  const allContentSets = await getActivePackContentSets();
+  const contentSets = getPackContentSetsForTemplate(allContentSets, session.pack_template_id);
+  if (!contentSets?.length) return;
+
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  const subjectMode = getEffectiveSubjectMode(session);
+  const visibleSets = subjectFilterEnabled
+    ? filterPackContentSetsBySubjectMode(contentSets, subjectMode)
+    : contentSets;
+  if (!visibleSets.length) {
+    await ctx.reply(
+      lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
+      getMainMenuKeyboard(lang)
+    );
+    return;
+  }
+
+  const shouldResetIndex = options?.resetCarouselIndex === true;
+  const rawIndex = shouldResetIndex ? 0 : Number(session.pack_carousel_index ?? 0);
+  const safeIndex = Number.isFinite(rawIndex)
+    ? ((rawIndex % visibleSets.length) + visibleSets.length) % visibleSets.length
+    : 0;
+  const set = visibleSets[safeIndex];
+  const setName = lang === "ru" ? set.name_ru : set.name_en;
+  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+  const intro = await getText(lang, "pack.carousel_intro");
+  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
+  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "◀️", callback_data: "pack_carousel_prev" },
+        { text: `${safeIndex + 1}/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
+        { text: "▶️", callback_data: "pack_carousel_next" },
+      ],
+      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+    ],
+  };
+
+  const nextRev = options?.bumpSessionRev === true ? (session.session_rev || 1) + 1 : (session.session_rev || 1);
+  const baseSessionPatch: any = {
+    state: "wait_pack_carousel",
+    pack_carousel_index: safeIndex,
+    is_active: true,
+    flow_kind: "pack",
+  };
+  if (options?.bumpSessionRev === true) {
+    baseSessionPatch.session_rev = nextRev;
+  }
+  await supabase.from("sessions").update(baseSessionPatch).eq("id", session.id);
+
+  const callbackMsgId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+  const callbackChatId = (ctx.callbackQuery as any)?.message?.chat?.id as number | undefined;
+  if (callbackMsgId && callbackChatId) {
+    try {
+      await ctx.telegram.editMessageText(callbackChatId, callbackMsgId, undefined, carouselCaption, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard,
+      });
+      await supabase
+        .from("sessions")
+        .update({
+          progress_message_id: callbackMsgId,
+          progress_chat_id: callbackChatId,
+          ui_message_id: callbackMsgId,
+          ui_chat_id: callbackChatId,
+        })
+        .eq("id", session.id);
+      return;
+    } catch (_) {}
+  }
+
+  if (session.progress_message_id && session.progress_chat_id) {
+    try {
+      await ctx.telegram.editMessageText(session.progress_chat_id, session.progress_message_id, undefined, carouselCaption, {
+        parse_mode: "Markdown",
+        reply_markup: keyboard,
+      });
+      return;
+    } catch (_) {}
+  }
+
+  const sent = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+  if (sent?.message_id && ctx.chat?.id) {
+    await supabase
+      .from("sessions")
+      .update({
+        progress_message_id: sent.message_id,
+        progress_chat_id: ctx.chat.id,
+        ui_message_id: sent.message_id,
+        ui_chat_id: ctx.chat.id,
+      })
+      .eq("id", session.id);
+  }
+}
+
 bot.action(/^pack_try:(.+)$/, async (ctx) => {
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
   safeAnswerCbQuery(ctx, isRu ? "✨ Открываю выбор стиля..." : "✨ Opening style selection...");
@@ -3921,86 +4023,7 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
     return;
   }
   safeAnswerCbQuery(ctx, lang === "ru" ? "↩️ Открываю наборы..." : "↩️ Opening sets...");
-
-  const allContentSets = await getActivePackContentSets();
-  const contentSets = getPackContentSetsForTemplate(allContentSets, session.pack_template_id);
-  if (!contentSets?.length) return;
-
-  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
-  const subjectMode = getEffectiveSubjectMode(session);
-  const visibleSets = subjectFilterEnabled
-    ? filterPackContentSetsBySubjectMode(contentSets, subjectMode)
-    : contentSets;
-  if (!visibleSets.length) {
-    await ctx.reply(
-      lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-      getMainMenuKeyboard(lang)
-    );
-    return;
-  }
-
-  await supabase
-    .from("sessions")
-    .update({
-      state: "wait_pack_carousel",
-      pack_carousel_index: 0,
-      is_active: true,
-      flow_kind: "pack",
-      session_rev: (session.session_rev || 1) + 1,
-    })
-    .eq("id", session.id);
-
-  const set = visibleSets[0];
-  const setName = lang === "ru" ? set.name_ru : set.name_en;
-  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-  const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
-  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: "◀️", callback_data: "pack_carousel_prev" },
-        { text: `1/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
-        { text: "▶️", callback_data: "pack_carousel_next" },
-      ],
-      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
-    ],
-  };
-  const callbackMsgId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
-  const callbackChatId = (ctx.callbackQuery as any)?.message?.chat?.id as number | undefined;
-  if (callbackMsgId && callbackChatId) {
-    try {
-      await ctx.telegram.editMessageText(callbackChatId, callbackMsgId, undefined, carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-      await supabase
-        .from("sessions")
-        .update({
-          progress_message_id: callbackMsgId,
-          progress_chat_id: callbackChatId,
-          ui_message_id: callbackMsgId,
-          ui_chat_id: callbackChatId,
-        })
-        .eq("id", session.id);
-      return;
-    } catch (_) {}
-  }
-  if (session.progress_message_id && session.progress_chat_id) {
-    try {
-      await ctx.telegram.editMessageText(session.progress_chat_id, session.progress_message_id, undefined, carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-    } catch (_) {}
-  } else {
-    const sent = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-    if (sent?.message_id && ctx.chat?.id) {
-      await supabase
-        .from("sessions")
-        .update({
-          progress_message_id: sent.message_id,
-          progress_chat_id: ctx.chat.id,
-          ui_message_id: sent.message_id,
-          ui_chat_id: ctx.chat.id,
-        })
-        .eq("id", session.id);
-    }
-  }
+  await renderPackCarouselForSession(ctx, session, lang, { resetCarouselIndex: true, bumpSessionRev: true });
 });
 
 // Callback: pack_preview_pay — user pays 1 credit for preview
@@ -4580,11 +4603,17 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
     .eq("id", session.id);
 
   if (session.state === "wait_pack_carousel") {
-    await ctx.reply(
-      lang === "ru"
-        ? "Новое фото принято. Выбери набор в карусели и нажми «Попробовать»."
-        : "New photo accepted. Choose a set in the carousel and tap Try."
-    );
+    const refreshedSession = {
+      ...session,
+      current_photo_file_id: newPhotoFileId,
+      pending_photo_file_id: null,
+      pack_batch_id: null,
+      pack_sheet_file_id: null,
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
+    };
+    await renderPackCarouselForSession(ctx, refreshedSession, lang);
     return;
   }
 
@@ -4629,11 +4658,15 @@ bot.action(/^pack_keep_photo(?::(.+))?$/, async (ctx) => {
     .eq("id", session.id);
 
   if (session.state === "wait_pack_carousel") {
-    await ctx.reply(
-      lang === "ru"
-        ? "Оставляем текущее фото. Выбери набор в карусели и нажми «Попробовать»."
-        : "Keeping current photo. Choose a set in the carousel and tap Try."
-    );
+    const refreshedSession = {
+      ...session,
+      current_photo_file_id: session.current_photo_file_id || workingPhotoFileId,
+      pending_photo_file_id: null,
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
+    };
+    await renderPackCarouselForSession(ctx, refreshedSession, lang);
     return;
   }
 
