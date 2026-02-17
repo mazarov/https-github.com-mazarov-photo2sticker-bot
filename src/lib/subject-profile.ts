@@ -425,7 +425,7 @@ function parseDetectorPayload(raw: string): {
       parsed?.subjectConfidence ??
       parsed?.confidence
   );
-  const rawInstances = Array.isArray(parsed?.object_instances)
+  const rawInstances: unknown[] = Array.isArray(parsed?.object_instances)
     ? parsed.object_instances
     : Array.isArray(parsed?.objectInstances)
       ? parsed.objectInstances
