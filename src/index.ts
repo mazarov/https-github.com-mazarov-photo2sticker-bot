@@ -1179,6 +1179,7 @@ async function startGeneration(
     type: "generation_started",
     message: "New generation",
     details: alertDetails,
+    photoFileId: session.current_photo_file_id || undefined,
   }).catch(console.error);
 
   await sendProgressStart(ctx, session.id, lang);
@@ -2909,6 +2910,17 @@ bot.on("photo", async (ctx) => {
     await supabase.from("sessions").update({ is_active: true }).eq("id", session.id);
     session.is_active = true;
   }
+
+  sendAlert({
+    type: "photo_uploaded",
+    message: "User uploaded photo",
+    details: {
+      user: `@${user.username || user.telegram_id}`,
+      sessionId: session.id,
+      state: session.state,
+    },
+    photoFileId: photo.file_id,
+  }).catch(console.error);
 
   // === AI Assistant: re-route to assistant_wait_photo if assistant is active after generation ===
   // Skip re-route for pack flow states — pack handles photos independently
@@ -10964,6 +10976,7 @@ bot.on("successful_payment", async (ctx) => {
               emotion: session.selected_emotion || session.emotion_prompt || "-",
               prompt: (session.prompt_final || "").slice(0, 200),
             },
+            photoFileId: session.current_photo_file_id || undefined,
           }).catch(console.error);
 
           await sendProgressStart(ctx, session.id, lang);

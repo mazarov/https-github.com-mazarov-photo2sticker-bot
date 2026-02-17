@@ -5,6 +5,7 @@ import { config } from "../config";
 type AlertType = 
   | "generation_failed" 
   | "generation_started"
+  | "photo_uploaded"
   | "gemini_error" 
   | "rembg_failed" 
   | "worker_error" 
@@ -30,11 +31,14 @@ interface AlertOptions {
   message: string;
   details?: Record<string, any>;
   stack?: string;
+  /** When set, alert is sent as photo with caption (Telegram file_id). */
+  photoFileId?: string;
 }
 
 const EMOJI: Record<AlertType, string> = {
   generation_failed: "🟡",
   generation_started: "🚀",
+  photo_uploaded: "📷",
   gemini_error: "🟠",
   rembg_failed: "🟠",
   worker_error: "🔴",
@@ -81,23 +85,44 @@ export async function sendAlert(options: AlertOptions): Promise<void> {
     text += `\n📜 *Stack:*\n\`\`\`\n${options.stack.slice(0, 500)}\n\`\`\``;
   }
 
-  try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: channelId,
-          text: text.slice(0, 4000),
-          parse_mode: "Markdown",
-        }),
-      }
-    );
+  const body = text.slice(0, options.photoFileId ? 1024 : 4000); // caption limit 1024
 
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error("[Alert] Failed to send:", errorData);
+  try {
+    if (options.photoFileId) {
+      const response = await fetch(
+        `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: channelId,
+            photo: options.photoFileId,
+            caption: body,
+            parse_mode: "Markdown",
+          }),
+        }
+      );
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.error("[Alert] Failed to send photo alert:", errorData);
+      }
+    } else {
+      const response = await fetch(
+        `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: channelId,
+            text: body,
+            parse_mode: "Markdown",
+          }),
+        }
+      );
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.error("[Alert] Failed to send:", errorData);
+      }
     }
   } catch (err) {
     console.error("[Alert] Error sending alert:", err);
