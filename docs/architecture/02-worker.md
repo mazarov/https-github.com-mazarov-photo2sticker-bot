@@ -129,6 +129,9 @@ flowchart TD
   - сцены: при `sessions.pack_content_set_id` берёт `pack_content_sets.scene_descriptions` (проверка: is_active, длина = template.sticker_count), иначе `pack_templates.scene_descriptions`
   - добавляет выбранный пользователем `sessions.selected_style_id` (`style_presets_v2.prompt_hint`) в промпт
   - добавляет `Subject Lock Block` для текущего photo-source (если включен флаг)
+  - добавляет `scene cardinality guard` по effective subject mode:
+    - `single`: каждую сцену принудительно интерпретирует как solo-позу (без партнёра), даже если текст сцены содержит "couple/man and woman/both"
+    - `multi`: требует сохранить ту же пару и запрещает добавлять третьих лиц
   - при `subject_mode_pack_filter_enabled=true` или `object_mode_pack_filter_enabled=true` делает финальную server-side проверку совместимости `pack_content_sets.subject_mode` и effective mode (`sessions.object_mode` -> fallback `sessions.subject_mode`) с рефандом preview-кредита при mismatch
   - включает блок `identity preservation` (сохранение facial identity)
   - генерирует лист NxN и сохраняет `pack_sheet_file_id`
