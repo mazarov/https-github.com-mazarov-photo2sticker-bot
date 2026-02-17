@@ -9,7 +9,7 @@ import { getText } from "./lib/texts";
 import { sendAlert, sendNotification, sendPackPreviewAlert } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
-import { addWhiteBorder, addTextToSticker } from "./lib/image-utils";
+import { addTextToSticker } from "./lib/image-utils";
 import {
   appendSubjectLock,
   buildSubjectLockBlock,
@@ -956,7 +956,7 @@ async function runPackAssembleJob(job: any) {
   // Update progress: adding labels
   await updatePackProgress(await getText(lang, "pack.progress_finishing"));
 
-  // Process each cell: white border (same as single sticker), then label via addTextToSticker
+  // Process each cell: keep Gemini/rembg output as-is, then add optional label overlay.
   const labels: string[] = labelsSource;
   const stickerBuffers: Buffer[] = [];
 
@@ -965,9 +965,8 @@ async function runPackAssembleJob(job: any) {
     if (!cellBuf) continue;
 
     try {
-      // 1) White border programmatically (same as single-sticker toggle_border)
-      let processed = await addWhiteBorder(cellBuf);
-      // 2) Label overlay via addTextToSticker (same font/badge as "add text" for single sticker)
+      let processed = cellBuf;
+      // Label overlay via addTextToSticker (same font/badge as "add text" for single sticker)
       const label = (labels[i] || "").trim();
       if (label) {
         processed = await addTextToSticker(processed, label, "bottom");

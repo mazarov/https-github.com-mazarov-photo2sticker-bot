@@ -143,6 +143,7 @@ flowchart TD
     - значения: `rembg` или `pixian`
     - fallback: если primary упал, используется второй провайдер
   - подписи: при `sessions.pack_content_set_id` берёт `pack_content_sets.labels` / `labels_en`, иначе `pack_templates.labels` / `labels_en`
+  - принудительная белая обводка в worker не добавляется (оставляем контур, который сгенерировал Gemini)
   - собирает Telegram sticker set (`createNewStickerSet` + `addStickerToSet`)
 
 ## Цепочка генерации (бизнес-логика)
