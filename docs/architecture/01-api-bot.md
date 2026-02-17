@@ -3,9 +3,6 @@
 Основной процесс приложения. Telegram-бот на Telegraf 4 с long polling.
 Обрабатывает все входящие сообщения, управляет сессиями, оплатой и UI.
 
-> План архитектурного усиления логики сессий и callback:
-> [16-02-session-architecture-requirements.md](../16-02-session-architecture-requirements.md), [16-02-session-router-rfc.md](../16-02-session-router-rfc.md)
-
 ## Состояния сессии (`session_state`)
 
 Сессия — основная сущность, привязанная к пользователю. Состояние определяет,
@@ -109,6 +106,10 @@ flowchart TD
     REROUTE -->|Нет| MANUAL[Ручной режим:<br/>сохранить фото<br/>→ wait_style<br/>показать карусель]
 ```
 
+Дополнительно для активных flow:
+- `assistant_chat` и `assistant_wait_idea`: новое фото не ломает flow, бот спрашивает "новое или текущее фото" (`assistant_new_photo` / `assistant_keep_photo`).
+- `wait_pack_preview_payment` и `wait_pack_approval`: аналогичный выбор для pack flow (`pack_new_photo` / `pack_keep_photo`) с продолжением pack-сценария.
+
 ### Обработка текста (`bot.on("text")`)
 
 Маршрутизация по `session.state`:
@@ -131,20 +132,22 @@ flowchart TD
 
 #### Модификации стикера (после генерации)
 - `change_style` / `change_style:ID` — изменить стиль
-- `change_emotion` / `change_emotion:ID` — изменить эмоцию
+- `change_emotion` / `change_emotion:ID[:SESSION_ID[:REV]]` — изменить эмоцию
 - `emotion_ID` — выбрать пресет эмоции
-- `change_motion` / `change_motion:ID` — изменить движение
+- `change_motion` / `change_motion:ID[:SESSION_ID[:REV]]` — изменить движение
 - `motion_ID` — выбрать пресет движения
 - `add_text:ID` — добавить текст
 - `toggle_border:ID` — вкл/выкл белую рамку
 - `add_to_pack` / `add_to_pack:ID` — добавить в стикерпак
 
 #### Ассистент
-- `assistant_confirm` — подтвердить параметры, запустить генерацию
-- `assistant_restart` — начать заново
-- `assistant_new_photo` — загрузить новое фото
-- `assistant_keep_photo` — оставить текущее фото
-- `assistant_pick_style:ID` — выбрать стиль из примеров
+- `assistant_confirm[:SESSION_ID[:REV]]` — подтвердить параметры, запустить генерацию
+- `assistant_restart[:SESSION_ID[:REV]]` — начать заново
+- `assistant_new_photo[:SESSION_ID[:REV]]` — загрузить новое фото
+- `assistant_keep_photo[:SESSION_ID[:REV]]` — оставить текущее фото
+- `assistant_style_preview:STYLE_ID[:SESSION_ID[:REV]]` — показать превью стиля
+- `assistant_style_preview_ok:STYLE_ID:STICKER_MSG_ID[:SESSION_ID[:REV]]` — применить стиль из превью
+- `assistant_pick_style:STYLE_ID[:SESSION_ID[:REV]]` — выбрать стиль из примеров
 
 #### Идеи для пака
 - `pack_ideas:ID` — показать идеи для стикера
@@ -158,20 +161,25 @@ flowchart TD
 - `pack_try:CONTENT_SET_ID` — выбрать набор и перейти к фото/стилю (wait_pack_photo или wait_pack_preview_payment)
 - `pack_start:TEMPLATE_ID` — старт flow по выбранному template (fallback, без карусели)
 - `pack_style:STYLE_ID` — выбрать style preset v2 перед preview
-- `pack_preview_pay[:SESSION_ID]` — оплатить превью (1 кредит), session-bound callback
-- `pack_approve` — оплатить сборку (N-1) и запустить assemble
-- `pack_regenerate` — перегенерировать preview (1 кредит)
-- `pack_cancel` — отменить pack flow
-- `pack_back_to_carousel[:SESSION_ID]` — назад к выбору поз, session-bound callback
+- `pack_preview_pay:SESSION_ID[:REV]` — оплатить превью (1 кредит)
+- `pack_new_photo:SESSION_ID[:REV]` — использовать новое фото и вернуться к шагу выбора стиля
+- `pack_keep_photo:SESSION_ID[:REV]` — оставить текущее фото и продолжить текущий шаг pack flow
+- `pack_back_to_carousel:SESSION_ID[:REV]` — вернуться к выбору поз
+- `pack_approve:SESSION_ID[:REV]` — оплатить сборку (N-1) и запустить assemble
+- `pack_regenerate:SESSION_ID[:REV]` — перегенерировать preview (1 кредит)
+- `pack_cancel:SESSION_ID[:REV]` — отменить pack flow
 
 #### Идеи стикеров (ассистент, assistant_wait_idea)
-- `asst_idea_gen` — сгенерировать выбранную идею
-- `asst_idea_next` — следующая идея
-- `asst_idea_restyle` — сменить стиль
-- `asst_idea_style` — выбрать стиль из примеров
-- `asst_idea_back` — назад
-- `asst_idea_custom` — своя идея (текстом)
-- `asst_idea_skip` — пропустить, перейти в assistant_chat
+- `asst_idea_gen:INDEX[:SESSION_ID[:REV]]` — сгенерировать выбранную идею
+- `asst_idea_next:INDEX[:SESSION_ID[:REV]]` — следующая идея
+- `asst_idea_restyle:STYLE_ID:INDEX[:SESSION_ID[:REV]]` — сменить стиль
+- `asst_idea_restyle_ok:STYLE_ID:INDEX:STICKER_MSG_ID[:SESSION_ID[:REV]]` — подтвердить новый стиль
+- `asst_idea_style:INDEX[:SESSION_ID[:REV]]` — выбрать стиль из примеров
+- `asst_idea_back:INDEX[:SESSION_ID[:REV]]` — назад
+- `asst_idea_holiday:HOLIDAY_ID:INDEX[:SESSION_ID[:REV]]` — включить holiday-режим
+- `asst_idea_holiday_off:INDEX[:SESSION_ID[:REV]]` — выключить holiday-режим
+- `asst_idea_custom[:SESSION_ID[:REV]]` — своя идея (текстом)
+- `asst_idea_skip[:SESSION_ID[:REV]]` — пропустить, перейти в assistant_chat
 
 #### Оплата
 - `pack_CREDITS_PRICE` — выбрать пакет кредитов
@@ -180,16 +188,35 @@ flowchart TD
 #### Другое
 - `rate:ID:SCORE` — оценить стикер (1-5)
 - `make_example:ID` — пометить как пример стиля (admin)
-- `retry_generation:ID` — повторить генерацию
+- `retry_generation:SESSION_ID[:REV]` — повторить генерацию
 - `new_photo` — загрузить новое фото
+- `single_new_photo:SESSION_ID[:REV]` — использовать новое фото в single flow (переход к выбору стиля)
+- `single_keep_photo:SESSION_ID[:REV]` — оставить текущее фото в single flow
 - `cancel` — отменить
 - `noop` — пустое действие (для неактивных кнопок)
+
+### Unified replacement-photo rule
+- Если в текущей session уже есть `current_photo_file_id`, при отправке нового фото бот сначала спрашивает выбор:
+  - использовать новое фото,
+  - или оставить текущее.
+- Это правило применяется для `assistant`, `pack` и `single` flow (кроме hard-processing состояний).
+- Источник "рабочего фото" централизован: `session.current_photo_file_id || user.last_photo_file_id`.
+
+### Subject Profile Contract (phase 1)
+- Перед генерацией API определяет source по `generation_type`:
+  - `style` -> `current_photo_file_id` (photo),
+  - `emotion`/`motion`/`text` -> `last_sticker_file_id` (sticker).
+- При включенном `subject_profile_enabled` API сохраняет в `sessions` профиль субъекта:
+  `subject_mode`, `subject_count`, `subject_confidence`, `subject_source_file_id`, `subject_source_kind`, `subject_detected_at`.
+- При включенном `subject_lock_enabled` в финальный prompt добавляется обязательный `Subject Lock Block`.
+- Для pack flow добавлена проверка совместимости выбранного `pack_content_set` с `sessions.subject_mode` (если `subject_mode_pack_filter_enabled=true`).
 
 ## Ключевые функции
 
 ### `startGeneration(ctx, user, session, lang, options)`
 Главная точка входа в генерацию. Проверяет кредиты, показывает paywall если нужно,
 списывает кредиты атомарно, создаёт job в очереди.
+Также здесь применяется Subject Profile Contract: расчет source, (опционально) детект профиля и инъекция subject-lock в prompt.
 
 ### `startAssistantDialog(ctx, user, lang)`
 Инициализирует AI-ассистента. Закрывает старые сессии, создаёт новую.
@@ -209,6 +236,12 @@ flowchart TD
 ### `getActiveSession(userId)`
 Получает активную сессию. Есть fallback: если `is_active = true` не находит,
 ищет последнюю не-canceled сессию (workaround для бага с `is_active`).
+
+### Session Router (pack/single/assistant callbacks)
+- Для критичных callback-событий pack/single/assistant flow используется резолв сессии по `session_id` из `callback_data`.
+- В callback поддерживаются форматы `action:sid` и `action:sid:rev`.
+- При `session_router_enabled=true` legacy fallback на "текущую активную сессию" отключается: callback без `sid` отклоняется как `session_not_found`.
+- При включенном флаге `strict_session_rev_enabled=true` stale-кнопки отбрасываются с user-facing reason через `answerCbQuery`.
 
 ### `getUserPhotoFileId(user, session)`
 Ищет фото: сначала `session.current_photo_file_id`, потом `user.last_photo_file_id`.

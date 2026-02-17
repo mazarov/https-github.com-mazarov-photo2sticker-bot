@@ -1,8 +1,5 @@
 # Известные проблемы и workaround'ы
 
-> Архитектурный план по устранению класса ошибок "stale callback / wrong session state":
-> [16-02-session-architecture-requirements.md](../16-02-session-architecture-requirements.md), [16-02-session-router-rfc.md](../16-02-session-router-rfc.md)
-
 ## 1. `is_active` всегда false на сессиях
 
 **Проблема**: при любом `UPDATE` на таблице `sessions`, поле `is_active` сбрасывается в `false`.
@@ -165,17 +162,16 @@ bot.launch({ dropPendingUpdates: true });
 
 ---
 
-## 11. Stale callback в pack-flow (preview/back)
+## 11. Stale inline callbacks в pack flow
 
-**Проблема**: пользователь кликает по устаревшему inline-сообщению, callback приходит для
-неактуального шага (`wait_pack_carousel` vs `wait_pack_preview_payment`) и выглядит как "кнопка не работает".
+**Проблема**: старые inline-кнопки из предыдущих сообщений могут попадать в новую
+сессию и вызывать гонки по состояниям.
 
-**Текущее решение (point fixes)**:
-- session-bound callback_data для критичных действий:
-  - `pack_preview_pay[:session_id]`
-  - `pack_back_to_carousel[:session_id]`
-- idempotent back для `wait_pack_carousel` / `wait_pack_preview_payment`
-- явный user-facing hint при preview-клике из карусели
+**Текущее решение**:
+1. Критичные callback'и pack flow привязаны к `session_id` в `callback_data`.
+2. Поддержан формат `action:sid:rev` для проверки актуальности кнопки.
+3. Добавлены `sessions.session_rev` и `strict_session_rev_enabled` (feature flag).
 
-**Долгосрочное решение**:
-- Session Router + FSM + `session_rev` (см. RFC).
+**Режим rollout**:
+- сначала `strict_session_rev_enabled=false` (совместимость),
+- затем включить strict после smoke-тестов на `test`.

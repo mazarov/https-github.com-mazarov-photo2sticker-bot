@@ -10,6 +10,19 @@ import { sendAlert, sendNotification, sendPackPreviewAlert } from "./lib/alerts"
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
 import { addWhiteBorder, addTextToSticker } from "./lib/image-utils";
+import {
+  appendSubjectLock,
+  buildSubjectLockBlock,
+  detectSubjectProfileFromImageBuffer,
+  isSubjectLockEnabled,
+  isSubjectModePackFilterEnabled,
+  isSubjectPostcheckEnabled,
+  isSubjectProfileEnabled,
+  normalizeSubjectMode,
+  normalizeSubjectSourceKind,
+  type SubjectProfile,
+  type SubjectSourceKind,
+} from "./lib/subject-profile";
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
@@ -78,6 +91,136 @@ async function getWorkerBotUsername(): Promise<string> {
   }
   workerBotUsernameCache = config.botUsername || "sticq_bot";
   return workerBotUsernameCache;
+}
+
+function getMimeTypeByTelegramPath(filePath: string): string {
+  if (filePath.endsWith(".webp")) return "image/webp";
+  if (filePath.endsWith(".png")) return "image/png";
+  return "image/jpeg";
+}
+
+function normalizePackSetSubjectMode(value: any): "single" | "multi" | "any" {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "single") return "single";
+  if (normalized === "multi") return "multi";
+  return "any";
+}
+
+function isPackSetCompatibleWithSubject(
+  setSubjectMode: "single" | "multi" | "any",
+  subjectMode: "single" | "multi" | "unknown"
+): boolean {
+  if (subjectMode === "unknown") return true;
+  if (setSubjectMode === "any") return true;
+  return setSubjectMode === subjectMode;
+}
+
+function isSubjectPostcheckMismatch(
+  expectedMode: "single" | "multi" | "unknown",
+  detectedMode: "single" | "multi" | "unknown",
+  detectedCount: number | null
+): boolean {
+  if (expectedMode === "unknown") return false;
+  if (expectedMode === "single") {
+    if (detectedMode === "multi") return true;
+    if (typeof detectedCount === "number" && detectedCount > 1) return true;
+    return false;
+  }
+  if (expectedMode === "multi") {
+    if (detectedMode === "single") return true;
+    if (typeof detectedCount === "number" && detectedCount <= 1) return true;
+    return false;
+  }
+  return false;
+}
+
+function getSessionSubjectProfileForSource(
+  session: any,
+  sourceFileId: string,
+  sourceKind: SubjectSourceKind
+): SubjectProfile | null {
+  const sessionSourceId = session?.subject_source_file_id || null;
+  const sessionSourceKind = normalizeSubjectSourceKind(session?.subject_source_kind);
+  if (!sessionSourceId || sessionSourceId !== sourceFileId || sessionSourceKind !== sourceKind) {
+    return null;
+  }
+
+  const parsedCount = Number(session?.subject_count);
+  const parsedConfidence = Number(session?.subject_confidence);
+
+  return {
+    subjectMode: normalizeSubjectMode(session?.subject_mode),
+    subjectCount: Number.isFinite(parsedCount) && parsedCount > 0 ? Math.floor(parsedCount) : null,
+    subjectConfidence:
+      Number.isFinite(parsedConfidence) && parsedConfidence >= 0
+        ? Math.max(0, Math.min(1, Number(parsedConfidence.toFixed(3))))
+        : null,
+    sourceFileId,
+    sourceKind,
+    detectedAt: session?.subject_detected_at || new Date().toISOString(),
+  };
+}
+
+async function ensureSubjectProfileForSource(
+  session: any,
+  sourceFileId: string,
+  sourceKind: SubjectSourceKind,
+  sourceBuffer: Buffer,
+  sourceMime: string
+): Promise<SubjectProfile | null> {
+  const profileEnabled = await isSubjectProfileEnabled();
+  if (!profileEnabled) return null;
+
+  const existing = getSessionSubjectProfileForSource(session, sourceFileId, sourceKind);
+  if (existing) return existing;
+
+  const detectedAt = new Date().toISOString();
+  const detectorModel = await getAppConfig("gemini_model_subject_detector", "gemini-2.0-flash");
+  console.log("[subject-profile] detector model:", detectorModel, {
+    sessionId: session.id,
+    sourceKind,
+    sourceFileId: sourceFileId.substring(0, 30) + "...",
+  });
+  const detected = await detectSubjectProfileFromImageBuffer(sourceBuffer, sourceMime);
+
+  const nextProfile: SubjectProfile = {
+    subjectMode: detected.subjectMode,
+    subjectCount: detected.subjectCount,
+    subjectConfidence: detected.subjectConfidence,
+    sourceFileId,
+    sourceKind,
+    detectedAt,
+  };
+
+  await supabase
+    .from("sessions")
+    .update({
+      subject_mode: nextProfile.subjectMode,
+      subject_count: nextProfile.subjectCount,
+      subject_confidence: nextProfile.subjectConfidence,
+      subject_source_file_id: nextProfile.sourceFileId,
+      subject_source_kind: nextProfile.sourceKind,
+      subject_detected_at: detectedAt,
+    })
+    .eq("id", session.id);
+
+  Object.assign(session, {
+    subject_mode: nextProfile.subjectMode,
+    subject_count: nextProfile.subjectCount,
+    subject_confidence: nextProfile.subjectConfidence,
+    subject_source_file_id: nextProfile.sourceFileId,
+    subject_source_kind: nextProfile.sourceKind,
+    subject_detected_at: nextProfile.detectedAt,
+  });
+
+  console.log("[subject-profile] worker updated profile:", {
+    sessionId: session.id,
+    sourceKind,
+    subjectMode: nextProfile.subjectMode,
+    subjectCount: nextProfile.subjectCount,
+  });
+
+  return nextProfile;
 }
 
 /**
@@ -208,34 +351,70 @@ async function runPackPreviewJob(job: any) {
     .maybeSingle();
   if (!batch) throw new Error("Pack batch not found");
 
-  // Get content set (required, no longer using pack_templates)
-  if (!session.pack_content_set_id) {
-    throw new Error("Pack content set ID not found in session");
+  const templateId = batch.template_id || session.pack_template_id || null;
+  let template: any = null;
+  let baseContentSet: any = null;
+  if (session.pack_content_set_id) {
+    const { data: selectedSet } = await supabase
+      .from("pack_content_sets")
+      .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active, subject_mode")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (selectedSet?.is_active) {
+      baseContentSet = selectedSet;
+      console.log("[PackPreview] Using selected content set:", session.pack_content_set_id);
+    }
   }
+  if (!baseContentSet && templateId) {
+    const { data: firstSet } = await supabase
+      .from("pack_content_sets")
+      .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active, subject_mode")
+      .eq("pack_template_id", templateId)
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (firstSet) {
+      baseContentSet = firstSet;
+      console.log("[PackPreview] Fallback to first active content set:", firstSet.id);
+    }
+  }
+  if (baseContentSet) {
+    template = {
+      id: baseContentSet.pack_template_id || templateId || "unknown_template",
+      sticker_count: baseContentSet.sticker_count || 4,
+      labels: baseContentSet.labels || [],
+      labels_en: baseContentSet.labels_en || baseContentSet.labels || [],
+      scene_descriptions: baseContentSet.scene_descriptions || [],
+      collage_file_id: null,
+      collage_url: null,
+    };
+  }
+  if (!template) throw new Error("Pack content set not found");
 
-  const { data: contentSet } = await supabase
-    .from("pack_content_sets")
-    .select("scene_descriptions, sticker_count, is_active")
-    .eq("id", session.pack_content_set_id)
-    .maybeSingle();
-  
-  if (!contentSet) {
-    throw new Error(`Pack content set not found: ${session.pack_content_set_id}`);
+  // Scene descriptions: from content set if session has one, else from template
+  const stickerCountForScenes = template.sticker_count || 4;
+  let sceneDescriptionsSource: string[] = template.scene_descriptions || [];
+  console.log("[PackPreview] session.pack_content_set_id:", session.pack_content_set_id ?? "(not set)");
+  if (session.pack_content_set_id) {
+    const { data: contentSet, error: contentSetErr } = await supabase
+      .from("pack_content_sets")
+      .select("scene_descriptions, is_active")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (contentSetErr) {
+      console.warn("[PackPreview] Content set fetch error:", contentSetErr.message);
+    } else if (!contentSet) {
+      console.warn("[PackPreview] Content set not found:", session.pack_content_set_id);
+    } else if (!contentSet.is_active) {
+      console.warn("[PackPreview] Content set inactive:", session.pack_content_set_id);
+    } else if (!Array.isArray(contentSet.scene_descriptions) || contentSet.scene_descriptions.length !== stickerCountForScenes) {
+      console.warn("[PackPreview] Content set scene_descriptions length mismatch: got", contentSet.scene_descriptions?.length ?? 0, "expected", stickerCountForScenes);
+    } else {
+      sceneDescriptionsSource = contentSet.scene_descriptions;
+      console.log("[PackPreview] Using scene_descriptions from content set:", session.pack_content_set_id);
+    }
   }
-  if (!contentSet.is_active) {
-    throw new Error(`Pack content set inactive: ${session.pack_content_set_id}`);
-  }
-
-  const stickerCountForScenes = contentSet.sticker_count || 9;
-  const sceneDescriptionsSource: string[] = Array.isArray(contentSet.scene_descriptions) 
-    ? contentSet.scene_descriptions 
-    : [];
-  
-  if (sceneDescriptionsSource.length !== stickerCountForScenes) {
-    throw new Error(`Scene descriptions length mismatch: got ${sceneDescriptionsSource.length}, expected ${stickerCountForScenes}`);
-  }
-  
-  console.log("[PackPreview] Using content set:", session.pack_content_set_id, "sticker_count:", stickerCountForScenes);
 
   // Unified flow: session.prompt_final = same as single sticker (agent + composition suffix from API).
   // Fallback when empty: preset.prompt_hint only.
@@ -269,16 +448,93 @@ async function runPackPreviewJob(job: any) {
   const filePath = await getFilePath(photoFileId);
   const photoBuffer = await downloadFile(filePath);
   const photoBase64 = photoBuffer.toString("base64");
-  const photoMime = filePath.endsWith(".png") ? "image/png" : "image/jpeg";
+  const photoMime = getMimeTypeByTelegramPath(filePath);
 
-  // Download collage/style reference image if available (deprecated, kept for backward compatibility)
-  // Note: collage_file_id/collage_url were in pack_templates, now removed
-  // Can be added to pack_content_sets if needed in future
+  const lockEnabled = await isSubjectLockEnabled();
+  let packSubjectProfile = getSessionSubjectProfileForSource(session, photoFileId, "photo");
+  if (!packSubjectProfile) {
+    packSubjectProfile = await ensureSubjectProfileForSource(session, photoFileId, "photo", photoBuffer, photoMime);
+  }
+  const subjectLockBlock =
+    lockEnabled && packSubjectProfile ? buildSubjectLockBlock(packSubjectProfile) : "";
+  const styleBlockWithSubject = subjectLockBlock
+    ? appendSubjectLock(styleBlock, subjectLockBlock)
+    : styleBlock;
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  if (subjectFilterEnabled) {
+    const setSubjectMode = normalizePackSetSubjectMode(baseContentSet?.subject_mode);
+    const subjectMode = packSubjectProfile?.subjectMode || normalizeSubjectMode(session.subject_mode);
+    if (!isPackSetCompatibleWithSubject(setSubjectMode, subjectMode)) {
+      console.warn("[PackPreview] blocked by subject-mode compatibility:", {
+        setSubjectMode,
+        subjectMode,
+        contentSetId: baseContentSet?.id,
+        sessionId: session.id,
+      });
+
+      await supabase
+        .from("users")
+        .update({ credits: (user.credits || 0) + 1 })
+        .eq("id", session.user_id);
+
+      await supabase
+        .from("pack_batches")
+        .update({ status: "failed", credits_spent: 0, updated_at: new Date().toISOString() })
+        .eq("id", batch.id);
+
+      await supabase
+        .from("sessions")
+        .update({ state: "wait_pack_carousel", is_active: true, progress_message_id: null, progress_chat_id: null })
+        .eq("id", session.id);
+
+      if (session.progress_message_id && session.progress_chat_id) {
+        try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
+      }
+
+      await sendMessage(
+        telegramId,
+        lang === "ru"
+          ? "Набор поз не подходит под текущее количество персонажей. Выбери совместимый набор."
+          : "This pose set is not compatible with the current subject count. Please choose a compatible set."
+      );
+      await sendAlert({
+        type: "pack_preview_failed",
+        message: "Pack preview rejected by subject_mode compatibility",
+        details: {
+          user: `@${user.username || telegramId}`,
+          batchId: batch.id,
+          setSubjectMode,
+          subjectMode,
+          contentSetId: baseContentSet?.id || "-",
+        },
+      });
+      return;
+    }
+  }
+
+  // Download collage/style reference image if available
   let collageBase64: string | null = null;
   let collageMime = "image/png";
+  if (template.collage_file_id || template.collage_url) {
+    try {
+      let collageBuf: Buffer;
+      if (template.collage_file_id) {
+        const collagePath = await getFilePath(template.collage_file_id);
+        collageBuf = await downloadFile(collagePath);
+      } else {
+        const resp = await axios.get(template.collage_url, { responseType: "arraybuffer", timeout: 15000 });
+        collageBuf = Buffer.from(resp.data);
+      }
+      collageBase64 = collageBuf.toString("base64");
+      collageMime = template.collage_url?.endsWith(".png") ? "image/png" : "image/jpeg";
+      console.log("[PackPreview] Collage loaded, size:", Math.round(collageBuf.length / 1024), "KB");
+    } catch (collageErr: any) {
+      console.warn("[PackPreview] Failed to load collage, proceeding without:", collageErr.message);
+    }
+  }
 
   // Build prompt
-  const stickerCount = stickerCountForScenes;
+  const stickerCount = template.sticker_count || 4;
   const cols = Math.ceil(Math.sqrt(stickerCount));
   const rows = Math.ceil(stickerCount / cols);
   const sceneDescriptions: string[] = sceneDescriptionsSource;
@@ -305,11 +561,11 @@ CRITICAL RULES FOR THE GRID:
 
   const hasCollage = !!collageBase64;
   const prompt = hasCollage
-    ? `${styleBlock ? `${styleBlock}\n\n` : ""}[REFERENCE IMAGE]
+    ? `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}[REFERENCE IMAGE]
 The first image is a reference sticker pack. Match its visual style (rendering, outline, proportions, colors).
 
 ${packTaskBlock}`
-    : `${styleBlock ? `${styleBlock}\n\n` : ""}${packTaskBlock}`;
+    : `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}${packTaskBlock}`;
 
   console.log("[PackPreview] Prompt (first 400):", prompt.substring(0, 400), hasCollage ? "(with collage ref)" : "(no collage)");
 
@@ -434,21 +690,26 @@ ${packTaskBlock}`
   });
   const approveBtn = await getText(lang, "btn.approve_pack", { price: remainingCredits });
   const regenerateBtn = await getText(lang, "btn.regenerate_pack");
+  const sessionRef = Number.isInteger(Number(session.session_rev))
+    ? `${session.id}:${session.session_rev}`
+    : session.id;
 
   const previewResult = await sendPhoto(telegramId, bufferToSend, caption, {
     inline_keyboard: [
-      [{ text: approveBtn, callback_data: "pack_approve" }],
-      [{ text: regenerateBtn, callback_data: "pack_regenerate" }],
+      [{ text: approveBtn, callback_data: `pack_approve:${sessionRef}` }],
+      [{ text: regenerateBtn, callback_data: `pack_regenerate:${sessionRef}` }],
     ],
   });
 
   const sheetFileId = previewResult?.file_id || "";
   console.log("[PackPreview] Preview sent, file_id:", sheetFileId?.substring(0, 30));
 
-  sendPackPreviewAlert(session.selected_style_id ?? null, bufferToSend, {
-    user: `@${user.username || telegramId}`,
-    batchId: batch.id,
-  }).catch((err) => console.warn("[PackPreview] sendPackPreviewAlert failed:", err?.message));
+  if (session.selected_style_id) {
+    sendPackPreviewAlert(session.selected_style_id, bufferToSend, {
+      user: `@${user.username || telegramId}`,
+      batchId: batch.id,
+    }).catch((err) => console.warn("[PackPreview] sendPackPreviewAlert failed:", err?.message));
+  }
 
   await supabase
     .from("sessions")
@@ -497,34 +758,58 @@ async function runPackAssembleJob(job: any) {
     .maybeSingle();
   if (!batch) throw new Error("Pack batch not found");
 
-  // Get content set (required, no longer using pack_templates)
-  if (!session.pack_content_set_id) {
-    throw new Error("Pack content set ID not found in session");
+  const templateId = batch.template_id || session.pack_template_id || null;
+  let template: any = null;
+  let baseContentSet: any = null;
+  if (session.pack_content_set_id) {
+    const { data: selectedSet } = await supabase
+      .from("pack_content_sets")
+      .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active, subject_mode")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (selectedSet?.is_active) {
+      baseContentSet = selectedSet;
+      console.log("[PackAssemble] Using selected content set:", session.pack_content_set_id);
+    }
   }
+  if (!baseContentSet && templateId) {
+    const { data: firstSet } = await supabase
+      .from("pack_content_sets")
+      .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active, subject_mode")
+      .eq("pack_template_id", templateId)
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (firstSet) {
+      baseContentSet = firstSet;
+      console.log("[PackAssemble] Fallback to first active content set:", firstSet.id);
+    }
+  }
+  if (baseContentSet) {
+    template = {
+      id: baseContentSet.pack_template_id || templateId || "unknown_template",
+      sticker_count: baseContentSet.sticker_count || 4,
+      labels: baseContentSet.labels || [],
+      labels_en: baseContentSet.labels_en || baseContentSet.labels || [],
+      scene_descriptions: baseContentSet.scene_descriptions || [],
+    };
+  }
+  if (!template) throw new Error("Pack content set not found");
 
-  const { data: contentSet } = await supabase
-    .from("pack_content_sets")
-    .select("labels, labels_en, sticker_count, name_ru, name_en, is_active")
-    .eq("id", session.pack_content_set_id)
-    .maybeSingle();
-  
-  if (!contentSet) {
-    throw new Error(`Pack content set not found: ${session.pack_content_set_id}`);
+  // Labels: from content set if session has one, else from template
+  let labelsSource: string[] = (lang === "ru" ? template.labels : (template.labels_en || template.labels)) || [];
+  if (session.pack_content_set_id) {
+    const { data: contentSet } = await supabase
+      .from("pack_content_sets")
+      .select("labels, labels_en, is_active")
+      .eq("id", session.pack_content_set_id)
+      .maybeSingle();
+    if (contentSet?.is_active && Array.isArray(contentSet.labels) && contentSet.labels.length === (template.sticker_count || 4)) {
+      labelsSource = lang === "ru" ? (contentSet.labels || []) : (contentSet.labels_en || contentSet.labels || []);
+      console.log("[PackAssemble] Using labels from content set:", session.pack_content_set_id);
+    }
   }
-  if (!contentSet.is_active) {
-    throw new Error(`Pack content set inactive: ${session.pack_content_set_id}`);
-  }
-
-  const stickerCount = contentSet.sticker_count || 9;
-  const labelsSource: string[] = Array.isArray(contentSet.labels) 
-    ? (lang === "ru" ? contentSet.labels : (contentSet.labels_en || contentSet.labels || []))
-    : [];
-  
-  if (labelsSource.length !== stickerCount) {
-    throw new Error(`Labels length mismatch: got ${labelsSource.length}, expected ${stickerCount}`);
-  }
-  
-  console.log("[PackAssemble] Using content set:", session.pack_content_set_id, "sticker_count:", stickerCount);
 
   // Helper: update progress message
   async function updatePackProgress(text: string) {
@@ -544,6 +829,7 @@ async function runPackAssembleJob(job: any) {
   const sheetMeta = await sharp(sheetBuffer).metadata();
   const sheetW = sheetMeta.width || 1024;
   const sheetH = sheetMeta.height || 1024;
+  const stickerCount = template.sticker_count || 4;
   // User already paid 1 credit for preview, so on assemble failure
   // we refund only the second payment (N-1 credits).
   const assembleRefundAmount = Math.max(0, stickerCount - 1);
@@ -668,7 +954,7 @@ async function runPackAssembleJob(job: any) {
   const prefix = rawPrefix.slice(0, maxPrefixLen);
   const setName = `${prefix}${suffix}`;
   console.log("[PackAssemble] Sticker set name:", setName, "len:", setName.length);
-  const packTitle = lang === "ru" ? `${contentSet.name_ru} — Stickers` : `${contentSet.name_en} — Stickers`;
+  const packTitle = lang === "ru" ? `${template.name_ru} — Stickers` : `${template.name_en} — Stickers`;
 
   try {
     // Create set with first sticker
@@ -902,18 +1188,27 @@ async function runJob(job: any) {
   const fileBuffer = await downloadFile(filePath);
 
   const base64 = fileBuffer.toString("base64");
-  const mimeType = filePath.endsWith(".webp")
-    ? "image/webp"
-    : filePath.endsWith(".png")
-      ? "image/png"
-      : "image/jpeg";
+  const mimeType = getMimeTypeByTelegramPath(filePath);
+  const sourceKind: SubjectSourceKind =
+    generationType === "emotion" || generationType === "motion" || generationType === "text"
+      ? "sticker"
+      : "photo";
+  const lockEnabled = await isSubjectLockEnabled();
+  let subjectProfile = getSessionSubjectProfileForSource(session, sourceFileId, sourceKind);
+  if (!subjectProfile) {
+    subjectProfile = await ensureSubjectProfileForSource(session, sourceFileId, sourceKind, fileBuffer, mimeType);
+  }
+  const promptForGeneration =
+    lockEnabled && subjectProfile
+      ? appendSubjectLock(session.prompt_final || "", buildSubjectLockBlock(subjectProfile))
+      : (session.prompt_final || "");
 
   await updateProgress(3);
   console.log("Calling Gemini image generation...");
   console.log("generationType:", generationType);
   console.log("session.generation_type:", session.generation_type);
   console.log("session.state:", session.state);
-  console.log("Full prompt:", session.prompt_final);
+  console.log("Full prompt:", promptForGeneration);
   console.log("text_prompt:", session.text_prompt);
 
   // Model selection from app_config (changeable at runtime via Supabase, cached 60s)
@@ -923,16 +1218,15 @@ async function runJob(job: any) {
     await getAppConfig("gemini_model_style", "gemini-3-pro-image-preview");
   console.log("Using model:", model, "generationType:", generationType);
 
-  let geminiRes;
-  try {
-    geminiRes = await axios.post(
+  const callGeminiImage = async (promptText: string) =>
+    axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
         contents: [
           {
             role: "user",
             parts: [
-              { text: session.prompt_final || "" },
+              { text: promptText },
               {
                 inlineData: {
                   mimeType,
@@ -951,6 +1245,10 @@ async function runJob(job: any) {
         headers: { "x-goog-api-key": config.geminiApiKey },
       }
     );
+
+  let geminiRes;
+  try {
+    geminiRes = await callGeminiImage(promptForGeneration);
   } catch (err: any) {
     const errorData = err.response?.data;
     const errorMessage = errorData?.error?.message || err.message || err.code || "Unknown error";
@@ -1003,9 +1301,12 @@ async function runJob(job: any) {
       ? "⚠️ Не удалось обработать это фото в выбранном стиле.\n\nПопробуй другое фото или другой стиль.\nКредит возвращён на баланс."
       : "⚠️ Could not process this photo with the chosen style.\n\nTry a different photo or style.\nCredit has been refunded.";
     const retryBtnBlocked = lang === "ru" ? "🔄 Повторить" : "🔄 Retry";
+    const retrySessionRef = Number.isInteger(Number(session.session_rev))
+      ? `${session.id}:${session.session_rev}`
+      : session.id;
     await sendMessage(telegramId, blockedMsg, {
       inline_keyboard: [[
-        { text: retryBtnBlocked, callback_data: `retry_generation:${session.id}` },
+        { text: retryBtnBlocked, callback_data: `retry_generation:${retrySessionRef}` },
       ]],
     });
 
@@ -1020,9 +1321,9 @@ async function runJob(job: any) {
     return;
   }
 
-  const imageBase64 =
-    geminiRes.data?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData
-      ?.data || null;
+  let imageBase64 =
+    geminiRes.data?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data || null;
+  let finalPromptUsed = promptForGeneration;
 
   if (!imageBase64) {
     console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
@@ -1041,6 +1342,81 @@ async function runJob(job: any) {
       },
     });
     throw new Error("Gemini returned no image");
+  }
+
+  const postcheckEnabled = await isSubjectPostcheckEnabled();
+  if (postcheckEnabled && subjectProfile?.subjectMode && subjectProfile.subjectMode !== "unknown") {
+    const firstGeneratedBuffer = Buffer.from(imageBase64, "base64");
+    const detected = await detectSubjectProfileFromImageBuffer(firstGeneratedBuffer, "image/png");
+    const mismatch = isSubjectPostcheckMismatch(
+      subjectProfile.subjectMode,
+      detected.subjectMode,
+      detected.subjectCount
+    );
+
+    if (mismatch) {
+      console.warn("[subject-postcheck] mismatch detected, retrying once:", {
+        sessionId: session.id,
+        expectedMode: subjectProfile.subjectMode,
+        detectedMode: detected.subjectMode,
+        detectedCount: detected.subjectCount,
+      });
+
+      await sendAlert({
+        type: "generation_failed",
+        message: "Subject postcheck mismatch on first output, retrying",
+        details: {
+          user: `@${user?.username || telegramId}`,
+          sessionId: session.id,
+          expectedMode: subjectProfile.subjectMode,
+          detectedMode: detected.subjectMode,
+          detectedCount: detected.subjectCount ?? "-",
+          generationType,
+        },
+      });
+
+      const retryPrompt = `${promptForGeneration}\n\n[SUBJECT POSTCHECK RETRY]\nCRITICAL: Previous output had subject-count mismatch. Keep EXACT source subject count. Do NOT add or remove people.`;
+      let retryRes: any;
+      try {
+        retryRes = await callGeminiImage(retryPrompt);
+      } catch (retryErr: any) {
+        const retryMsg = retryErr.response?.data?.error?.message || retryErr.message || "retry_failed";
+        throw new Error(`Subject postcheck retry failed: ${retryMsg}`);
+      }
+
+      const retryBlockReason = retryRes.data?.promptFeedback?.blockReason;
+      if (retryBlockReason) {
+        throw new Error(`Subject postcheck retry blocked: ${retryBlockReason}`);
+      }
+
+      const retryImageBase64 =
+        retryRes.data?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data || null;
+      if (!retryImageBase64) {
+        throw new Error("Subject postcheck retry returned no image");
+      }
+
+      const retryGeneratedBuffer = Buffer.from(retryImageBase64, "base64");
+      const retryDetected = await detectSubjectProfileFromImageBuffer(retryGeneratedBuffer, "image/png");
+      const retryMismatch = isSubjectPostcheckMismatch(
+        subjectProfile.subjectMode,
+        retryDetected.subjectMode,
+        retryDetected.subjectCount
+      );
+      if (retryMismatch) {
+        throw new Error(
+          `Subject postcheck mismatch after retry: expected=${subjectProfile.subjectMode} actual=${retryDetected.subjectMode} count=${retryDetected.subjectCount ?? "null"}`
+        );
+      }
+
+      imageBase64 = retryImageBase64;
+      finalPromptUsed = retryPrompt;
+      console.log("[subject-postcheck] retry accepted:", {
+        sessionId: session.id,
+        expectedMode: subjectProfile.subjectMode,
+        detectedMode: retryDetected.subjectMode,
+        detectedCount: retryDetected.subjectCount,
+      });
+    }
   }
 
   console.log("Image generated successfully");
@@ -1168,7 +1544,7 @@ async function runJob(job: any) {
       session_id: session.id,
       source_photo_file_id: savedSourcePhotoFileId,
       user_input: session.user_input || null,
-      generated_prompt: session.prompt_final || null,
+      generated_prompt: finalPromptUsed || null,
       result_storage_path: filePathStorage,
       sticker_set_name: user?.sticker_set_name || null,
       style_preset_id: session.selected_style_id || null,  // For style examples
@@ -1501,7 +1877,7 @@ async function poll() {
       try {
         const { data: session } = await supabase
           .from("sessions")
-          .select("user_id, photos, credits_spent")
+          .select("user_id, photos, credits_spent, session_rev")
           .eq("id", job.session_id)
           .maybeSingle();
 
@@ -1528,9 +1904,12 @@ async function poll() {
                 ? "❌ Произошла ошибка при генерации стикера.\n\nКредиты возвращены на баланс."
                 : "❌ An error occurred during sticker generation.\n\nCredits have been refunded.";
               const retryBtn = rlang === "ru" ? "🔄 Повторить" : "🔄 Retry";
+              const retrySessionRef = Number.isInteger(Number(session.session_rev))
+                ? `${job.session_id}:${session.session_rev}`
+                : job.session_id;
               await sendMessage(refundUser.telegram_id, errorText, {
                 inline_keyboard: [[
-                  { text: retryBtn, callback_data: `retry_generation:${job.session_id}` },
+                  { text: retryBtn, callback_data: `retry_generation:${retrySessionRef}` },
                 ]],
               });
             }

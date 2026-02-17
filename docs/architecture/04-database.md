@@ -25,9 +25,6 @@ erDiagram
 
 ## Таблицы
 
-> Планируемые изменения модели сессий (flow_kind, session_rev, ui_message_id/ui_chat_id):
-> [16-02-session-architecture-requirements.md](../16-02-session-architecture-requirements.md), [16-02-session-router-rfc.md](../16-02-session-router-rfc.md)
-
 ### `users` — Пользователи
 
 | Колонка | Тип | Default | Описание |
@@ -75,6 +72,8 @@ erDiagram
 | `user_input` | text | — | Ввод пользователя |
 | `progress_message_id` | bigint | — | ID progress-сообщения |
 | `progress_chat_id` | bigint | — | Chat ID для progress |
+| `ui_message_id` | bigint | — | Message ID текущего UI-экрана flow (для fallback edit) |
+| `ui_chat_id` | bigint | — | Chat ID текущего UI-экрана flow |
 | `pack_ideas` | jsonb | — | Идеи для пака |
 | `current_idea_index` | int | 0 | Текущая идея |
 | `custom_idea` | jsonb | — | Кастомная идея |
@@ -86,10 +85,14 @@ erDiagram
 | `pack_content_set_id` | text | — | FK → pack_content_sets (выбранный набор подписей/сцен) |
 | `pack_carousel_index` | int | — | Индекс текущей карточки в карусели наборов |
 | `pack_sheet_file_id` | text | — | file_id сгенерированного листа превью |
-| `flow_kind` | text | — | План: тип flow (`single` / `pack` / `assistant`) |
-| `session_rev` | int | 1 | План: ревизия сессии для stale callback защиты |
-| `ui_message_id` | bigint | — | План: активное UI-сообщение flow |
-| `ui_chat_id` | bigint | — | План: chat_id активного UI-сообщения |
+| `flow_kind` | text | — | Вид потока (`single`/`assistant`/`pack`) |
+| `session_rev` | int | 1 | Ревизия сессии для stale-callback защиты |
+| `subject_mode` | text | — | Профиль субъекта: `single` / `multi` / `unknown` |
+| `subject_count` | int | — | Оцененное количество людей в source |
+| `subject_confidence` | numeric | — | Confidence детектора (0..1) |
+| `subject_source_file_id` | text | — | Source file_id, для которого считан профиль |
+| `subject_source_kind` | text | — | `photo` или `sticker` |
+| `subject_detected_at` | timestamptz | — | Время обновления профиля |
 | `env` | text | 'prod' | Окружение |
 
 ### `pack_content_sets` — Наборы подписей и сцен для пака
@@ -104,10 +107,10 @@ erDiagram
 | `carousel_description_ru` / `carousel_description_en` | text | Описание в карточке карусели |
 | `labels` / `labels_en` | jsonb | Массивы подписей (порядок = порядок стикеров в сетке) |
 | `scene_descriptions` | jsonb | Массив описаний сцен для Gemini (EN) |
-| `sticker_count` | int | Кол-во стикеров в паке для набора |
 | `sort_order` | int | Порядок в карусели |
 | `is_active` | boolean | Активен ли набор |
 | `mood` | text | Опционально: для автоподбора (romance, everyday, humor, …) |
+| `subject_mode` | text | Совместимость набора: `single` / `multi` / `any` |
 
 ### `jobs` — Очередь заданий
 
@@ -199,6 +202,17 @@ Presets: waving, thumbs_up, facepalm, praying, flexing, shrugging, peace, heart_
 | `updated_at` | timestamptz | Время обновления |
 
 Используется для имён моделей Gemini и другой конфигурации без передеплоя.
+
+Ключи для Session Router rollout:
+- `session_router_enabled` — включение роутера резолва сессий
+- `strict_session_rev_enabled` — строгая проверка `callback rev` vs `sessions.session_rev`
+
+Ключи для Subject Profile Contract rollout:
+- `gemini_model_subject_detector` — модель детектора количества людей
+- `subject_profile_enabled` — сохранение profile в `sessions`
+- `subject_lock_enabled` — инъекция Subject Lock в prompt
+- `subject_mode_pack_filter_enabled` — проверка совместимости `pack_content_sets.subject_mode`
+- `subject_postcheck_enabled` — пост-проверка результата (под флагом)
 
 ### Вспомогательные таблицы
 

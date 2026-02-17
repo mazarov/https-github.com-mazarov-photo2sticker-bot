@@ -119,6 +119,7 @@ export function buildStateInjection(
     availableStyles?: Array<{ id: string; name_en: string }>;
     trialBudgetRemaining?: number;  // Only injected when credits=0, has_purchased=false
     trafficSource?: string | null;  // "paid" for CPC ads, utm_source value, or null
+    hasPhoto?: boolean;
   }
 ): string {
   const collected: Record<string, string | boolean | null> = {
@@ -139,6 +140,13 @@ export function buildStateInjection(
 
   if (aSession.goal) {
     lines.push(`Goal: ${aSession.goal}`);
+  }
+
+  if (options?.hasPhoto !== undefined) {
+    lines.push(`Has photo now: ${options.hasPhoto ? "true" : "false"}`);
+    if (options.hasPhoto) {
+      lines.push(`Photo is already available. Do NOT request_photo unless user explicitly asks to change photo.`);
+    }
   }
 
   if (missing.length > 0) {
