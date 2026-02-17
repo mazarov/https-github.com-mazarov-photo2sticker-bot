@@ -1939,11 +1939,33 @@ async function resolvePackSessionForEvent(
 
 /** Get session for style selection (wait_style or wait_pack_preview_payment). Prefers pack session when active is assistant. */
 async function getSessionForStyleSelection(userId: string) {
-  let session = await getActiveSession(userId);
-  if (session && !["wait_style", "wait_pack_preview_payment"].includes(session.state)) {
-    const packSession = await getPackFlowSession(userId);
-    if (packSession?.state === "wait_pack_preview_payment") session = packSession;
+  const styleStates = ["wait_style", "wait_pack_preview_payment"];
+  const session = await getActiveSession(userId);
+  if (session && styleStates.includes(session.state)) {
+    return session;
   }
+
+  // Fallback for DB setups where is_active may be unreliable:
+  // explicitly pick the latest session in style-selection states.
+  const { data: latestStyleSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .in("state", styleStates)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestStyleSession) {
+    return latestStyleSession;
+  }
+
+  // Final fallback for pack flow.
+  const packSession = await getPackFlowSession(userId);
+  if (packSession?.state === "wait_pack_preview_payment") {
+    return packSession;
+  }
+
   return session;
 }
 
@@ -5428,7 +5450,14 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
 
     const lang = user.lang || "en";
     const session = await getSessionForStyleSelection(user.id);
-    if (!session?.id || !["wait_style", "wait_pack_preview_payment"].includes(session.state)) return;
+    if (!session?.id) {
+      await rejectSessionEvent(ctx, lang, "style_preview", "session_not_found");
+      return;
+    }
+    if (!["wait_style", "wait_pack_preview_payment"].includes(session.state)) {
+      await rejectSessionEvent(ctx, lang, "style_preview", "wrong_state");
+      return;
+    }
 
     const styleId = ctx.match[1];
     console.log("[StylePreview] Showing preview for:", styleId);
