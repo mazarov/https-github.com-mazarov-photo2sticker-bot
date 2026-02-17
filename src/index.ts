@@ -1765,6 +1765,39 @@ CRITICAL: Do NOT add any border, outline, stroke, or contour around the characte
 Quality: High-resolution, optimized for automated background removal.`;
 }
 
+const SESSION_FALLBACK_ACTIVE_STATES = [
+  // Assistant
+  "assistant_wait_photo",
+  "assistant_wait_idea",
+  "assistant_chat",
+  // Single sticker flow
+  "wait_photo",
+  "wait_style",
+  "wait_custom_style",
+  "wait_custom_style_v2",
+  "wait_custom_emotion",
+  "wait_custom_motion",
+  "wait_text_overlay",
+  "wait_emotion",
+  "wait_motion",
+  "confirm_sticker",
+  // Pack flow
+  "wait_pack_photo",
+  "wait_pack_carousel",
+  "wait_pack_preview_payment",
+  "wait_pack_approval",
+  "generating_pack_preview",
+  "processing_pack",
+  // Generic generation states
+  "processing",
+  "processing_emotion",
+  "processing_motion",
+  "processing_text",
+  // Payment/waiting states
+  "wait_first_purchase",
+  "wait_buy_credit",
+];
+
 // Helper: get active session
 async function getActiveSession(userId: string) {
   const { data, error } = await supabase
@@ -1782,39 +1815,53 @@ async function getActiveSession(userId: string) {
 
   // Fallback: some DB setups flip is_active to false on update
   console.log("getActiveSession fallback for user:", userId);
-  const fallbackAllowedStates = [
-    "assistant_wait_photo",
-    "assistant_wait_idea",
-    "assistant_chat",
-    "wait_photo",
-    "wait_style",
-    "wait_custom_style_v2",
-    "wait_custom_emotion",
-    "wait_custom_motion",
-    "wait_text_overlay",
-    "wait_emotion",
-    "wait_pack_photo",
-    "wait_pack_carousel",
-    "wait_pack_preview_payment",
-    "wait_pack_approval",
-    "wait_first_purchase",
-    "wait_buy_credit",
-  ];
   const recentCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-  const { data: fallback } = await supabase
+  const { data: fallbackByUpdatedAt } = await supabase
     .from("sessions")
     .select("*")
     .eq("user_id", userId)
     .eq("env", config.appEnv)
-    .in("state", fallbackAllowedStates)
+    .in("state", SESSION_FALLBACK_ACTIVE_STATES)
     .gte("updated_at", recentCutoff)
-    .order("updated_at", { ascending: false })
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (fallback) {
-    console.log("getActiveSession fallback found:", fallback.id, "state:", fallback.state, "is_active:", fallback.is_active);
+  if (fallbackByUpdatedAt) {
+    console.log(
+      "getActiveSession fallback found (updated_at):",
+      fallbackByUpdatedAt.id,
+      "state:",
+      fallbackByUpdatedAt.state,
+      "is_active:",
+      fallbackByUpdatedAt.is_active
+    );
+    return fallbackByUpdatedAt;
   }
-  return fallback;
+
+  // Some environments may keep updated_at null/unchanged.
+  // Secondary fallback by recent created_at prevents false "need /start" in active flows.
+  const { data: fallbackByCreatedAt } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .in("state", SESSION_FALLBACK_ACTIVE_STATES)
+    .gte("created_at", recentCutoff)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (fallbackByCreatedAt) {
+    console.log(
+      "getActiveSession fallback found (created_at):",
+      fallbackByCreatedAt.id,
+      "state:",
+      fallbackByCreatedAt.state,
+      "is_active:",
+      fallbackByCreatedAt.is_active
+    );
+  }
+  return fallbackByCreatedAt;
 }
 
 /** Get session that is in pack flow (for pack callbacks when user may have is_active assistant session). */

@@ -242,7 +242,9 @@ flowchart TD
 
 ### `getActiveSession(userId)`
 Получает активную сессию. Есть fallback: если `is_active = true` не находит,
-ищет последнюю не-canceled сессию (workaround для бага с `is_active`).
+ищет последнюю "живую" сессию по whitelist состояний:
+сначала по `updated_at` (recent window), затем по `created_at` (secondary fallback для окружений,
+где `updated_at` может не обновляться/быть `null`).
 
 ### Session Router (pack/single/assistant callbacks)
 - Для критичных callback-событий pack/single/assistant flow используется резолв сессии по `session_id` из `callback_data`.
