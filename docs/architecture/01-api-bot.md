@@ -249,6 +249,8 @@ flowchart TD
 - В callback поддерживаются форматы `action:sid` и `action:sid:rev`.
 - При `session_router_enabled=true` legacy fallback на "текущую активную сессию" отключается: callback без `sid` отклоняется как `session_not_found`.
 - При включенном флаге `strict_session_rev_enabled=true` stale-кнопки отбрасываются с user-facing reason через `answerCbQuery`.
+- Для pack callback-reject (`session_not_found`, `wrong_state`, `stale_callback`) используется явный `show_alert=true`, чтобы убрать "тихие" клики.
+- На переходах в `generating_pack_preview` и `processing_pack` UI-клавиатура lock-ится до `noop`-кнопки (`⏳ ...`), чтобы снизить повторные/конфликтующие клики.
 
 ### `getUserPhotoFileId(user, session)`
 Ищет фото: сначала `session.current_photo_file_id`, потом `user.last_photo_file_id`.

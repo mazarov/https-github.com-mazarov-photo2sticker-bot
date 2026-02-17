@@ -65,6 +65,16 @@
   - `stale_callback` -> `show_alert: true`, просьба использовать последнее сообщение;
   - `session_not_found` -> `show_alert: true`, подсказка "нажми Создать пак".
 
+### 5.1.1 Политика размещения ack (архитектурно)
+
+Чтобы не ломать `show_alert` в reject-сценариях:
+
+- **Callback с возможным reject (`session_not_found` / `wrong_state` / `stale_callback`)**:
+  - `answerCbQuery` со статусом ставим **после** успешной валидации session/state/rev;
+  - иначе reject-алерт может не показаться (у Telegram один callback answer на запрос).
+- **Чистая навигация без reject-семантики** (перелистывание/локальный back):
+  - можно давать instant `answerCbQuery` в самом начале для максимально быстрого отклика.
+
 ### 5.2 Стандартизированные тексты
 
 RU:

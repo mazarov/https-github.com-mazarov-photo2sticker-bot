@@ -1920,7 +1920,40 @@ async function rejectPackEvent(
           ? "Это действие сейчас недоступно в текущем шаге."
           : "This action is not available in the current step.");
   console.warn("[pack.reject]", { event, reasonCode, userId: ctx.from?.id, callbackData: (ctx.callbackQuery as any)?.data });
-  await ctx.answerCbQuery(message, { show_alert: false }).catch(() => {});
+  await ctx.answerCbQuery(message, { show_alert: true }).catch(() => {});
+}
+
+type PackUiLockStage = "preview" | "assemble";
+
+async function lockPackUiForProcessing(ctx: any, session: any, lang: string, stage: PackUiLockStage) {
+  const callbackMsgId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+  const callbackChatId = (ctx.callbackQuery as any)?.message?.chat?.id as number | undefined;
+  const targetMessageId = callbackMsgId || session?.ui_message_id || session?.progress_message_id;
+  const targetChatId = callbackChatId || session?.ui_chat_id || session?.progress_chat_id;
+  if (!targetMessageId || !targetChatId) return;
+
+  const lockText = stage === "preview"
+    ? (lang === "ru" ? "⏳ Генерирую превью..." : "⏳ Generating preview...")
+    : (lang === "ru" ? "⏳ Собираю стикерпак..." : "⏳ Assembling sticker pack...");
+
+  try {
+    await ctx.telegram.editMessageReplyMarkup(targetChatId, targetMessageId, undefined, {
+      inline_keyboard: [[{ text: lockText, callback_data: "noop" }]],
+    });
+  } catch (err: any) {
+    console.warn("[pack.ui_lock] Failed to lock keyboard:", err?.message || err);
+  }
+
+  const { error } = await supabase
+    .from("sessions")
+    .update({
+      ui_message_id: targetMessageId,
+      ui_chat_id: targetChatId,
+    })
+    .eq("id", session.id);
+  if (error) {
+    console.warn("[pack.ui_lock] Failed to persist ui refs:", error.message);
+  }
 }
 
 async function resolvePackSessionForEvent(
@@ -3328,10 +3361,13 @@ async function handlePackMenuEntry(
   }
 
   let visibleSets = contentSets;
-  if (existingPhoto) {
-    await ensureSubjectProfileForGeneration(session, "style");
-  }
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  if (existingPhoto && subjectFilterEnabled) {
+    // Do not block initial pack entry on detector call.
+    void ensureSubjectProfileForGeneration(session, "style").catch((err) =>
+      console.warn("[pack_entry] subject profile warmup failed:", err?.message || err)
+    );
+  }
   if (subjectFilterEnabled) {
     const subjectMode = normalizeSubjectMode(session.subject_mode);
     visibleSets = filterPackContentSetsBySubjectMode(contentSets, subjectMode);
@@ -3525,10 +3561,13 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   }
 
   let visibleSets = contentSets;
-  if (existingPhoto) {
-    await ensureSubjectProfileForGeneration(session, "style");
-  }
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  if (existingPhoto && subjectFilterEnabled) {
+    // Do not block initial pack entry on detector call.
+    void ensureSubjectProfileForGeneration(session, "style").catch((err) =>
+      console.warn("[pack_show_carousel] subject profile warmup failed:", err?.message || err)
+    );
+  }
   if (subjectFilterEnabled) {
     const subjectMode = normalizeSubjectMode(session.subject_mode);
     visibleSets = filterPackContentSetsBySubjectMode(contentSets, subjectMode);
@@ -3572,11 +3611,13 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
 bot.action("pack_carousel_noop", (ctx) => safeAnswerCbQuery(ctx));
 
 bot.action("pack_carousel_prev", async (ctx) => {
-  safeAnswerCbQuery(ctx);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "↩️ Листаю наборы..." : "↩️ Switching sets...");
   await updatePackCarouselCard(ctx, -1);
 });
 bot.action("pack_carousel_next", async (ctx) => {
-  safeAnswerCbQuery(ctx);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "↪️ Листаю наборы..." : "↪️ Switching sets...");
   await updatePackCarouselCard(ctx, 1);
 });
 
@@ -3706,7 +3747,6 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
 
 // Callback: pack_back_to_carousel — back from style selection to pose carousel (same message)
 bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
-  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
   const user = await getUser(telegramId);
@@ -3727,6 +3767,7 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
     await rejectPackEvent(ctx, lang, "pack_back_to_carousel", "stale_callback");
     return;
   }
+  safeAnswerCbQuery(ctx, lang === "ru" ? "↩️ Открываю наборы..." : "↩️ Opening sets...");
 
   const { data: contentSets } = await supabase
     .from("pack_content_sets")
@@ -3815,7 +3856,6 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
 
 // Callback: pack_preview_pay — user pays 1 credit for preview
 bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
-  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -3843,13 +3883,15 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     const msg = lang === "ru"
       ? "Сначала выбери набор поз и нажми «Попробовать с ...»."
       : "First choose a pose set and tap “Try with ...”.";
-    await ctx.answerCbQuery(msg, { show_alert: false }).catch(() => {});
+    await ctx.answerCbQuery(msg, { show_alert: true }).catch(() => {});
     return;
   }
 
   if (session.state !== "wait_pack_preview_payment") {
+    await rejectPackEvent(ctx, lang, "pack_preview_pay", "wrong_state");
     return;
   }
+  safeAnswerCbQuery(ctx, lang === "ru" ? "🚀 Запускаю превью..." : "🚀 Starting preview...");
 
   // Same prompt as single sticker: agent + composition suffix (unified flow)
   let packPromptFinal: string | null = null;
@@ -3982,6 +4024,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
     return;
   }
+  await lockPackUiForProcessing(ctx, session, lang, "preview");
   console.log("[pack_preview_pay] session.prompt_final saved, length:", (packPromptFinal || "").length, "preview:", (packPromptFinal || "").slice(0, 120));
   console.log("[pack_preview_pay] session.pack_content_set_id:", session.pack_content_set_id ?? "(not set)");
 
@@ -4023,7 +4066,6 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
 
 // Callback: pack_approve — user approves preview, pays remaining credits
 bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
-  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -4046,6 +4088,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
     await rejectPackEvent(ctx, lang, "pack_approve", "stale_callback");
     return;
   }
+  safeAnswerCbQuery(ctx, lang === "ru" ? "📦 Запускаю сборку пака..." : "📦 Starting pack assembly...");
 
   // Get sticker count from selected content set (or first active set for template id).
   let stickerCount = 4;
@@ -4117,6 +4160,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
       session_rev: (session.session_rev || 1) + 1,
     })
     .eq("id", session.id);
+  await lockPackUiForProcessing(ctx, session, lang, "assemble");
 
   // Enqueue pack_assemble job
   await supabase.from("jobs").insert({
@@ -4156,7 +4200,6 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
 
 // Callback: pack_regenerate — user wants new preview (pays 1 more credit)
 bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
-  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -4179,6 +4222,7 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
     await rejectPackEvent(ctx, lang, "pack_regenerate", "stale_callback");
     return;
   }
+  safeAnswerCbQuery(ctx, lang === "ru" ? "🔄 Запускаю новое превью..." : "🔄 Starting a new preview...");
 
   // Check credits
   if ((user.credits || 0) < 1) {
@@ -4227,6 +4271,7 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
       session_rev: (session.session_rev || 1) + 1,
     })
     .eq("id", session.id);
+  await lockPackUiForProcessing(ctx, session, lang, "preview");
 
   // Enqueue new preview job
   await supabase.from("jobs").insert({
@@ -4264,7 +4309,8 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
 
 // Callback: pack_back — from preview back to style selection (no cancel)
 bot.action("pack_back", async (ctx) => {
-  safeAnswerCbQuery(ctx);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "↩️ Возвращаю к выбору стиля..." : "↩️ Returning to style selection...");
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -4290,7 +4336,6 @@ bot.action("pack_back", async (ctx) => {
 
 // Callback: pack_cancel — user cancels pack
 bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
-  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -4313,6 +4358,7 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
     await rejectPackEvent(ctx, lang, "pack_cancel", "stale_callback");
     return;
   }
+  safeAnswerCbQuery(ctx, lang === "ru" ? "🛑 Отменяю..." : "🛑 Cancelling...");
 
   // Cancel batch if exists
   if (session.pack_batch_id) {
@@ -4338,7 +4384,6 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
 
 // Callback: pack_new_photo — user chose to continue pack with newly sent photo
 bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
-  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
   const user = await getUser(telegramId);
@@ -4360,6 +4405,7 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
     await rejectPackEvent(ctx, lang, "pack_new_photo", "stale_callback");
     return;
   }
+  safeAnswerCbQuery(ctx, lang === "ru" ? "📷 Применяю новое фото..." : "📷 Applying new photo...");
 
   const newPhotoFileId = session.pending_photo_file_id;
   if (!newPhotoFileId) {
@@ -4398,7 +4444,6 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
 
 // Callback: pack_keep_photo — user keeps current photo and continues pack flow
 bot.action(/^pack_keep_photo(?::(.+))?$/, async (ctx) => {
-  safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
   const user = await getUser(telegramId);
@@ -4420,6 +4465,7 @@ bot.action(/^pack_keep_photo(?::(.+))?$/, async (ctx) => {
     await rejectPackEvent(ctx, lang, "pack_keep_photo", "stale_callback");
     return;
   }
+  safeAnswerCbQuery(ctx, lang === "ru" ? "📌 Оставляю текущее фото..." : "📌 Keeping current photo...");
 
   const { workingPhotoFileId } = resolveWorkingPhoto(session, user);
   await supabase
@@ -5441,7 +5487,8 @@ bot.action(/^style_group:(.+)$/, async (ctx) => {
 // Callback: style preview card — show example + description before generation
 bot.action(/^style_preview:(.+)$/, async (ctx) => {
   try {
-    safeAnswerCbQuery(ctx);
+    const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+    safeAnswerCbQuery(ctx, isRu ? "🎨 Открываю стиль..." : "🎨 Opening style...");
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
 
@@ -5520,7 +5567,8 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
 // Callback: back to style list from preview card
 bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
   try {
-    safeAnswerCbQuery(ctx);
+    const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+    safeAnswerCbQuery(ctx, isRu ? "↩️ Возвращаю список стилей..." : "↩️ Returning to style list...");
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
 
@@ -5553,7 +5601,8 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
 // Callback: substyle selected (v2)
 bot.action(/^style_v2:([^:]+)(?::(.+))?$/, async (ctx) => {
   try {
-    safeAnswerCbQuery(ctx);
+    const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+    safeAnswerCbQuery(ctx, isRu ? "✅ Применяю стиль..." : "✅ Applying style...");
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
 
@@ -6282,7 +6331,8 @@ bot.action("change_style", async (ctx) => {
 bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
   console.log("=== change_emotion:ID callback ===");
   console.log("callback_data:", ctx.match?.[0]);
-  safeAnswerCbQuery(ctx);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "😊 Открываю эмоции..." : "😊 Opening emotions...");
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -6360,7 +6410,8 @@ bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
 
 // Callback: change emotion (old format - fallback)
 bot.action("change_emotion", async (ctx) => {
-  safeAnswerCbQuery(ctx);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "😊 Открываю эмоции..." : "😊 Opening emotions...");
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -6453,7 +6504,8 @@ bot.action(/^emotion_([^:]+)(?::(.+))?$/, async (ctx) => {
 bot.action(/^change_motion:([^:]+)(?::(.+))?$/, async (ctx) => {
   console.log("=== change_motion:ID callback ===");
   console.log("callback_data:", ctx.match?.[0]);
-  safeAnswerCbQuery(ctx);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "🏃 Открываю движения..." : "🏃 Opening motions...");
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -6531,7 +6583,8 @@ bot.action(/^change_motion:([^:]+)(?::(.+))?$/, async (ctx) => {
 
 // Callback: change motion (old format - fallback)
 bot.action("change_motion", async (ctx) => {
-  safeAnswerCbQuery(ctx);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "🏃 Открываю движения..." : "🏃 Opening motions...");
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
