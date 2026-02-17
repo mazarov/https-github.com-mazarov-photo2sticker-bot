@@ -4065,6 +4065,61 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   }
   safeAnswerCbQuery(ctx, lang === "ru" ? "🚀 Запускаю превью..." : "🚀 Starting preview...");
 
+  const clickSessionRev = (session.session_rev || 1) + 1;
+  const { error: prelockErr } = await supabase
+    .from("sessions")
+    .update({
+      state: "generating_pack_preview",
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: clickSessionRev,
+    })
+    .eq("id", session.id);
+  if (prelockErr) {
+    console.error("[pack_preview_pay] prelock session update failed:", prelockErr.message);
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    return;
+  }
+
+  const lockedSession = {
+    ...session,
+    state: "generating_pack_preview",
+    session_rev: clickSessionRev,
+    is_active: true,
+    flow_kind: "pack",
+  };
+  await lockPackUiForProcessing(ctx, lockedSession, lang, "preview");
+
+  const progressMsg = await ctx.reply(await getText(lang, "pack.progress_generating"));
+  if (progressMsg?.message_id && ctx.chat?.id) {
+    await supabase
+      .from("sessions")
+      .update({
+        progress_message_id: progressMsg.message_id,
+        progress_chat_id: ctx.chat.id,
+        ui_message_id: progressMsg.message_id,
+        ui_chat_id: ctx.chat.id,
+      })
+      .eq("id", session.id);
+  }
+
+  const rollbackPreviewStart = async (restoreStyleUi: boolean) => {
+    const rollbackRev = clickSessionRev + 1;
+    await supabase
+      .from("sessions")
+      .update({
+        state: "wait_pack_preview_payment",
+        is_active: true,
+        flow_kind: "pack",
+        session_rev: rollbackRev,
+      })
+      .eq("id", session.id);
+
+    if (restoreStyleUi) {
+      await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
+    }
+  };
+
   // Same prompt as single sticker: agent + composition suffix (unified flow)
   let packPromptFinal: string | null = null;
   let packStyleUserInput: string | null = null;
@@ -4122,6 +4177,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     await ensureSubjectProfileForGeneration(styleSession, "style");
     const subjectMode = getEffectiveSubjectMode(styleSession);
     if (!isPackSetCompatibleWithSubject(selectedSetSubjectMode, subjectMode)) {
+      await rollbackPreviewStart(true);
       await ctx.reply(
         lang === "ru"
           ? "Выбранный набор не подходит под текущее количество персонажей. Вернись к выбору поз и выбери другой набор."
@@ -4134,6 +4190,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
 
   // Check credits
   if ((user.credits || 0) < 1) {
+    await rollbackPreviewStart(false);
     await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
     await sendBuyCreditsMenu(ctx, user);
     return;
@@ -4146,6 +4203,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   });
 
   if (!deducted) {
+    await rollbackPreviewStart(false);
     await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
     await sendBuyCreditsMenu(ctx, user);
     return;
@@ -4171,6 +4229,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     // Refund credit
     const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
     await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
+    await rollbackPreviewStart(true);
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
     return;
   }
@@ -4183,7 +4242,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     user_input: packStyleUserInput,
     is_active: true,
     flow_kind: "pack",
-    session_rev: (session.session_rev || 1) + 1,
+    session_rev: clickSessionRev,
   };
   const { error: updateErr } = await supabase
     .from("sessions")
@@ -4193,10 +4252,10 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     console.error("[pack_preview_pay] Session update failed:", updateErr.message);
     const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
     await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
+    await rollbackPreviewStart(true);
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
     return;
   }
-  await lockPackUiForProcessing(ctx, session, lang, "preview");
   console.log("[pack_preview_pay] session.prompt_final saved, length:", (packPromptFinal || "").length, "preview:", (packPromptFinal || "").slice(0, 120));
   console.log("[pack_preview_pay] session.pack_content_set_id:", session.pack_content_set_id ?? "(not set)");
 
@@ -4209,20 +4268,6 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     attempts: 0,
     env: config.appEnv,
   });
-
-  // Send progress message
-  const msg = await ctx.reply(await getText(lang, "pack.progress_generating"));
-  if (msg?.message_id && ctx.chat?.id) {
-    await supabase
-      .from("sessions")
-      .update({
-        progress_message_id: msg.message_id,
-        progress_chat_id: ctx.chat.id,
-        ui_message_id: msg.message_id,
-        ui_chat_id: ctx.chat.id,
-      })
-      .eq("id", session.id);
-  }
 
   // Alert
   sendAlert({
