@@ -778,15 +778,15 @@ function getSessionSubjectProfileForSource(
   sourceFileId: string,
   sourceKind: SubjectSourceKind
 ): SubjectProfile | null {
-  const sessionMode = normalizeSubjectMode(session?.subject_mode);
-  const sessionSourceFileId = session?.subject_source_file_id || null;
-  const sessionSourceKind = normalizeSubjectSourceKind(session?.subject_source_kind);
+  const sessionMode = normalizeSubjectMode(session?.object_mode ?? session?.subject_mode);
+  const sessionSourceFileId = session?.object_source_file_id || session?.subject_source_file_id || null;
+  const sessionSourceKind = normalizeSubjectSourceKind(session?.object_source_kind ?? session?.subject_source_kind);
   if (!sessionSourceFileId || sessionSourceFileId !== sourceFileId || sessionSourceKind !== sourceKind) {
     return null;
   }
 
-  const parsedCount = Number(session?.subject_count);
-  const parsedConfidence = Number(session?.subject_confidence);
+  const parsedCount = Number(session?.object_count ?? session?.subject_count);
+  const parsedConfidence = Number(session?.object_confidence ?? session?.subject_confidence);
 
   return {
     subjectMode: sessionMode,
@@ -797,8 +797,51 @@ function getSessionSubjectProfileForSource(
         : null,
     sourceFileId,
     sourceKind,
-    detectedAt: session?.subject_detected_at || new Date().toISOString(),
+    detectedAt: session?.object_detected_at || session?.subject_detected_at || new Date().toISOString(),
   };
+}
+
+async function persistSubjectAndObjectProfile(sessionId: string, profile: SubjectProfile, detectedAt: string): Promise<void> {
+  const payload = {
+    subject_mode: profile.subjectMode,
+    subject_count: profile.subjectCount,
+    subject_confidence: profile.subjectConfidence,
+    subject_source_file_id: profile.sourceFileId,
+    subject_source_kind: profile.sourceKind,
+    subject_detected_at: detectedAt,
+    object_mode: profile.subjectMode,
+    object_count: profile.subjectCount,
+    object_confidence: profile.subjectConfidence,
+    object_source_file_id: profile.sourceFileId,
+    object_source_kind: profile.sourceKind,
+    object_detected_at: detectedAt,
+  };
+
+  const { error } = await supabase.from("sessions").update(payload).eq("id", sessionId);
+  if (!error) return;
+
+  const unknownObjectColumn =
+    error.code === "42703" ||
+    /column .*object_/.test(String(error.message || "").toLowerCase());
+  if (!unknownObjectColumn) {
+    console.warn("[subject-profile] failed to persist profile:", error.message);
+    return;
+  }
+
+  const { error: legacyError } = await supabase
+    .from("sessions")
+    .update({
+      subject_mode: profile.subjectMode,
+      subject_count: profile.subjectCount,
+      subject_confidence: profile.subjectConfidence,
+      subject_source_file_id: profile.sourceFileId,
+      subject_source_kind: profile.sourceKind,
+      subject_detected_at: detectedAt,
+    })
+    .eq("id", sessionId);
+  if (legacyError) {
+    console.warn("[subject-profile] failed to persist legacy profile:", legacyError.message);
+  }
 }
 
 async function ensureSubjectProfileForGeneration(
@@ -831,17 +874,7 @@ async function ensureSubjectProfileForGeneration(
       detectedAt,
     };
 
-    await supabase
-      .from("sessions")
-      .update({
-        subject_mode: nextProfile.subjectMode,
-        subject_count: nextProfile.subjectCount,
-        subject_confidence: nextProfile.subjectConfidence,
-        subject_source_file_id: nextProfile.sourceFileId,
-        subject_source_kind: nextProfile.sourceKind,
-        subject_detected_at: detectedAt,
-      })
-      .eq("id", session.id);
+    await persistSubjectAndObjectProfile(session.id, nextProfile, detectedAt);
 
     Object.assign(session, {
       subject_mode: nextProfile.subjectMode,
@@ -850,6 +883,12 @@ async function ensureSubjectProfileForGeneration(
       subject_source_file_id: nextProfile.sourceFileId,
       subject_source_kind: nextProfile.sourceKind,
       subject_detected_at: nextProfile.detectedAt,
+      object_mode: nextProfile.subjectMode,
+      object_count: nextProfile.subjectCount,
+      object_confidence: nextProfile.subjectConfidence,
+      object_source_file_id: nextProfile.sourceFileId,
+      object_source_kind: nextProfile.sourceKind,
+      object_detected_at: nextProfile.detectedAt,
     });
 
     console.log("[subject-profile] updated for session:", session.id, {
@@ -869,17 +908,7 @@ async function ensureSubjectProfileForGeneration(
       detectedAt,
     };
 
-    await supabase
-      .from("sessions")
-      .update({
-        subject_mode: fallbackProfile.subjectMode,
-        subject_count: fallbackProfile.subjectCount,
-        subject_confidence: fallbackProfile.subjectConfidence,
-        subject_source_file_id: fallbackProfile.sourceFileId,
-        subject_source_kind: fallbackProfile.sourceKind,
-        subject_detected_at: detectedAt,
-      })
-      .eq("id", session.id);
+    await persistSubjectAndObjectProfile(session.id, fallbackProfile, detectedAt);
 
     Object.assign(session, {
       subject_mode: fallbackProfile.subjectMode,
@@ -888,6 +917,12 @@ async function ensureSubjectProfileForGeneration(
       subject_source_file_id: fallbackProfile.sourceFileId,
       subject_source_kind: fallbackProfile.sourceKind,
       subject_detected_at: fallbackProfile.detectedAt,
+      object_mode: fallbackProfile.subjectMode,
+      object_count: fallbackProfile.subjectCount,
+      object_confidence: fallbackProfile.subjectConfidence,
+      object_source_file_id: fallbackProfile.sourceFileId,
+      object_source_kind: fallbackProfile.sourceKind,
+      object_detected_at: fallbackProfile.detectedAt,
     });
     return fallbackProfile;
   }
@@ -938,6 +973,10 @@ function filterPackContentSetsBySubjectMode(contentSets: any[], subjectMode: "si
     const setMode = normalizePackSetSubjectMode(set?.subject_mode);
     return isPackSetCompatibleWithSubject(setMode, subjectMode);
   });
+}
+
+function getEffectiveSubjectMode(session: any): "single" | "multi" | "unknown" {
+  return normalizeSubjectMode(session?.object_mode ?? session?.subject_mode);
 }
 
 async function startGeneration(
@@ -3445,7 +3484,7 @@ async function handlePackMenuEntry(
     );
   }
   if (subjectFilterEnabled) {
-    const subjectMode = normalizeSubjectMode(session.subject_mode);
+    const subjectMode = getEffectiveSubjectMode(session);
     visibleSets = filterPackContentSetsBySubjectMode(contentSets, subjectMode);
   }
   if (!visibleSets.length) {
@@ -3651,7 +3690,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
     );
   }
   if (subjectFilterEnabled) {
-    const subjectMode = normalizeSubjectMode(session.subject_mode);
+    const subjectMode = getEffectiveSubjectMode(session);
     visibleSets = filterPackContentSetsBySubjectMode(contentSets, subjectMode);
   }
   if (!visibleSets.length) {
@@ -3717,7 +3756,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   if (!contentSets?.length) return;
 
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
-  const subjectMode = normalizeSubjectMode(session.subject_mode);
+  const subjectMode = getEffectiveSubjectMode(session);
   const visibleSets = subjectFilterEnabled
     ? filterPackContentSetsBySubjectMode(contentSets, subjectMode)
     : contentSets;
@@ -3785,7 +3824,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
   const existingPhoto = session.current_photo_file_id || (await supabase.from("users").select("last_photo_file_id").eq("id", user.id).single().then((r) => r.data?.last_photo_file_id)) || null;
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
   if (existingPhoto && subjectFilterEnabled) {
-    const subjectMode = normalizeSubjectMode(session.subject_mode);
+    const subjectMode = getEffectiveSubjectMode(session);
     const setSubjectMode = normalizePackSetSubjectMode(selectedContentSet.subject_mode);
     if (subjectMode !== "unknown" && !isPackSetCompatibleWithSubject(setSubjectMode, subjectMode)) {
       await ctx.answerCbQuery(
@@ -3856,7 +3895,7 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
   if (!contentSets?.length) return;
 
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
-  const subjectMode = normalizeSubjectMode(session.subject_mode);
+  const subjectMode = getEffectiveSubjectMode(session);
   const visibleSets = subjectFilterEnabled
     ? filterPackContentSetsBySubjectMode(contentSets, subjectMode)
     : contentSets;
@@ -4026,7 +4065,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   if (subjectFilterEnabled) {
     const styleSession = { ...session };
     await ensureSubjectProfileForGeneration(styleSession, "style");
-    const subjectMode = normalizeSubjectMode(styleSession.subject_mode);
+    const subjectMode = getEffectiveSubjectMode(styleSession);
     if (!isPackSetCompatibleWithSubject(selectedSetSubjectMode, subjectMode)) {
       await ctx.reply(
         lang === "ru"

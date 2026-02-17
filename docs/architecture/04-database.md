@@ -93,6 +93,13 @@ erDiagram
 | `subject_source_file_id` | text | — | Source file_id, для которого считан профиль |
 | `subject_source_kind` | text | — | `photo` или `sticker` |
 | `subject_detected_at` | timestamptz | — | Время обновления профиля |
+| `object_mode` | text | — | Object-profile v2: `single` / `multi` / `unknown` |
+| `object_count` | int | — | Количество главных объектов (v2) |
+| `object_confidence` | numeric | — | Confidence object-детектора (0..1) |
+| `object_source_file_id` | text | — | Source file_id для object profile |
+| `object_source_kind` | text | — | `photo` или `sticker` (v2) |
+| `object_detected_at` | timestamptz | — | Время обновления object profile |
+| `object_instances_json` | jsonb | — | Нормализованные инстансы детектора (bbox/area/edge/confidence) |
 | `env` | text | 'prod' | Окружение |
 
 ### `pack_content_sets` — Наборы подписей и сцен для пака
@@ -213,6 +220,17 @@ Presets: waving, thumbs_up, facepalm, praying, flexing, shrugging, peace, heart_
 - `subject_lock_enabled` — инъекция Subject Lock в prompt
 - `subject_mode_pack_filter_enabled` — проверка совместимости `pack_content_sets.subject_mode`
 - `subject_postcheck_enabled` — пост-проверка результата (под флагом)
+
+Ключи для Object Profile Contract v2 rollout:
+- `object_profile_enabled` — включить object-profile как primary путь записи
+- `object_profile_shadow_enabled` — считать object profile в фоне без жесткого переключения
+- `object_lock_enabled` — object-based lock для prompt
+- `object_mode_pack_filter_enabled` — pack compatibility по `object_mode` (с fallback в `subject_mode`)
+- `object_edge_filter_enabled` — фильтр периферийных edge-фрагментов
+- `object_multi_confidence_min` — порог confidence для `multi`
+- `object_multi_low_confidence_fallback` — fallback mode при слабом `multi`
+- `object_min_area_ratio` — минимальная площадь для main object
+- `object_edge_small_area_max` — порог "малый edge-объект"
 
 ### Вспомогательные таблицы
 

@@ -66,12 +66,13 @@ sequenceDiagram
   - Требования к качеству (без водяных знаков, текста и т.д.)
 - Retry с exponential backoff (3 попытки)
 
-#### Subject Lock (phase 1)
-- Worker читает `sessions.subject_*` и при включенном `subject_lock_enabled` гарантирует наличие `Subject Lock Block` в prompt.
+#### Subject/Object Lock (phase 1 -> v2 compatible)
+- Worker читает профиль источника из `sessions.object_*` (если заполнен), иначе из `sessions.subject_*`.
+- При включенном `subject_lock_enabled` или `object_lock_enabled` гарантирует наличие `Subject Lock Block` в prompt.
 - Source определяется по типу генерации:
   - `style` -> source kind `photo`,
   - `emotion`/`motion`/`text` -> source kind `sticker`.
-- Если `subject_profile_enabled=true` и profile для текущего source отсутствует, worker выполняет lightweight detector и сохраняет профиль в `sessions`.
+- Если включен `subject_profile_enabled` или `object_profile_enabled`/`object_profile_shadow_enabled` и profile для текущего source отсутствует, worker выполняет detector и сохраняет профиль в `sessions` (dual-write в `subject_*` + `object_*` при наличии колонок).
 - Если `subject_postcheck_enabled=true`, worker валидирует число людей на результате и делает один retry с усиленным lock; при повторном mismatch задача завершается ошибкой (с рефандом через общий error-path).
 
 ### 5. Модерация контента
@@ -128,7 +129,7 @@ flowchart TD
   - сцены: при `sessions.pack_content_set_id` берёт `pack_content_sets.scene_descriptions` (проверка: is_active, длина = template.sticker_count), иначе `pack_templates.scene_descriptions`
   - добавляет выбранный пользователем `sessions.selected_style_id` (`style_presets_v2.prompt_hint`) в промпт
   - добавляет `Subject Lock Block` для текущего photo-source (если включен флаг)
-  - при `subject_mode_pack_filter_enabled=true` делает финальную server-side проверку совместимости `pack_content_sets.subject_mode` и `sessions.subject_mode` (с рефандом preview-кредита при mismatch)
+  - при `subject_mode_pack_filter_enabled=true` или `object_mode_pack_filter_enabled=true` делает финальную server-side проверку совместимости `pack_content_sets.subject_mode` и effective mode (`sessions.object_mode` -> fallback `sessions.subject_mode`) с рефандом preview-кредита при mismatch
   - включает блок `identity preservation` (сохранение facial identity)
   - генерирует лист NxN и сохраняет `pack_sheet_file_id`
 

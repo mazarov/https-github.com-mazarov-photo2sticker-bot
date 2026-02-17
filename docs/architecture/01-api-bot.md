@@ -203,21 +203,22 @@ flowchart TD
 - Это правило применяется для `assistant`, `pack` и `single` flow (кроме hard-processing состояний).
 - Источник "рабочего фото" централизован: `session.current_photo_file_id || user.last_photo_file_id`.
 
-### Subject Profile Contract (phase 1)
+### Subject/Object Profile Contract (phase 1 -> v2 compatible)
 - Перед генерацией API определяет source по `generation_type`:
   - `style` -> `current_photo_file_id` (photo),
   - `emotion`/`motion`/`text` -> `last_sticker_file_id` (sticker).
 - При включенном `subject_profile_enabled` API сохраняет в `sessions` профиль субъекта:
   `subject_mode`, `subject_count`, `subject_confidence`, `subject_source_file_id`, `subject_source_kind`, `subject_detected_at`.
-- При включенном `subject_lock_enabled` в финальный prompt добавляется обязательный `Subject Lock Block`.
-- Для pack flow добавлена проверка совместимости выбранного `pack_content_set` с `sessions.subject_mode` (если `subject_mode_pack_filter_enabled=true`).
+- При наличии object-v2 колонок API делает dual-write в `object_*` с fallback на legacy `subject_*`.
+- При включенном `subject_lock_enabled` или `object_lock_enabled` в финальный prompt добавляется обязательный `Subject Lock Block`.
+- Для pack flow проверка совместимости выбранного `pack_content_set` использует effective mode: `sessions.object_mode` -> fallback `sessions.subject_mode`.
 
 ## Ключевые функции
 
 ### `startGeneration(ctx, user, session, lang, options)`
 Главная точка входа в генерацию. Проверяет кредиты, показывает paywall если нужно,
 списывает кредиты атомарно, создаёт job в очереди.
-Также здесь применяется Subject Profile Contract: расчет source, (опционально) детект профиля и инъекция subject-lock в prompt.
+Также здесь применяется Subject/Object Profile Contract: расчет source, (опционально) детект профиля и инъекция lock-блока в prompt.
 
 ### `startAssistantDialog(ctx, user, lang)`
 Инициализирует AI-ассистента. Закрывает старые сессии, создаёт новую.
