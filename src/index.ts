@@ -3333,24 +3333,34 @@ bot.hears(["💰 Ваш баланс", "💰 Your balance"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
-  const user = await getUser(telegramId);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  const fastLang = isRu ? "ru" : "en";
+  const userPromise = getUser(telegramId);
+  const openingMsg = await ctx.reply(
+    isRu ? "💰 Открываю баланс..." : "💰 Opening balance...",
+    getMainMenuKeyboard(fastLang)
+  ).catch(() => null);
+
+  const user = await userPromise;
   if (!user) {
-    const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
-    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(fastLang, "start.need_start"), getMainMenuKeyboard(fastLang));
     return;
   }
 
+  if (openingMsg?.message_id) {
+    await ctx.deleteMessage(openingMsg.message_id).catch(() => {});
+  }
   await sendBuyCreditsMenu(ctx, user);
 });
 
 // Menu: 💬 Поддержка
 bot.hears(["💬 Поддержка", "💬 Support"], async (ctx) => {
-  const telegramId = ctx.from?.id;
-  if (!telegramId) return;
-
-  const user = await getUser(telegramId);
-  const lang = user?.lang || "en";
-  await ctx.reply(await getText(lang, "menu.help"), getMainMenuKeyboard(lang));
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  const lang = isRu ? "ru" : "en";
+  const helpText = isRu
+    ? "📷 Отправь фото — получи стикер\n💰 Каждый стикер = 1 кредит\n🎨 Выбирай стили и эмоции\n\nВопросы? @p2s_support_bot"
+    : "📷 Send photo — get sticker\n💰 Each sticker = 1 credit\n🎨 Choose styles and emotions\n\nQuestions? @p2s_support_bot";
+  await ctx.reply(helpText, getMainMenuKeyboard(lang));
 });
 
 // ============================================
