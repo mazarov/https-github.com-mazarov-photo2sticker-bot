@@ -1181,34 +1181,38 @@ async function startGeneration(
   await sendProgressStart(ctx, session.id, lang);
 }
 
-// Credit packages: { credits, price_in_stars, label_ru, label_en, price_rub, adminOnly?, hidden? }
+// Credit packages: { credits, bonus_credits?, price_in_stars, label_ru, label_en, price_rub, adminOnly?, trialOnly?, hidden? }
 const CREDIT_PACKS = [
   { credits: 1, price: 1, price_rub: 1, label_ru: "🔧 Тест", label_en: "🔧 Test", adminOnly: true },
-  { credits: 2, price: 20, price_rub: 15, label_ru: "🎁 Попробовать", label_en: "🎁 Try", trialOnly: true },
-  { credits: 10, price: 150, price_rub: 99, label_ru: "⭐ Старт", label_en: "⭐ Start" },
-  { credits: 30, price: 300, price_rub: 249, label_ru: "💎 Поп", label_en: "💎 Pop" },
-  { credits: 100, price: 700, price_rub: 699, label_ru: "👑 Про", label_en: "👑 Pro" },
-  { credits: 250, price: 1500, price_rub: 1490, label_ru: "🚀 Макс", label_en: "🚀 Max" },
+  { credits: 5, bonus_credits: 4, price: 49, price_rub: 51, label_ru: "🎁 Попробуй", label_en: "🎁 Try", trialOnly: true },
+  { credits: 10, price: 75, price_rub: 78, label_ru: "⭐ Старт", label_en: "⭐ Start" },
+  { credits: 30, price: 175, price_rub: 182, label_ru: "💎 Поп", label_en: "💎 Pop" },
+  { credits: 100, price: 500, price_rub: 520, label_ru: "👑 Про", label_en: "👑 Pro" },
+  { credits: 250, price: 1125, price_rub: 1170, label_ru: "🚀 Макс", label_en: "🚀 Max" },
   // Hidden discount packs (not shown in UI, used via direct callback for promos, abandoned carts, admin discounts)
   // -10%
-  { credits: 2, price: 18, price_rub: 13, label_ru: "🎁 Try -10%", label_en: "🎁 Try -10%", hidden: true },
-  { credits: 10, price: 135, price_rub: 89, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
-  { credits: 30, price: 270, price_rub: 224, label_ru: "💎 Поп -10%", label_en: "💎 Pop -10%", hidden: true },
-  { credits: 100, price: 630, price_rub: 629, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true },
-  { credits: 250, price: 1350, price_rub: 1341, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true },
+  { credits: 5, bonus_credits: 4, price: 44, price_rub: 46, label_ru: "🎁 Попробуй -10%", label_en: "🎁 Try -10%", hidden: true, trialOnly: true },
+  { credits: 10, price: 68, price_rub: 71, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
+  { credits: 30, price: 158, price_rub: 164, label_ru: "💎 Поп -10%", label_en: "💎 Pop -10%", hidden: true },
+  { credits: 100, price: 450, price_rub: 468, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true },
+  { credits: 250, price: 1013, price_rub: 1054, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true },
   // -15%
-  { credits: 2, price: 17, price_rub: 12, label_ru: "🎁 Try -15%", label_en: "🎁 Try -15%", hidden: true },
-  { credits: 10, price: 127, price_rub: 84, label_ru: "⭐ Старт -15%", label_en: "⭐ Start -15%", hidden: true },
-  { credits: 30, price: 255, price_rub: 211, label_ru: "💎 Поп -15%", label_en: "💎 Pop -15%", hidden: true },
-  { credits: 100, price: 595, price_rub: 594, label_ru: "👑 Про -15%", label_en: "👑 Pro -15%", hidden: true },
-  { credits: 250, price: 1275, price_rub: 1267, label_ru: "🚀 Макс -15%", label_en: "🚀 Max -15%", hidden: true },
+  { credits: 5, bonus_credits: 4, price: 42, price_rub: 44, label_ru: "🎁 Попробуй -15%", label_en: "🎁 Try -15%", hidden: true, trialOnly: true },
+  { credits: 10, price: 64, price_rub: 67, label_ru: "⭐ Старт -15%", label_en: "⭐ Start -15%", hidden: true },
+  { credits: 30, price: 149, price_rub: 155, label_ru: "💎 Поп -15%", label_en: "💎 Pop -15%", hidden: true },
+  { credits: 100, price: 425, price_rub: 442, label_ru: "👑 Про -15%", label_en: "👑 Pro -15%", hidden: true },
+  { credits: 250, price: 956, price_rub: 994, label_ru: "🚀 Макс -15%", label_en: "🚀 Max -15%", hidden: true },
   // -25%
-  { credits: 2, price: 15, price_rub: 11, label_ru: "🎁 Try -25%", label_en: "🎁 Try -25%", hidden: true },
-  { credits: 10, price: 112, price_rub: 74, label_ru: "⭐ Старт -25%", label_en: "⭐ Start -25%", hidden: true },
-  { credits: 30, price: 225, price_rub: 186, label_ru: "💎 Поп -25%", label_en: "💎 Pop -25%", hidden: true },
-  { credits: 100, price: 525, price_rub: 524, label_ru: "👑 Про -25%", label_en: "👑 Pro -25%", hidden: true },
-  { credits: 250, price: 1125, price_rub: 1117, label_ru: "🚀 Макс -25%", label_en: "🚀 Max -25%", hidden: true },
+  { credits: 5, bonus_credits: 4, price: 37, price_rub: 38, label_ru: "🎁 Попробуй -25%", label_en: "🎁 Try -25%", hidden: true, trialOnly: true },
+  { credits: 10, price: 56, price_rub: 58, label_ru: "⭐ Старт -25%", label_en: "⭐ Start -25%", hidden: true },
+  { credits: 30, price: 131, price_rub: 136, label_ru: "💎 Поп -25%", label_en: "💎 Pop -25%", hidden: true },
+  { credits: 100, price: 375, price_rub: 390, label_ru: "👑 Про -25%", label_en: "👑 Pro -25%", hidden: true },
+  { credits: 250, price: 844, price_rub: 878, label_ru: "🚀 Макс -25%", label_en: "🚀 Max -25%", hidden: true },
 ];
+
+function getPackTotalCredits(pack: any): number {
+  return Number(pack?.credits || 0) + Number(pack?.bonus_credits || 0);
+}
 
 /**
  * Build balance info string for check_balance tool.
@@ -1217,7 +1221,10 @@ const CREDIT_PACKS = [
 function buildBalanceInfo(user: any, lang: string): string {
   const packs = CREDIT_PACKS
     .filter((p: any) => !p.adminOnly && !p.hidden)
-    .map((p: any) => `• ${p.credits} credits — ${p.price}⭐ (${(p.price / p.credits).toFixed(1)}⭐/стикер) ${lang === "ru" ? p.label_ru : p.label_en}`)
+    .map((p: any) => {
+      const totalCredits = getPackTotalCredits(p);
+      return `• ${totalCredits} credits — ${p.price}⭐ (${(p.price / totalCredits).toFixed(1)}⭐/стикер) ${lang === "ru" ? p.label_ru : p.label_en}`;
+    })
     .join("\n");
 
   return [
@@ -2311,9 +2318,10 @@ async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
   for (const pack of availablePacks) {
     const label = lang === "ru" ? pack.label_ru : pack.label_en;
     const unit = lang === "ru" ? "стикеров" : "stickers";
+    const totalCredits = getPackTotalCredits(pack);
     buttons.push([
       Markup.button.callback(
-        `${label}: ${pack.credits} ${unit} — ${pack.price}⭐ (${pack.price_rub}₽)`,
+        `${label}: ${totalCredits} ${unit} — ${pack.price}⭐ (${pack.price_rub}₽)`,
         `pack_${pack.credits}_${pack.price}`
       )
     ]);
@@ -8458,7 +8466,7 @@ bot.action(/^admin_discount:(\d+):(\d+)$/, async (ctx) => {
   // Find discount packs matching the percent
   const discountSuffix = `-${discountPercent}%`;
   const discountPacks = CREDIT_PACKS.filter(
-    (p: any) => p.hidden && p.label_en.endsWith(discountSuffix)
+    (p: any) => p.hidden && p.label_en.endsWith(discountSuffix) && (!p.trialOnly || !user.has_purchased)
   );
 
   if (discountPacks.length === 0) {
@@ -8477,8 +8485,9 @@ bot.action(/^admin_discount:(\d+):(\d+)$/, async (ctx) => {
   for (const pack of discountPacks) {
     const label = lang === "ru" ? pack.label_ru : pack.label_en;
     const unit = lang === "ru" ? "стикеров" : "stickers";
+    const totalCredits = getPackTotalCredits(pack);
     inlineKeyboard.push([{
-      text: `${label}: ${pack.credits} ${unit} — ${pack.price}⭐ (${pack.price_rub}₽)`,
+      text: `${label}: ${totalCredits} ${unit} — ${pack.price}⭐ (${pack.price_rub}₽)`,
       callback_data: `pack_${pack.credits}_${pack.price}`,
     }]);
   }
@@ -10516,8 +10525,9 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
   // Send invoice via Telegram Stars
   try {
     const invoicePayload = `[${transaction.id}]`;
-    const title = await getText(lang, "payment.invoice_title", { credits });
-    const description = await getText(lang, "payment.invoice_description", { credits });
+    const totalCredits = getPackTotalCredits(pack);
+    const title = await getText(lang, "payment.invoice_title", { credits: totalCredits });
+    const description = await getText(lang, "payment.invoice_description", { credits: totalCredits });
     const label = await getText(lang, "payment.invoice_label");
 
     console.log("sending invoice: payload=", invoicePayload, "price=", price);
@@ -10646,13 +10656,15 @@ bot.on("successful_payment", async (ctx) => {
   // We do NOT add credits here to avoid double crediting.
   // The trigger is also used by other bots via n8n workflow.
 
-  // First purchase bonus: +2 credits
-  const isFirstPurchase = user && !user.has_purchased;
-  const bonusCredits = isFirstPurchase ? 2 : 0;
-  
-  if (isFirstPurchase) {
-    console.log("First purchase detected! Adding bonus:", bonusCredits);
-    
+  const purchasedPack = CREDIT_PACKS.find(
+    (p: any) => Number(p.credits) === Number(transaction.amount) && Number(p.price) === Number(transaction.price)
+  );
+  const bonusCredits = Number(purchasedPack?.bonus_credits || 0);
+  const isFirstPurchase = Boolean(user && !user.has_purchased);
+
+  if (bonusCredits > 0) {
+    console.log("Pack bonus detected! Adding bonus:", bonusCredits);
+
     // Add bonus credits via transaction
     await supabase.from("transactions").insert({
       user_id: user.id,
@@ -10662,8 +10674,10 @@ bot.on("successful_payment", async (ctx) => {
       is_active: false,
       env: config.appEnv,
     });
-    
-    // Set has_purchased = true
+  }
+
+  if (isFirstPurchase) {
+    // Mark first purchase regardless of selected pack.
     await supabase
       .from("users")
       .update({ has_purchased: true })
@@ -10683,22 +10697,23 @@ bot.on("successful_payment", async (ctx) => {
   if (finalUser) {
     const lang = finalUser.lang || "en";
     const currentCredits = finalUser.credits || 0;
+    const creditedAmount = Number(transaction.amount || 0) + bonusCredits;
 
     // Show payment success message
     await ctx.reply(await getText(lang, "payment.success", {
-      amount: transaction.amount,
+      amount: creditedAmount,
       balance: currentCredits,
     }));
 
-    // Show bonus message if first purchase
-    if (isFirstPurchase) {
+    // Show bonus message only when selected pack grants bonus credits.
+    if (bonusCredits > 0) {
       await ctx.reply(await getText(lang, "paywall.bonus_applied"));
     }
 
     // Send payment notification (async, non-blocking)
     sendNotification({
       type: "new_payment",
-      message: `👤 @${finalUser.username || finalUser.telegram_id}\n📦 Пакет: ${transaction.amount} кредитов\n⭐ Сумма: ${transaction.price} Stars${isFirstPurchase ? "\n🎁 Первая покупка! +2 бонус" : ""}`,
+      message: `👤 @${finalUser.username || finalUser.telegram_id}\n📦 Пакет: ${creditedAmount} кредитов${bonusCredits > 0 ? ` (${transaction.amount}+${bonusCredits})` : ""}\n⭐ Сумма: ${transaction.price} Stars${isFirstPurchase ? "\n🆕 Первая покупка" : ""}`,
     }).catch(console.error);
 
     // Check if there's a pending session waiting for credits (paywall or normal)
@@ -10898,8 +10913,11 @@ const ABANDONED_CART_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Map original price to discounted price (10% off)
 const DISCOUNT_MAP: Record<number, number> = {
-  150: 135, // Лайт: 150 -> 135
-  300: 270, // Бро: 300 -> 270
+  49: 44,
+  75: 68,
+  175: 158,
+  500: 450,
+  1125: 1013,
 };
 
 async function processAbandonedCarts() {
@@ -10945,17 +10963,18 @@ async function processAbandonedCarts() {
         continue;
       }
 
-      // Determine pack name
-      const packName = tx.amount === 10 
-        ? (lang === "ru" ? "Лайт" : "Light")
-        : tx.amount === 30 
-          ? (lang === "ru" ? "Бро" : "Bro")
-          : `${tx.amount}`;
+      const selectedPack = CREDIT_PACKS.find(
+        (p: any) => !p.hidden && Number(p.credits) === Number(tx.amount) && Number(p.price) === Number(tx.price)
+      );
+      const packName = selectedPack
+        ? (lang === "ru" ? selectedPack.label_ru : selectedPack.label_en)
+        : `${tx.amount}`;
+      const totalCredits = selectedPack ? getPackTotalCredits(selectedPack) : Number(tx.amount || 0);
 
       // Build message
       const message = lang === "ru"
-        ? `🛒 Ты выбрал пакет "${packName}", но не завершил оплату.\n\nСпециально для тебя — скидка 10%:\n${tx.amount} стикеров за ${discountedPrice}⭐ вместо ${tx.price}⭐\n\nПредложение действует 24 часа ⏰`
-        : `🛒 You selected the "${packName}" pack but didn't complete the payment.\n\nSpecial offer for you — 10% off:\n${tx.amount} stickers for ${discountedPrice}⭐ instead of ${tx.price}⭐\n\nOffer valid for 24 hours ⏰`;
+        ? `🛒 Ты выбрал пакет "${packName}", но не завершил оплату.\n\nСпециально для тебя — скидка 10%:\n${totalCredits} стикеров за ${discountedPrice}⭐ вместо ${tx.price}⭐\n\nПредложение действует 24 часа ⏰`
+        : `🛒 You selected the "${packName}" pack but didn't complete the payment.\n\nSpecial offer for you — 10% off:\n${totalCredits} stickers for ${discountedPrice}⭐ instead of ${tx.price}⭐\n\nOffer valid for 24 hours ⏰`;
 
       const buttonText = lang === "ru"
         ? `Оплатить со скидкой ${discountedPrice}⭐`
@@ -11025,11 +11044,14 @@ async function processAbandonedCartAlerts() {
 
       const minutesSince = Math.round((Date.now() - new Date(tx.created_at).getTime()) / 60000);
       
-      // Determine pack name
-      const packName = tx.amount === 10 ? "Лайт" : tx.amount === 30 ? "Бро" : `${tx.amount} кредитов`;
+      const selectedPack = CREDIT_PACKS.find(
+        (p: any) => !p.hidden && Number(p.credits) === Number(tx.amount) && Number(p.price) === Number(tx.price)
+      );
+      const packName = selectedPack ? selectedPack.label_ru : `${tx.amount} кредитов`;
+      const totalCredits = selectedPack ? getPackTotalCredits(selectedPack) : Number(tx.amount || 0);
 
       const message = `👤 @${user.username || 'no_username'} (${user.telegram_id})
-📦 Пакет: ${packName} (${tx.amount} кредитов)
+📦 Пакет: ${packName} (${totalCredits} кредитов)
 💰 Сумма: ${tx.price}⭐
 ⏱ Прошло: ${minutesSince} мин`;
 
