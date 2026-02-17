@@ -3333,24 +3333,34 @@ bot.hears(["💰 Ваш баланс", "💰 Your balance"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
-  const user = await getUser(telegramId);
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  const fastLang = isRu ? "ru" : "en";
+  const userPromise = getUser(telegramId);
+  const openingMsg = await ctx.reply(
+    isRu ? "💰 Открываю баланс..." : "💰 Opening balance...",
+    getMainMenuKeyboard(fastLang)
+  ).catch(() => null);
+
+  const user = await userPromise;
   if (!user) {
-    const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
-    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(fastLang, "start.need_start"), getMainMenuKeyboard(fastLang));
     return;
   }
 
+  if (openingMsg?.message_id) {
+    await ctx.deleteMessage(openingMsg.message_id).catch(() => {});
+  }
   await sendBuyCreditsMenu(ctx, user);
 });
 
 // Menu: 💬 Поддержка
 bot.hears(["💬 Поддержка", "💬 Support"], async (ctx) => {
-  const telegramId = ctx.from?.id;
-  if (!telegramId) return;
-
-  const user = await getUser(telegramId);
-  const lang = user?.lang || "en";
-  await ctx.reply(await getText(lang, "menu.help"), getMainMenuKeyboard(lang));
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  const lang = isRu ? "ru" : "en";
+  const helpText = isRu
+    ? "📷 Отправь фото — получи стикер\n💰 Каждый стикер = 1 кредит\n🎨 Выбирай стили и эмоции\n\nВопросы? @p2s_support_bot"
+    : "📷 Send photo — get sticker\n💰 Each sticker = 1 credit\n🎨 Choose styles and emotions\n\nQuestions? @p2s_support_bot";
+  await ctx.reply(helpText, getMainMenuKeyboard(lang));
 });
 
 // ============================================
@@ -3435,6 +3445,10 @@ async function sendPackStyleSelectionStep(
   });
 }
 
+function isResumablePackSessionState(state?: string | null): boolean {
+  return ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment"].includes(state || "");
+}
+
 // Shared: entry into pack flow (menu button, /start, or broadcast "Попробовать")
 async function handlePackMenuEntry(
   ctx: any,
@@ -3489,6 +3503,27 @@ async function handlePackMenuEntry(
     return;
   }
   const templateId = String(contentSets[0].pack_template_id || "couple_v1");
+
+  const existingPackSession = await getPackFlowSession(user.id);
+  if (
+    existingPackSession?.id &&
+    existingPackSession.pack_template_id === templateId &&
+    isResumablePackSessionState(existingPackSession.state)
+  ) {
+    if (existingPackSession.state === "wait_pack_carousel") {
+      await renderPackCarouselForSession(ctx, existingPackSession, lang);
+      return;
+    }
+    if (existingPackSession.state === "wait_pack_preview_payment") {
+      await sendPackStyleSelectionStep(ctx, lang, existingPackSession.selected_style_id, undefined, {
+        useBackButton: true,
+        sessionId: existingPackSession.id,
+      });
+      return;
+    }
+    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
+    return;
+  }
 
   await supabase.from("sessions").update({ is_active: false }).eq("user_id", user.id).eq("is_active", true).eq("env", config.appEnv);
   let selectedPackStyleId: string | null = null;
@@ -3693,6 +3728,16 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const contentSets = getPackContentSetsForTemplate(allContentSets, templateId);
   if (!contentSets?.length) {
     await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
+    return;
+  }
+
+  const existingPackSession = await getPackFlowSession(user.id);
+  if (
+    existingPackSession?.id &&
+    existingPackSession.pack_template_id === templateId &&
+    isResumablePackSessionState(existingPackSession.state)
+  ) {
+    await renderPackCarouselForSession(ctx, existingPackSession, lang, { bumpSessionRev: true });
     return;
   }
 
@@ -3996,7 +4041,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
     .update({
       state: initialState,
       pack_content_set_id: contentSetId,
-      pack_carousel_index: null,
+      pack_carousel_index: session.pack_carousel_index ?? 0,
       current_photo_file_id: existingPhoto || null,
       photos: existingPhoto ? [existingPhoto] : [],
       is_active: true,
@@ -4035,7 +4080,7 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
     return;
   }
   safeAnswerCbQuery(ctx, lang === "ru" ? "↩️ Открываю наборы..." : "↩️ Opening sets...");
-  await renderPackCarouselForSession(ctx, session, lang, { resetCarouselIndex: true, bumpSessionRev: true });
+  await renderPackCarouselForSession(ctx, session, lang, { bumpSessionRev: true });
 });
 
 // Callback: pack_preview_pay — user pays 1 credit for preview
@@ -5888,6 +5933,10 @@ bot.action(/^style_v2:([^:]+)(?::(.+))?$/, async (ctx) => {
           session_rev: (session.session_rev || 1) + 1,
         })
         .eq("id", session.id);
+      await supabase
+        .from("users")
+        .update({ last_style_id: preset.id })
+        .eq("id", user.id);
       try { await ctx.deleteMessage(); } catch {}
       await sendPackStyleSelectionStep(ctx, lang, preset.id, undefined, { useBackButton: true, sessionId: session.id });
       return;
