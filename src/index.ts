@@ -1072,8 +1072,10 @@ async function startGeneration(
     }
 
     if (isPaywall) {
-      // Show paywall message with bonus info
-      await ctx.reply(await getText(lang, "paywall.message"));
+      const paywallText = lang === "ru"
+        ? "Стикер почти готов! 🔥\n\nРазблокируй генерацию, купив пакет кредитов."
+        : "Sticker almost ready! 🔥\n\nUnlock generation by purchasing a credit package.";
+      await ctx.reply(paywallText);
     } else {
       await ctx.reply(await getText(lang, "photo.not_enough_credits", {
         needed: creditsNeeded,
@@ -10743,11 +10745,6 @@ bot.on("successful_payment", async (ctx) => {
       amount: creditedAmount,
       balance: currentCredits,
     }));
-
-    // Show bonus message only when selected pack grants bonus credits.
-    if (bonusCredits > 0) {
-      await ctx.reply(await getText(lang, "paywall.bonus_applied"));
-    }
 
     // Send payment notification (async, non-blocking)
     sendNotification({
