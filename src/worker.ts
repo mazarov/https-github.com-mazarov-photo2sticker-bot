@@ -598,7 +598,7 @@ async function runPackPreviewJob(job: any) {
 Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total).
 Each cell = ONE sticker with a DISTINCT pose/emotion from the list below.
 The character(s) must look EXACTLY like the person(s) in the reference photo.
-Keep EXACT facial identity in every cell.
+Keep EXACT facial identity in every cell. Eye color MUST match the reference exactly in every cell. Preserve distinctive features: freckles, moles, beauty marks, face shape, skin tone.
 
 Scenes (one per cell, left-to-right, top-to-bottom):
 ${sceneList}
@@ -607,9 +607,9 @@ ${sceneCardinalityGuard ? `${sceneCardinalityGuard}\n` : ""}
 
 CRITICAL RULES FOR THE GRID:
 1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF) in EVERY cell.
-2. Each character must be fully visible within its cell with nothing cropped.
-3. Leave at least 10% padding in each cell around the character.
-4. All ${stickerCount} cells must be clearly separated with thin lines.
+2. Each character must be fully visible within its cell with nothing cropped. Hands, arms, fingers, and wrists must be FULLY inside the cell with clear margin — never crop at wrists or hands. If a pose would extend limbs past the cell edge, draw the character smaller or choose a pose that keeps all limbs inside.
+3. Leave at least 15% padding on every side of the character in each cell (more if the pose has raised arms or gestures).
+4. Do NOT draw any visible lines, borders, or grid between cells. Cells are logically separate; the image will be split programmatically. No separator lines.
 5. Style must be IDENTICAL across all cells — same art style, proportions, colors.
 6. Do NOT add any text, labels, or captions to the stickers.`;
 
