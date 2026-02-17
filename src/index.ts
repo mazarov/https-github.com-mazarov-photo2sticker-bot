@@ -1900,6 +1900,7 @@ async function getActiveSession(userId: string) {
       fallbackByCreatedAt.is_active
     );
   }
+
   return fallbackByCreatedAt;
 }
 
@@ -1912,10 +1913,33 @@ async function getPackFlowSession(userId: string) {
     .eq("user_id", userId)
     .eq("env", config.appEnv)
     .in("state", packStates)
-    .order("updated_at", { ascending: false })
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   return data;
+}
+
+/**
+ * Resolve session for inbound photo messages.
+ * First use generic active-session resolution, then fallback to latest pack-flow session.
+ */
+async function resolveSessionForIncomingPhoto(userId: string) {
+  const activeSession = await getActiveSession(userId);
+  if (activeSession?.id) return activeSession;
+
+  const packSession = await getPackFlowSession(userId);
+  if (packSession?.id) {
+    console.log(
+      "Photo router fallback: using latest pack session:",
+      packSession.id,
+      "state:",
+      packSession.state
+    );
+    return packSession;
+  }
+
+  return null;
 }
 
 async function getPackFlowSessionById(userId: string, sessionId?: string | null) {
@@ -2818,7 +2842,7 @@ bot.on("photo", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
+  const session = await resolveSessionForIncomingPhoto(user.id);
   console.log("Photo handler - session:", session?.id, "state:", session?.state);
   if (!session?.id) {
     await ctx.reply(await getText(lang, "start.need_start"));
@@ -2839,7 +2863,15 @@ bot.on("photo", async (ctx) => {
   }
 
   // Reactivate pack sessions found via fallback (is_active may be false)
-  if (session.state === "wait_pack_photo" && !session.is_active) {
+  const packStatesForReactivation = [
+    "wait_pack_photo",
+    "wait_pack_carousel",
+    "wait_pack_preview_payment",
+    "wait_pack_approval",
+    "generating_pack_preview",
+    "processing_pack",
+  ];
+  if (packStatesForReactivation.includes(String(session.state || "")) && !session.is_active) {
     console.log("Pack photo: reactivating fallback session:", session.id);
     await supabase.from("sessions").update({ is_active: true }).eq("id", session.id);
     session.is_active = true;
