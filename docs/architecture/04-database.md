@@ -210,6 +210,18 @@ Presets: waving, thumbs_up, facepalm, praying, flexing, shrugging, peace, heart_
 
 Используется для имён моделей Gemini и другой конфигурации без передеплоя.
 
+**Ключи моделей Gemini (app_config) — корректные значения `value`:**
+
+| Ключ | Назначение | Допустимые value (ID модели в API) |
+|------|------------|-------------------------------------|
+| `gemini_model_pack` | Превью пака (сетка) | `gemini-2.5-flash-image`, `gemini-3-pro-image-preview` |
+| `gemini_model_style` | Один стикер из фото | `gemini-2.5-flash-image`, `gemini-3-pro-image-preview` |
+| `gemini_model_emotion` | Смена эмоции | `gemini-2.5-flash-image` |
+| `gemini_model_motion` | Смена движения | `gemini-2.5-flash-image` |
+| `gemini_model_subject_detector` | Детектор объектов/людей на фото | `gemini-2.0-flash` |
+
+Формат: ровно как в таблице, без пробелов. Пример: `gemini-2.5-flash-image`. Кэш app_config в воркере/API: 60 сек.
+
 Ключи для Session Router rollout:
 - `session_router_enabled` — включение роутера резолва сессий
 - `strict_session_rev_enabled` — строгая проверка `callback rev` vs `sessions.session_rev`

@@ -100,7 +100,7 @@ git checkout feature/xxx
 | `YANDEX_METRIKA_COUNTER_ID` | — | ID счётчика Яндекс.Метрики для офлайн-конверсий (оплаты). См. `docs/architecture/05-payment.md` → Яндекс Метрика. |
 | `YANDEX_METRIKA_TOKEN` | — | OAuth **access token** Метрики (права `metrika:write` или `metrika:offline_data`). Не путать с Client ID / Client secret. |
 
-Модели Gemini настраиваются через таблицу `app_config` в Supabase, не через env vars.
+Модели Gemini настраиваются через таблицу `app_config` в Supabase, не через env vars. Ключи и корректные названия моделей — см. `04-database.md` → app_config → «Ключи моделей Gemini».
 
 ## Скрипты
 

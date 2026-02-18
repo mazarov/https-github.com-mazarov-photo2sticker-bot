@@ -195,7 +195,7 @@ const savedSourcePhotoFileId = sourceFileId;
 |----------|---------|----------|
 | `JOB_POLL_INTERVAL_MS` | 2000 | Интервал опроса очереди |
 | `APP_ENV` | prod | Окружение (фильтр заданий) |
-| Gemini model | app_config (style: gemini-3-pro-image-preview, emotion/motion: gemini-2.5-flash-image) | Модель генерации |
+| Gemini model | app_config: см. 04-database.md «Ключи моделей Gemini». Pack: `gemini_model_pack`, single: `gemini_model_style` / `gemini_model_emotion` / `gemini_model_motion` | Модель генерации |
 | rembg URL | http://p2s-rembg:5000 | Адрес сервиса удаления фона |
 
 ## Обработка ошибок
