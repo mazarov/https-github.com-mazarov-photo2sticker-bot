@@ -596,18 +596,9 @@ async function runPackPreviewJob(job: any) {
 - Do not add extra people or replace either person.`
         : "";
   // Pack-only task: grid layout, scenes, format rules. Style + composition = styleBlock (same as single sticker).
-  const isPhotoRealisticStyle = session.selected_style_id === "photo_realistic";
-  const photoStyleRenderingLine = isPhotoRealisticStyle
-    ? "Rendering: output MUST be a PHOTOGRAPH of the person in the reference image — realistic skin, hair, fabric, and natural lighting. Do NOT render as cartoon, illustration, or anime. The same real person, same face, in every cell.\n"
-    : "";
-  const photoStyleRule7Suffix = isPhotoRealisticStyle
-    ? " Every cell MUST look like a photograph of the same person, not a drawing, cartoon, or illustration."
-    : "";
   const packTaskBlock = `[TASK — PACK GRID ONLY]
-${photoStyleRenderingLine}This is source art for automated processing — do NOT draw any outline, border, stroke, or sticker-style edge around the character; raw edges only.
 Create a ${cols}x${rows} grid of images (${stickerCount} cells total).
 Each cell = ONE image with a DISTINCT pose/emotion from the list below. Every cell MUST have visible margins (at least 15% empty space on each side of the character) — no tight cropping; background removal requires this.
-The character(s) must look EXACTLY like the person(s) in the reference photo.
 
 Scenes (one per cell, left-to-right, top-to-bottom):
 ${sceneList}
@@ -615,13 +606,14 @@ ${sceneList}
 ${sceneCardinalityGuard ? `${sceneCardinalityGuard}\n` : ""}
 
 CRITICAL RULES FOR THE GRID:
+The character(s) must look EXACTLY like the person(s) in the reference photo.
 ${selectedStylePromptHint ? `0. STYLE (apply in every cell): ${selectedStylePromptHint}\n` : ""}1. Do NOT draw any outline, border, stroke, or contour around the character(s). Raw clean edges only — the image will be background-removed; hand-drawn outlines get damaged. No sticker-style borders, white outlines, or decorative edges.
 2. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF) in EVERY cell. Any objects in the scene (fridge, furniture, props) must be on this same flat background — no walls, no room interior, no extra environment behind objects.
 3. Each character must be fully visible within its cell with nothing cropped. Hands, arms, fingers, and wrists must be FULLY inside the cell with clear margin — never crop at wrists or hands. If a pose would extend limbs past the cell edge, draw the character smaller or choose a pose that keeps all limbs inside.
 4. MANDATORY PADDING: The character must be SURROUNDED by visible magenta background on EVERY side — TOP, BOTTOM, LEFT, RIGHT. Leave at least 15% empty space (margin) on ALL four edges. The BOTTOM must have the same margin as the top — do NOT push the subject, blanket, or props to the bottom edge. For raised arms or wide gestures use 20% or more. Tight framing with no margin on any side breaks background removal.
 5. SEAMLESS GRID: The image must be one continuous surface — magenta background flows from cell to cell with NO visible division. Do NOT draw white lines, grid lines, stripes, or any separator between the 9 images. We split the image programmatically; you must not add any marking or line between cells.
 6. LIKENESS: In EVERY cell — EYE COLOR must match the reference EXACTLY (same hue and intensity). Preserve freckles, moles, beauty marks, birthmarks, face shape, skin tone. Do NOT change eye color or omit distinctive features that appear in the reference.
-7. Style must be IDENTICAL across all cells — same art style, proportions, colors.${photoStyleRule7Suffix}
+7. Style must be IDENTICAL across all cells — same art style, proportions, colors.
 8. Do NOT add any text, labels, or captions in the cells. Text will be added programmatically later.`;
 
   const hasCollage = !!collageBase64;
