@@ -595,8 +595,6 @@ async function runPackPreviewJob(job: any) {
         : "";
   // Pack-only task: grid layout, scenes, format rules. Style + composition = styleBlock (same as single sticker).
   const packTaskBlock = `[TASK — PACK GRID ONLY]
-CRITICAL: Do NOT draw any outline, border, stroke, or contour around the character(s). Raw clean edges only — the image will be background-removed; hand-drawn outlines get damaged.
-
 Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total).
 Each cell = ONE sticker with a DISTINCT pose/emotion from the list below.
 The character(s) must look EXACTLY like the person(s) in the reference photo.
@@ -608,11 +606,11 @@ ${sceneList}
 ${sceneCardinalityGuard ? `${sceneCardinalityGuard}\n` : ""}
 
 CRITICAL RULES FOR THE GRID:
-1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF) in EVERY cell.
-2. Each character must be fully visible within its cell with nothing cropped. Hands, arms, fingers, and wrists must be FULLY inside the cell with clear margin — never crop at wrists or hands. If a pose would extend limbs past the cell edge, draw the character smaller or choose a pose that keeps all limbs inside.
-3. Leave at least 15% padding on every side of the character in each cell (more if the pose has raised arms or gestures).
-4. Do NOT draw any visible lines, borders, or grid between cells. Cells are logically separate; the image will be split programmatically. No separator lines.
-5. Do NOT add any border, outline, stroke, or contour around the character(s). Clean raw edges only. The image will be background-removed; no hand-drawn outline.
+1. Do NOT draw any outline, border, stroke, or contour around the character(s). Raw clean edges only — the image will be background-removed; hand-drawn outlines get damaged.
+2. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF) in EVERY cell.
+3. Each character must be fully visible within its cell with nothing cropped. Hands, arms, fingers, and wrists must be FULLY inside the cell with clear margin — never crop at wrists or hands. If a pose would extend limbs past the cell edge, draw the character smaller or choose a pose that keeps all limbs inside.
+4. Leave at least 15% padding on every side of the character in each cell (more if the pose has raised arms or gestures).
+5. Do NOT draw any visible lines, borders, or grid between cells. Cells are logically separate; the image will be split programmatically. No separator lines.
 6. Style must be IDENTICAL across all cells — same art style, proportions, colors.
 7. Do NOT add any text, labels, or captions to the stickers.`;
 
@@ -624,8 +622,10 @@ The first image is a reference sticker pack. Match its visual style (rendering, 
 ${packTaskBlock}`
     : `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}${packTaskBlock}`;
 
+  const packPromptChars = prompt.length;
+  const packPromptTokensApprox = Math.ceil(packPromptChars / 4);
   console.log("[PackPreview] Prompt (first 400):", prompt.substring(0, 400), hasCollage ? "(with collage ref)" : "(no collage)");
-  console.log("[PackPreview] Full prompt length:", prompt.length);
+  console.log("[PackPreview] Full prompt length:", packPromptChars, "chars, ~", packPromptTokensApprox, "tokens (Gemini limit ~1M input tokens)");
   console.log("[PackPreview] Full prompt:\n" + prompt);
 
   // Build image parts for Gemini
@@ -1269,6 +1269,9 @@ async function runJob(job: any) {
   console.log("generationType:", generationType);
   console.log("session.generation_type:", session.generation_type);
   console.log("session.state:", session.state);
+  const promptChars = promptForGeneration.length;
+  const promptTokensApprox = Math.ceil(promptChars / 4); // ~4 chars per token
+  console.log("Full prompt length:", promptChars, "chars, ~", promptTokensApprox, "tokens (Gemini limit ~1M input tokens)");
   console.log("Full prompt:", promptForGeneration);
   console.log("text_prompt:", session.text_prompt);
 

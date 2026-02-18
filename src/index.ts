@@ -772,7 +772,7 @@ const LIKENESS_SUFFIX = `\n\nLIKENESS — Preserve the person's recognizable ide
 - Preserve face shape, skin tone, and any other details that make the person identifiable to those who know them.`;
 
 // Shared composition/background rules — same for single sticker and pack (unified prompt flow)
-const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. The COMPLETE character (including all limbs, hands, fingers, elbows, hair) must be fully visible with nothing cropped by image edges.\n3. Leave at least 15% empty space on EVERY side of the character.\n4. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n5. Do NOT add any border, outline, stroke, or contour around the character. Clean raw edges only.`;
+const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. The COMPLETE character (including all limbs, hands, fingers, elbows, hair) must be fully visible with nothing cropped by image edges.\n3. Leave at least 15% empty space on EVERY side of the character.\n4. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
 
 function getMimeTypeByTelegramPath(filePath: string): string {
   if (filePath.endsWith(".webp")) return "image/webp";
