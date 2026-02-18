@@ -595,6 +595,8 @@ async function runPackPreviewJob(job: any) {
         : "";
   // Pack-only task: grid layout, scenes, format rules. Style + composition = styleBlock (same as single sticker).
   const packTaskBlock = `[TASK — PACK GRID ONLY]
+CRITICAL: Do NOT draw any outline, border, stroke, or contour around the character(s). Raw clean edges only — the image will be background-removed; hand-drawn outlines get damaged.
+
 Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total).
 Each cell = ONE sticker with a DISTINCT pose/emotion from the list below.
 The character(s) must look EXACTLY like the person(s) in the reference photo.
