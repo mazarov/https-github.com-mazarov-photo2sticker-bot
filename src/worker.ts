@@ -596,7 +596,7 @@ async function runPackPreviewJob(job: any) {
   // Pack-only task: grid layout, scenes, format rules. Style + composition = styleBlock (same as single sticker).
   const packTaskBlock = `[TASK — PACK GRID ONLY]
 Create a ${cols}x${rows} grid sticker sheet (${stickerCount} stickers total).
-Each cell = ONE sticker with a DISTINCT pose/emotion from the list below.
+Each cell = ONE sticker with a DISTINCT pose/emotion from the list below. Every cell MUST have visible margins (at least 15% empty space on each side of the character) — no tight cropping; background removal requires this.
 The character(s) must look EXACTLY like the person(s) in the reference photo.
 Keep EXACT facial identity in every cell. Eye color MUST match the reference exactly in every cell. Preserve distinctive features: freckles, moles, beauty marks, face shape, skin tone.
 
@@ -607,9 +607,9 @@ ${sceneCardinalityGuard ? `${sceneCardinalityGuard}\n` : ""}
 
 CRITICAL RULES FOR THE GRID:
 1. Do NOT draw any outline, border, stroke, or contour around the character(s). Raw clean edges only — the image will be background-removed; hand-drawn outlines get damaged.
-2. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF) in EVERY cell.
+2. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF) in EVERY cell. Any objects in the scene (fridge, furniture, props) must be on this same flat background — no walls, no room interior, no extra environment behind objects.
 3. Each character must be fully visible within its cell with nothing cropped. Hands, arms, fingers, and wrists must be FULLY inside the cell with clear margin — never crop at wrists or hands. If a pose would extend limbs past the cell edge, draw the character smaller or choose a pose that keeps all limbs inside.
-4. Leave at least 15% padding on every side of the character in each cell (more if the pose has raised arms or gestures).
+4. MANDATORY PADDING: In EVERY cell leave at least 15% empty space (margin) on ALL four sides — top, bottom, left, right — between the character and the cell edge. For poses with raised arms or wide gestures use 20% or more. There must always be a visible gap between the character and the border; tight framing with no margins breaks background removal.
 5. Do NOT draw any visible lines, borders, or grid between cells. Cells are logically separate; the image will be split programmatically. No separator lines.
 6. Style must be IDENTICAL across all cells — same art style, proportions, colors.
 7. Do NOT add any text, labels, or captions to the stickers.`;
