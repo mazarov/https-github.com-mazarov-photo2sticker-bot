@@ -142,7 +142,8 @@ flowchart TD
     - ключ: `bg_removal_primary` (prod) / `bg_removal_primary_test` (test)
     - значения: `rembg` или `pixian`
     - fallback: если primary упал, используется второй провайдер
-  - подписи: при `sessions.pack_content_set_id` берёт `pack_content_sets.labels` / `labels_en`, иначе `pack_templates.labels` / `labels_en`
+  - после BG removal: каждая ячейка пропускается через **`fitStickerIn512WithMargin(buffer, 0.05)`** — контент вписывается в 512×512 с отступом ~5% по краям (чтобы стикер не заполнял весь кадр; при вырезании фона отступы теряются)
+  - подписи: при `sessions.pack_content_set_id` берёт `pack_content_sets.labels` / `labels_en`, иначе `pack_templates.labels` / `labels_en`; поверх накладывается через `addTextToSticker`
   - принудительная белая обводка в worker не добавляется (оставляем контур, который сгенерировал Gemini)
   - собирает Telegram sticker set (`createNewStickerSet` + `addStickerToSet`)
 

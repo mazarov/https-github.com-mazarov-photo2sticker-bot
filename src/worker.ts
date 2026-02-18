@@ -9,7 +9,7 @@ import { getText } from "./lib/texts";
 import { sendAlert, sendNotification, sendPackPreviewAlert } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
-import { addTextToSticker } from "./lib/image-utils";
+import { addTextToSticker, fitStickerIn512WithMargin, addWhiteBorder } from "./lib/image-utils";
 import {
   appendSubjectLock,
   buildSubjectLockBlock,
@@ -610,13 +610,14 @@ CRITICAL RULES FOR THE GRID:
 2. Each character must be fully visible within its cell with nothing cropped. Hands, arms, fingers, and wrists must be FULLY inside the cell with clear margin — never crop at wrists or hands. If a pose would extend limbs past the cell edge, draw the character smaller or choose a pose that keeps all limbs inside.
 3. Leave at least 15% padding on every side of the character in each cell (more if the pose has raised arms or gestures).
 4. Do NOT draw any visible lines, borders, or grid between cells. Cells are logically separate; the image will be split programmatically. No separator lines.
-5. Style must be IDENTICAL across all cells — same art style, proportions, colors.
-6. Do NOT add any text, labels, or captions to the stickers.`;
+5. Do NOT add any border, outline, stroke, or contour around the character(s). Clean raw edges only. The image will be background-removed; no hand-drawn outline.
+6. Style must be IDENTICAL across all cells — same art style, proportions, colors.
+7. Do NOT add any text, labels, or captions to the stickers.`;
 
   const hasCollage = !!collageBase64;
   const prompt = hasCollage
     ? `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}[REFERENCE IMAGE]
-The first image is a reference sticker pack. Match its visual style (rendering, outline, proportions, colors).
+The first image is a reference sticker pack. Match its visual style (rendering, proportions, colors). Do not add outlines or strokes around the character.
 
 ${packTaskBlock}`
     : `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}${packTaskBlock}`;
@@ -965,12 +966,15 @@ async function runPackAssembleJob(job: any) {
     if (!cellBuf) continue;
 
     try {
-      let processed = cellBuf;
+      // Fit content into 512x512 with ~5% margin at edges (so sticker doesn't fill the whole frame)
+      let processed = await fitStickerIn512WithMargin(cellBuf, 0.05);
       // Label overlay via addTextToSticker (same font/badge as "add text" for single sticker)
       const label = (labels[i] || "").trim();
       if (label) {
         processed = await addTextToSticker(processed, label, "bottom");
       }
+      // Programmatic white border (same as single-sticker "toggle border")
+      processed = await addWhiteBorder(processed);
       stickerBuffers.push(processed);
     } catch (procErr: any) {
       console.error(`[PackAssemble] Error processing cell ${i}:`, procErr.message);

@@ -336,6 +336,42 @@ export async function addTextToSticker(
   return result;
 }
 
+/**
+ * Fit sticker content into 512x512 with a margin around the edges.
+ * Content area = (1 - 2 * marginRatio) of side; e.g. marginRatio 0.1 → 80% for content → 10% free at each edge.
+ * Returns 512x512 PNG buffer (transparent background, content centered).
+ */
+export async function fitStickerIn512WithMargin(
+  inputBuffer: Buffer,
+  marginRatio: number = 0.1
+): Promise<Buffer> {
+  const size = 512;
+  const contentSize = Math.round(size * (1 - 2 * marginRatio)); // 0.1 → 410
+  const padded = await sharp(inputBuffer)
+    .ensureAlpha()
+    .resize(contentSize, contentSize, {
+      fit: "contain",
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    })
+    .toBuffer();
+  const meta = await sharp(padded).metadata();
+  const w = meta.width || contentSize;
+  const h = meta.height || contentSize;
+  const left = Math.round((size - w) / 2);
+  const top = Math.round((size - h) / 2);
+  return sharp({
+    create: {
+      width: size,
+      height: size,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([{ input: padded, left, top, blend: "over" }])
+    .png()
+    .toBuffer();
+}
+
 export async function addWhiteBorder(inputBuffer: Buffer, borderWidth: number = 8): Promise<Buffer> {
   // Decode to raw RGBA
   const image = sharp(inputBuffer).ensureAlpha();
