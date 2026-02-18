@@ -625,6 +625,8 @@ ${packTaskBlock}`
     : `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}${packTaskBlock}`;
 
   console.log("[PackPreview] Prompt (first 400):", prompt.substring(0, 400), hasCollage ? "(with collage ref)" : "(no collage)");
+  console.log("[PackPreview] Full prompt length:", prompt.length);
+  console.log("[PackPreview] Full prompt:\n" + prompt);
 
   // Build image parts for Gemini
   const imageParts: any[] = [];
