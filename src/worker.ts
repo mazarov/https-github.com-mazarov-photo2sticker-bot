@@ -612,7 +612,8 @@ CRITICAL RULES FOR THE GRID:
 4. MANDATORY PADDING: The character must be SURROUNDED by visible magenta background on EVERY side — TOP, BOTTOM, LEFT, RIGHT. Leave at least 15% empty space (margin) on ALL four edges. The BOTTOM must have the same margin as the top — do NOT push the subject, blanket, or props to the bottom edge. For raised arms or wide gestures use 20% or more. Tight framing with no margin on any side breaks background removal.
 5. SEAMLESS GRID: The image must be one continuous surface — magenta background flows from cell to cell with NO visible division. Do NOT draw white lines, grid lines, stripes, or any separator between the 9 images. We split the image programmatically; you must not add any marking or line between cells.
 6. LIKENESS: In EVERY cell — EYE COLOR must match the reference EXACTLY (same hue and intensity). Preserve freckles, moles, beauty marks, birthmarks, face shape, skin tone. Do NOT change eye color or omit distinctive features that appear in the reference.
-7. Style must be IDENTICAL across all cells — same art style, proportions, colors.`;
+7. Style must be IDENTICAL across all cells — same art style, proportions, colors.
+8. Do NOT add any text, labels, or captions in the cells. Text will be added programmatically later.`;
 
   const hasCollage = !!collageBase64;
   const prompt = hasCollage
@@ -640,31 +641,50 @@ ${packTaskBlock}`
   const imageSize = await getAppConfig("gemini_image_size_pack", "1K");
   console.log("[PackPreview] Using model:", model, "imageSize:", imageSize);
 
-  let geminiRes;
-  try {
-    geminiRes = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        contents: [{
-          role: "user",
-          parts: [
-            { text: prompt },
-            ...imageParts,
-          ],
-        }],
-        generationConfig: {
-          responseModalities: ["IMAGE"],
-          imageConfig: { aspectRatio: "1:1", imageSize },
+  const PACK_PREVIEW_GEMINI_MAX_ATTEMPTS = 3;
+  const PACK_PREVIEW_GEMINI_RETRY_DELAY_MS = 12000;
+
+  let geminiRes: any = null;
+  let lastErrorMsg = "";
+  for (let attempt = 1; attempt <= PACK_PREVIEW_GEMINI_MAX_ATTEMPTS; attempt++) {
+    try {
+      geminiRes = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          contents: [{
+            role: "user",
+            parts: [
+              { text: prompt },
+              ...imageParts,
+            ],
+          }],
+          generationConfig: {
+            responseModalities: ["IMAGE"],
+            imageConfig: { aspectRatio: "1:1", imageSize },
+          },
         },
-      },
-      {
-        headers: { "x-goog-api-key": config.geminiApiKey },
-        timeout: 120000,
+        {
+          headers: { "x-goog-api-key": config.geminiApiKey },
+          timeout: 120000,
+        }
+      );
+      break;
+    } catch (err: any) {
+      lastErrorMsg = err.response?.data?.error?.message || err.message;
+      console.error("[PackPreview] Gemini error (attempt " + attempt + "/" + PACK_PREVIEW_GEMINI_MAX_ATTEMPTS + "):", lastErrorMsg);
+      const isRetryable = /high demand|try again later/i.test(lastErrorMsg);
+      if (attempt < PACK_PREVIEW_GEMINI_MAX_ATTEMPTS && isRetryable) {
+        console.log("[PackPreview] Retrying in", PACK_PREVIEW_GEMINI_RETRY_DELAY_MS / 1000, "s...");
+        await new Promise((r) => setTimeout(r, PACK_PREVIEW_GEMINI_RETRY_DELAY_MS));
+      } else {
+        break;
       }
-    );
-  } catch (err: any) {
-    const errorMsg = err.response?.data?.error?.message || err.message;
-    console.error("[PackPreview] Gemini error:", errorMsg);
+    }
+  }
+
+  if (!geminiRes) {
+    const errorMsg = lastErrorMsg || "Unknown error";
+    console.error("[PackPreview] Gemini failed after", PACK_PREVIEW_GEMINI_MAX_ATTEMPTS, "attempts");
 
     // Refund 1 credit
     await supabase
