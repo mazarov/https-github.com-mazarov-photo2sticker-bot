@@ -612,8 +612,7 @@ CRITICAL RULES FOR THE GRID:
 3. Each character must be fully visible within its cell with nothing cropped. Hands, arms, fingers, and wrists must be FULLY inside the cell with clear margin — never crop at wrists or hands. If a pose would extend limbs past the cell edge, draw the character smaller or choose a pose that keeps all limbs inside.
 4. MANDATORY PADDING: In EVERY cell leave at least 15% empty space (margin) on ALL four sides — top, bottom, left, right — between the character and the cell edge. For poses with raised arms or wide gestures use 20% or more. There must always be a visible gap between the character and the cell edge; tight framing with no margins breaks background removal.
 5. Do NOT draw any visible lines or grid between cells. Cells are logically separate; the image will be split programmatically. No separator or divider lines.
-6. Style must be IDENTICAL across all cells — same art style, proportions, colors.
-7. Do NOT add any text, labels, or captions in the cells.`;
+6. Style must be IDENTICAL across all cells — same art style, proportions, colors.`;
 
   const hasCollage = !!collageBase64;
   const prompt = hasCollage
