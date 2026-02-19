@@ -64,6 +64,8 @@ WHERE table_name = 'sessions' AND column_name = 'is_active';
 Вместо этого используем `telegram_file_id`.
 Storage используется только для бэкапа.
 
+**PackAssemble**: загрузка стикеров пака в Storage может дать `TimeoutError` (сеть или лимит Supabase). Пользователь уже получил пак в Telegram — уведомление и обновление batch/session делаются **до** цикла Storage+DB. Сохранение в Storage и запись в `stickers` идут после (best-effort, с try/catch), чтобы таймаут не блокировал выдачу пака.
+
 ---
 
 ## 4. Race condition: Стили + Ассистент
