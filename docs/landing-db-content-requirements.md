@@ -41,7 +41,7 @@
 
 - Добавить в таблицу `stickers` колонку `public_url text`.
 - Назначение: после загрузки стикера с `is_example = true` в Supabase Storage воркер записывает сюда публичный HTTP-URL картинки; лендинг по нему отдаёт примеры в блоке «Выбери свой стиль» и на страницах `/style/[group]` / `/style/[group]/[substyle]`.
-- Заполнение: при нажатии админом «Сделать примером» (callback `make_example` в боте): скачивание файла из bucket `stickers` по `result_storage_path`, загрузка в bucket `sticker-examples`, запись `getPublicUrl()` в `stickers.public_url`. Bucket `sticker-examples` должен быть создан в Supabase Storage и сделан публичным (Public).
+- Заполнение: при нажатии админом «Сделать примером» (callback `make_example` в боте): скачивание файла из bucket `stickers` по `result_storage_path`, загрузка в bucket `stickers-examples`, запись `getPublicUrl()` в `stickers.public_url`. Bucket `stickers-examples` должен быть создан в Supabase Storage и сделан публичным (Public).
 
 ### 3.2. Картинки карусели Hero из БД (опционально, позже)
 
