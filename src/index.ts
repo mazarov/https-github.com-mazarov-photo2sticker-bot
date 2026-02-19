@@ -8455,10 +8455,10 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
   const stickerId = ctx.match[1];
   console.log("stickerId:", stickerId);
 
-  // Get sticker to check style_preset_id
+  // Get sticker to check style_preset_id and get file path for landing public_url
   const { data: sticker } = await supabase
     .from("stickers")
-    .select("id, style_preset_id, is_example")
+    .select("id, style_preset_id, is_example, result_storage_path")
     .eq("id", stickerId)
     .maybeSingle();
 
@@ -8480,10 +8480,36 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
     return;
   }
 
-  // Mark as example
+  let publicUrl: string | null = null;
+  if (sticker.result_storage_path) {
+    try {
+      const { data: fileData, error: downloadErr } = await supabase.storage
+        .from(config.supabaseStorageBucket)
+        .download(sticker.result_storage_path);
+      if (downloadErr || !fileData) {
+        console.error("[make_example] Storage download failed:", downloadErr);
+      } else {
+        const examplesPath = `${stickerId}.webp`;
+        const { error: uploadErr } = await supabase.storage
+          .from(config.supabaseStorageBucketExamples)
+          .upload(examplesPath, fileData, { contentType: "image/webp", upsert: true });
+        if (uploadErr) {
+          console.error("[make_example] Storage upload to examples bucket failed:", uploadErr);
+        } else {
+          const { data: urlData } = supabase.storage
+            .from(config.supabaseStorageBucketExamples)
+            .getPublicUrl(examplesPath);
+          publicUrl = urlData?.publicUrl ?? null;
+        }
+      }
+    } catch (err) {
+      console.error("[make_example] Upload to sticker-examples failed:", err);
+    }
+  }
+
   const { error } = await supabase
     .from("stickers")
-    .update({ is_example: true })
+    .update({ is_example: true, ...(publicUrl && { public_url: publicUrl }) })
     .eq("id", stickerId);
 
   if (error) {
@@ -8492,7 +8518,7 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
     return;
   }
 
-  console.log("Marked as example:", stickerId, "style:", sticker.style_preset_id);
+  console.log("Marked as example:", stickerId, "style:", sticker.style_preset_id, publicUrl ? "public_url set" : "no public_url");
   await ctx.editMessageText(`✅ Добавлен как пример для стиля "${sticker.style_preset_id}"`);
 });
 

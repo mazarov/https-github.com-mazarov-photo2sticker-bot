@@ -15,6 +15,8 @@ export const config = {
   supabaseUrl: required("SUPABASE_SUPABASE_PUBLIC_URL"),
   supabaseServiceRoleKey: required("SUPABASE_SERVICE_ROLE_KEY"),
   supabaseStorageBucket: process.env.SUPABASE_STORAGE_BUCKET || "stickers",
+  /** Public bucket for style example images (landing). Must exist and be public in Supabase. */
+  supabaseStorageBucketExamples: process.env.SUPABASE_STORAGE_BUCKET_EXAMPLES || "sticker-examples",
   geminiApiKey: required("GEMINI_API_KEY"),
   openaiApiKey: process.env.OPENAI_API_KEY || "",
 
