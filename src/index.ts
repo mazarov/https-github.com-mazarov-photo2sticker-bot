@@ -8481,18 +8481,43 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
   }
 
   let publicUrl: string | null = null;
+  const isTransientStorageErr = (e: unknown) => {
+    if (!e || typeof e !== "object") return false;
+    const msg = String((e as { message?: string }).message ?? e);
+    const code = (e as { code?: number }).code;
+    return code === 500 || /fetch failed|timeout|ECONNRESET|ETIMEDOUT/i.test(msg);
+  };
   if (sticker.result_storage_path) {
     try {
-      const { data: fileData, error: downloadErr } = await supabase.storage
-        .from(config.supabaseStorageBucket)
-        .download(sticker.result_storage_path);
+      let fileData: Blob | null = null;
+      let downloadErr: unknown = null;
+      const doDownload = () =>
+        supabase.storage.from(config.supabaseStorageBucket).download(sticker.result_storage_path!);
+      let result = await doDownload();
+      downloadErr = result.error;
+      fileData = result.data;
+      if (downloadErr && isTransientStorageErr(downloadErr)) {
+        await new Promise((r) => setTimeout(r, 2000));
+        result = await doDownload();
+        downloadErr = result.error;
+        fileData = result.data;
+      }
       if (downloadErr || !fileData) {
         console.error("[make_example] Storage download failed:", downloadErr);
       } else {
         const examplesPath = `${stickerId}.webp`;
-        const { error: uploadErr } = await supabase.storage
-          .from(config.supabaseStorageBucketExamples)
-          .upload(examplesPath, fileData, { contentType: "image/webp", upsert: true });
+        let uploadErr: unknown = null;
+        const doUpload = () =>
+          supabase.storage
+            .from(config.supabaseStorageBucketExamples)
+            .upload(examplesPath, fileData!, { contentType: "image/webp", upsert: true });
+        let uploadResult = await doUpload();
+        uploadErr = uploadResult.error;
+        if (uploadErr && isTransientStorageErr(uploadErr)) {
+          await new Promise((r) => setTimeout(r, 2000));
+          uploadResult = await doUpload();
+          uploadErr = uploadResult.error;
+        }
         if (uploadErr) {
           console.error("[make_example] Storage upload to examples bucket failed:", uploadErr);
         } else {
@@ -8503,7 +8528,30 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
         }
       }
     } catch (err) {
-      console.error("[make_example] Upload to sticker-examples failed:", err);
+      if (isTransientStorageErr(err)) {
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+          const { data: fileData, error: downloadErr } = await supabase.storage
+            .from(config.supabaseStorageBucket)
+            .download(sticker.result_storage_path);
+          if (!downloadErr && fileData) {
+            const examplesPath = `${stickerId}.webp`;
+            const { error: uploadErr } = await supabase.storage
+              .from(config.supabaseStorageBucketExamples)
+              .upload(examplesPath, fileData, { contentType: "image/webp", upsert: true });
+            if (!uploadErr) {
+              const { data: urlData } = supabase.storage
+                .from(config.supabaseStorageBucketExamples)
+                .getPublicUrl(examplesPath);
+              publicUrl = urlData?.publicUrl ?? null;
+            }
+          }
+        } catch (e2) {
+          console.error("[make_example] Upload to sticker-examples failed (retry):", e2);
+        }
+      } else {
+        console.error("[make_example] Upload to sticker-examples failed:", err);
+      }
     }
   }
 

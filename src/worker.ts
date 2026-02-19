@@ -28,6 +28,14 @@ async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+/** Supabase Storage 500 / fetch failed / timeout — retry once after delay. */
+function isTransientStorageError(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const msg = String((e as { message?: string }).message ?? e);
+  const code = (e as { code?: number; status?: number }).code ?? (e as { code?: number; status?: number }).status;
+  return code === 500 || /fetch failed|timeout|ECONNRESET|ETIMEDOUT/i.test(msg);
+}
+
 /** Telegram sendPhoto limit: 10 MB. Resize pack preview if over limit. */
 const TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -1165,15 +1173,33 @@ async function runPackAssembleJob(job: any) {
   const packTimestamp = Date.now();
   for (let i = 0; i < stickerBuffers.length; i++) {
     let resultStoragePath: string | null = null;
-    try {
-      const path = `${storagePrefix}/${packTimestamp}_${i}.webp`;
-      const { error } = await supabase.storage
+    const path = `${storagePrefix}/${packTimestamp}_${i}.webp`;
+    const doUpload = () =>
+      supabase.storage
         .from(config.supabaseStorageBucket)
         .upload(path, stickerBuffers[i], { contentType: "image/webp", upsert: true });
+    try {
+      let { error } = await doUpload();
+      if (error && isTransientStorageError(error)) {
+        await sleep(2000);
+        const retry = await doUpload();
+        error = retry.error;
+      }
       if (!error) resultStoragePath = path;
       else console.warn("[PackAssemble] Storage upload failed for index", i, error.message);
     } catch (e) {
-      console.warn("[PackAssemble] Storage upload failed for index", i, (e as Error).message || String(e));
+      if (isTransientStorageError(e)) {
+        await sleep(2000);
+        try {
+          const { error: retryErr } = await doUpload();
+          if (!retryErr) resultStoragePath = path;
+          else console.warn("[PackAssemble] Storage upload failed for index (retry)", i, retryErr.message);
+        } catch (e2) {
+          console.warn("[PackAssemble] Storage upload failed for index", i, (e2 as Error).message || String(e2));
+        }
+      } else {
+        console.warn("[PackAssemble] Storage upload failed for index", i, (e as Error).message || String(e));
+      }
     }
     await supabase.from("stickers").insert({
       user_id: session.user_id,
