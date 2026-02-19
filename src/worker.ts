@@ -1105,15 +1105,27 @@ async function runPackAssembleJob(job: any) {
     return;
   }
 
-  // Save sticker records to DB
+  // Upload each sticker to Storage and save records to DB (result_storage_path for examples/landing)
+  const storagePrefix = `stickers/${session.user_id}/${batch.id}`;
+  const packTimestamp = Date.now();
   for (let i = 0; i < stickerBuffers.length; i++) {
+    const path = `${storagePrefix}/${packTimestamp}_${i}.webp`;
+    const uploadErr = await supabase.storage
+      .from(config.supabaseStorageBucket)
+      .upload(path, stickerBuffers[i], { contentType: "image/webp", upsert: true })
+      .then((r) => r.error);
+    if (uploadErr) {
+      console.warn("[PackAssemble] Storage upload failed for index", i, uploadErr.message);
+    }
     await supabase.from("stickers").insert({
       user_id: session.user_id,
       session_id: session.id,
       source_photo_file_id: session.current_photo_file_id,
+      result_storage_path: uploadErr ? null : path,
       sticker_set_name: setName,
       pack_batch_id: batch.id,
       pack_index: i,
+      style_preset_id: session.selected_style_id || null,
       env: config.appEnv,
     });
   }

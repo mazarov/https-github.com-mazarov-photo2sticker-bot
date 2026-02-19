@@ -97,6 +97,7 @@ git checkout feature/xxx
 | `SUPPORT_CHANNEL_ID` | — | ID канала поддержки |
 | `ADMIN_IDS` | — | Telegram ID админов (через запятую) |
 | `SUPABASE_STORAGE_BUCKET` | `stickers` | Бакет в Supabase Storage (создать в Dashboard: Storage → New bucket; имя = значение переменной). Используется для стикеров и для листов пака (`pack_sheets/`). |
+| `SUPABASE_STORAGE_BUCKET_EXAMPLES` | `stickers-examples` | Публичный бакет для примеров стилей (лендинг). Создать в Storage, включить **Public**. При «Сделать примером» файл копируется сюда и в `stickers.public_url` пишется URL. |
 | `YANDEX_METRIKA_COUNTER_ID` | — | ID счётчика Яндекс.Метрики для офлайн-конверсий (оплаты). См. `docs/architecture/05-payment.md` → Яндекс Метрика. |
 | `YANDEX_METRIKA_TOKEN` | — | OAuth **access token** Метрики (права `metrika:write` или `metrika:offline_data`). Не путать с Client ID / Client secret. |
 

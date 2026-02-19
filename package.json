@@ -14,7 +14,10 @@
     "broadcast:valentine": "DOTENV_CONFIG_PATH=.env tsx src/broadcast-valentine.ts",
     "broadcast:valentine:test": "DOTENV_CONFIG_PATH=.env tsx src/broadcast-valentine.ts --test",
     "broadcast:packs": "DOTENV_CONFIG_PATH=.env tsx src/broadcast-packs.ts",
-    "broadcast:packs:test": "DOTENV_CONFIG_PATH=.env tsx src/broadcast-packs.ts --test"
+    "broadcast:packs:test": "DOTENV_CONFIG_PATH=.env tsx src/broadcast-packs.ts --test",
+    "retry:yandex-conversions": "tsx scripts/retry-yandex-conversions.ts",
+    "retry:yandex-conversions:dry": "tsx scripts/retry-yandex-conversions.ts --dry-run",
+    "fill-sticker-examples:test": "DOTENV_CONFIG_PATH=.env.test tsx scripts/fill-sticker-examples-public-url.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.48.0",
