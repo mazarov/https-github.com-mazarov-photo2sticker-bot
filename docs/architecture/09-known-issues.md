@@ -64,7 +64,7 @@ WHERE table_name = 'sessions' AND column_name = 'is_active';
 Вместо этого используем `telegram_file_id`.
 Storage используется только для бэкапа.
 
-**PackAssemble**: загрузка стикеров пака в Storage может дать `TimeoutError` или **500 "An error has occurred: fetch failed"** (сеть или лимит Supabase). Пользователь уже получил пак в Telegram — уведомление и обновление batch/session делаются **до** цикла Storage+DB. Сохранение в Storage и запись в `stickers` идут после (best-effort, с try/catch), при временных ошибках делается один повтор через 2 с.
+**PackAssemble**: загрузка стикеров пака в Storage может дать `TimeoutError` или **500 "An error has occurred: fetch failed"** (сеть или лимит Supabase). Пользователь уже получил пак в Telegram — уведомление и обновление batch/session делаются **до** цикла Storage+DB. Сохранение в Storage и запись в `stickers` идут после (best-effort, с try/catch), при временных ошибках делается один повтор через 2 с. На self-hosted (Dockhost): если Storage возвращает 500 "fetch failed", проверить, что контейнер **supabase-minio** запущен — без него Storage не может сохранять файлы.
 
 ---
 
