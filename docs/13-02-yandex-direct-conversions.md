@@ -233,7 +233,8 @@ export async function sendYandexConversion(params: ConversionParams): Promise<vo
   if (!counterId || !token) return;
 
   const datetime = new Date().toISOString().replace("T", " ").slice(0, 19);
-  const csv = `UserId,Target,DateTime,Price,Currency\n${params.yclid},${params.target},${datetime},${params.revenue},${params.currency}`;
+  // Важно: колонка должна называться yclid, не UserId. Иначе Метрика ищет визиты с setUserID() и конверсии не привязываются.
+  const csv = `yclid,Target,DateTime,Price,Currency\n${params.yclid},${params.target},${datetime},${params.revenue},${params.currency}`;
 
   await axios.post(
     `https://api-metrika.yandex.net/management/v1/counter/${counterId}/offline_conversions/upload`,
@@ -440,11 +441,11 @@ YANDEX_METRIKA_TOKEN=y0_AgAAAA...
 
 ### Параметры конверсии (что шлёт бот)
 
-| Параметр | Значение |
-|----------|----------|
-| **UserId** | `yclid` (клик Директа) |
+| Параметр CSV | Значение |
+|--------------|----------|
+| **yclid** | Идентификатор клика Директа (из `users.yclid`). **Важно:** в заголовке CSV должна быть колонка именно `yclid`, не `UserId`. Иначе Метрика интерпретирует значение как UserID (требуется setUserID на сайте) и конверсии не привязываются — ошибка «проблема с UserID / ClientID / Yclid». См. [Как Метрика привязывает офлайн-данные](https://yandex.ru/support/metrica/ru/data/offline-params#ids). |
 | **Target** | один из: `purchase`, `purchase_try`, `purchase_start`, `purchase_pop`, `purchase_pro`, `purchase_max` |
-| **DateTime** | время оплаты (передаётся в API) |
+| **DateTime** | время конверсии в формате Unix Time Stamp (секунды) |
 | **Price** | сумма в рублях (`price_rub` пакета) |
 | **Currency** | `RUB` |
 
@@ -463,6 +464,8 @@ YANDEX_METRIKA_TOKEN=y0_AgAAAA...
 | Лендинг снижает конверсию (лишний шаг) | Средняя | A/B тест: часть трафика на лендинг, часть напрямую |
 | Дубль конверсии при retry | Низкая | `yandex_conversion_sent_at` guard |
 | Payload обрезается до 64 символов | Средняя | Приоритетный тримминг: yclid сохраняется, content/campaign обрезаются |
+
+**Устранённая ошибка (2026-02-17):** «Ошибка при загрузке: проблема с UserID / ClientID / Yclid» и «Привязано 0 строк из 1». Причина: в CSV использовалась колонка `UserId` с значением yclid. Метрика трактовала это как UserID (нужен setUserID на сайте) и не находила визитов. Решение: в заголовке CSV использовать колонку **`yclid`**, не `UserId` — тогда Метрика привязывает конверсию к визиту по клику Директа без setUserID.
 
 ---
 

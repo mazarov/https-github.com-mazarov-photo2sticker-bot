@@ -48,10 +48,10 @@ export async function sendYandexConversion(params: ConversionParams): Promise<vo
     return;
   }
 
-  // CSV: UserId = yclid, DateTime = Unix timestamp (секунды), см. https://yandex.ru/support/metrica/data/offline-conversion-data.html
+  // CSV: колонка yclid (идентификатор клика Директа) — не UserId. Метрика привязывает конверсию к визиту по клику. См. https://yandex.ru/support/metrica/ru/data/offline-conversion-data
   const dateTimeUnix = Math.floor(Date.now() / 1000);
   const csv = [
-    "UserId,Target,DateTime,Price,Currency",
+    "yclid,Target,DateTime,Price,Currency",
     `${params.yclid},${params.target},${dateTimeUnix},${params.revenue},${params.currency}`,
   ].join("\n");
 
