@@ -1208,17 +1208,21 @@ async function runPackAssembleJob(job: any) {
         console.warn("[PackAssemble] Storage upload failed for index", i, (e as Error).message || String(e));
       }
     }
-    await supabase.from("stickers").insert({
-      user_id: session.user_id,
-      session_id: session.id,
-      source_photo_file_id: session.current_photo_file_id,
-      result_storage_path: resultStoragePath,
-      sticker_set_name: setName,
-      pack_batch_id: batch.id,
-      pack_index: i,
-      style_preset_id: session.selected_style_id || null,
-      env: config.appEnv,
-    });
+    try {
+      await supabase.from("stickers").insert({
+        user_id: session.user_id,
+        session_id: session.id,
+        source_photo_file_id: session.current_photo_file_id,
+        result_storage_path: resultStoragePath,
+        sticker_set_name: setName,
+        pack_batch_id: batch.id,
+        pack_index: i,
+        style_preset_id: session.selected_style_id || null,
+        env: config.appEnv,
+      });
+    } catch (e) {
+      console.warn("[PackAssemble] DB insert failed for index", i, (e as Error).message || String(e));
+    }
   }
   console.log("[PackAssemble] Storage:", storageUploaded + "/" + stickerBuffers.length, "uploaded, set:", setName);
 }
