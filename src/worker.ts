@@ -680,7 +680,9 @@ ${packTaskBlock}`
       break;
     } catch (err: any) {
       lastErrorMsg = err.response?.data?.error?.message || err.message;
-      console.error("[PackPreview] Gemini error (attempt " + attempt + "/" + PACK_PREVIEW_GEMINI_MAX_ATTEMPTS + "):", lastErrorMsg);
+      const status = err.response?.status;
+      const apiError = err.response?.data?.error;
+      console.error("[PackPreview] Gemini error (attempt " + attempt + "/" + PACK_PREVIEW_GEMINI_MAX_ATTEMPTS + "):", lastErrorMsg, status ? `[HTTP ${status}]` : "", apiError ? JSON.stringify(apiError) : "");
       const isRetryable = /high demand|try again later/i.test(lastErrorMsg);
       if (attempt < PACK_PREVIEW_GEMINI_MAX_ATTEMPTS && isRetryable) {
         console.log("[PackPreview] Retrying in", PACK_PREVIEW_GEMINI_RETRY_DELAY_MS / 1000, "s...");
