@@ -1173,6 +1173,7 @@ async function runPackAssembleJob(job: any) {
   // Save sticker records + Storage upload in background (best-effort; do not block or throw)
   const storagePrefix = `stickers/${session.user_id}/${batch.id}`;
   const packTimestamp = Date.now();
+  let storageUploaded = 0;
   for (let i = 0; i < stickerBuffers.length; i++) {
     let resultStoragePath: string | null = null;
     const path = `${storagePrefix}/${packTimestamp}_${i}.webp`;
@@ -1187,15 +1188,19 @@ async function runPackAssembleJob(job: any) {
         const retry = await doUpload();
         error = retry.error;
       }
-      if (!error) resultStoragePath = path;
-      else console.warn("[PackAssemble] Storage upload failed for index", i, error.message);
+      if (!error) {
+        resultStoragePath = path;
+        storageUploaded++;
+      } else console.warn("[PackAssemble] Storage upload failed for index", i, error.message);
     } catch (e) {
       if (isTransientStorageError(e)) {
         await sleep(2000);
         try {
           const { error: retryErr } = await doUpload();
-          if (!retryErr) resultStoragePath = path;
-          else console.warn("[PackAssemble] Storage upload failed for index (retry)", i, retryErr.message);
+          if (!retryErr) {
+            resultStoragePath = path;
+            storageUploaded++;
+          } else console.warn("[PackAssemble] Storage upload failed for index (retry)", i, retryErr.message);
         } catch (e2) {
           console.warn("[PackAssemble] Storage upload failed for index", i, (e2 as Error).message || String(e2));
         }
@@ -1215,6 +1220,7 @@ async function runPackAssembleJob(job: any) {
       env: config.appEnv,
     });
   }
+  console.log("[PackAssemble] Storage:", storageUploaded + "/" + stickerBuffers.length, "uploaded, set:", setName);
 }
 
 async function runJob(job: any) {
