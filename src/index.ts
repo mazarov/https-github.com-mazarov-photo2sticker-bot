@@ -8464,19 +8464,19 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
 
   if (!sticker) {
     console.log("Sticker not found");
-    await ctx.editMessageText("❌ Стикер не найден");
+    await ctx.editMessageCaption({ caption: "❌ Стикер не найден" }).catch(() => {});
     return;
   }
 
   if (!sticker.style_preset_id) {
     console.log("Sticker has no style_preset_id");
-    await ctx.editMessageText("❌ У стикера нет стиля");
+    await ctx.editMessageCaption({ caption: "❌ У стикера нет стиля" }).catch(() => {});
     return;
   }
 
   if (sticker.is_example) {
     console.log("Sticker already an example");
-    await ctx.editMessageText("✅ Уже является примером");
+    await ctx.editMessageCaption({ caption: "✅ Уже является примером" }).catch(() => {});
     return;
   }
 
@@ -8562,15 +8562,16 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
 
   if (error) {
     console.error("Failed to mark as example:", error);
-    await ctx.editMessageText("❌ Ошибка сохранения");
+    await ctx.editMessageCaption({ caption: "❌ Ошибка сохранения" }).catch(() => {});
     return;
   }
 
   console.log("Marked as example:", stickerId, "style:", sticker.style_preset_id, publicUrl ? "public_url set" : "no public_url");
-  await ctx.editMessageText(`✅ Добавлен как пример для стиля "${sticker.style_preset_id}"`);
+  await ctx.editMessageCaption({ caption: `✅ Добавлен как пример для стиля "${sticker.style_preset_id}"` }).catch(() => {});
 });
 
 // Callback: pack_make_example (admin only — from alert channel, pack preview "Сделать примером")
+// Сообщение в алерте — фото с caption, поэтому редактируем caption, не text.
 bot.action(/^pack_make_example:(.+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -8580,12 +8581,12 @@ bot.action(/^pack_make_example:(.+)$/, async (ctx) => {
   const msg = ctx.callbackQuery?.message as any;
   const photo = msg?.photo;
   if (!Array.isArray(photo) || photo.length === 0) {
-    await ctx.editMessageText("❌ Нет фото в сообщении");
+    await ctx.editMessageCaption({ caption: "❌ Нет фото в сообщении" }).catch(() => {});
     return;
   }
   const fileId = photo[photo.length - 1]?.file_id;
   if (!fileId) {
-    await ctx.editMessageText("❌ Не удалось получить file_id");
+    await ctx.editMessageCaption({ caption: "❌ Не удалось получить file_id" }).catch(() => {});
     return;
   }
 
@@ -8596,10 +8597,10 @@ bot.action(/^pack_make_example:(.+)$/, async (ctx) => {
 
   if (error) {
     console.error("[pack_make_example] Update failed:", error);
-    await ctx.editMessageText("❌ Ошибка сохранения");
+    await ctx.editMessageCaption({ caption: "❌ Ошибка сохранения" }).catch(() => {});
     return;
   }
-  await ctx.editMessageText(`✅ Сохранено как пример пака для стиля "${styleId}"`);
+  await ctx.editMessageCaption({ caption: `✅ Сохранено как пример пака для стиля "${styleId}"` }).catch(() => {});
 });
 
 // Callback: admin_discount — admin sends discount offer to user from alert channel
@@ -11166,6 +11167,11 @@ app.get("/health", (_, res) => res.status(200).send("OK"));
 
 const server = app.listen(config.port, () => {
   console.log(`API running on :${config.port}`);
+  if (!config.alertChannelId) {
+    console.warn("[Config] Alert channel: NOT SET — set ALERT_CHANNEL_ID (or PROD_ALERT_CHANNEL_ID when APP_ENV=test). Alerts will be skipped.");
+  } else {
+    console.log("[Config] Alert channel: configured");
+  }
 });
 
 // ============================================

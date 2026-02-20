@@ -84,6 +84,11 @@ async function retryWithBackoff<T>(
 
 const WORKER_ID = `${os.hostname()}-${process.pid}-${Date.now()}`;
 console.log(`Worker started: ${WORKER_ID}`);
+if (!config.alertChannelId) {
+  console.warn("[Config] Alert channel: NOT SET — set ALERT_CHANNEL_ID (or PROD_ALERT_CHANNEL_ID when APP_ENV=test). Pack/alerts will be skipped.");
+} else {
+  console.log("[Config] Alert channel: configured");
+}
 
 let workerBotUsernameCache: string | null = null;
 async function getWorkerBotUsername(): Promise<string> {
@@ -1173,13 +1178,15 @@ async function runPackAssembleJob(job: any) {
   // Save sticker records + Storage upload in background (best-effort; do not block or throw)
   const storagePrefix = `stickers/${session.user_id}/${batch.id}`;
   const packTimestamp = Date.now();
+  const bucket = config.supabaseStorageBucket;
+  console.log("[PackAssemble] Storage upload starting: bucket=" + bucket + " prefix=" + storagePrefix + " url=" + config.supabaseUrl);
   let storageUploaded = 0;
   for (let i = 0; i < stickerBuffers.length; i++) {
     let resultStoragePath: string | null = null;
     const path = `${storagePrefix}/${packTimestamp}_${i}.webp`;
     const doUpload = () =>
       supabase.storage
-        .from(config.supabaseStorageBucket)
+        .from(bucket)
         .upload(path, stickerBuffers[i], { contentType: "image/webp", upsert: true });
     try {
       let { error } = await doUpload();
@@ -1191,7 +1198,10 @@ async function runPackAssembleJob(job: any) {
       if (!error) {
         resultStoragePath = path;
         storageUploaded++;
-      } else console.warn("[PackAssemble] Storage upload failed for index", i, error.message);
+      } else {
+        const errPayload = typeof error === "object" && error !== null ? JSON.stringify(error) : String(error);
+        console.warn("[PackAssemble] Storage upload failed for index", i, error?.message || error, "payload:", errPayload);
+      }
     } catch (e) {
       if (isTransientStorageError(e)) {
         await sleep(2000);
@@ -1202,10 +1212,14 @@ async function runPackAssembleJob(job: any) {
             storageUploaded++;
           } else console.warn("[PackAssemble] Storage upload failed for index (retry)", i, retryErr.message);
         } catch (e2) {
-          console.warn("[PackAssemble] Storage upload failed for index", i, (e2 as Error).message || String(e2));
+          const msg = (e2 as Error)?.message || String(e2);
+          const payload = (e2 as { response?: { data?: unknown } })?.response?.data;
+          console.warn("[PackAssemble] Storage upload failed for index (retry throw)", i, msg, payload ? "response:" + JSON.stringify(payload) : "");
         }
       } else {
-        console.warn("[PackAssemble] Storage upload failed for index", i, (e as Error).message || String(e));
+        const msg = (e as Error)?.message || String(e);
+        const payload = (e as { response?: { data?: unknown } })?.response?.data;
+        console.warn("[PackAssemble] Storage upload failed for index (throw)", i, msg, payload ? "response:" + JSON.stringify(payload) : "");
       }
     }
     try {
