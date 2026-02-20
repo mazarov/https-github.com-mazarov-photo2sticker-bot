@@ -8603,6 +8603,9 @@ bot.action(/^pack_make_example:(.+)$/, async (ctx) => {
   await ctx.editMessageCaption(`✅ Сохранено как пример пака для стиля "${styleId}"`).catch(() => {});
 });
 
+/** Стиль, с которым можно выкладывать пилюли в pack/content/. Только фото-реализм — чтобы в Hero не попал аниме/другой стиль. */
+const LANDING_CONTENT_STYLE_ID = "photo_realistic";
+
 // Callback: pack_landing (admin only — после сборки пака, кнопка "Показать на лендинге")
 bot.action(/^pack_landing:(.+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
@@ -8637,6 +8640,7 @@ bot.action(/^pack_landing:(.+)$/, async (ctx) => {
 
   const contentSetId = session.pack_content_set_id ?? null;
   const styleId = session.selected_style_id ?? null;
+  const allowContentUpload = styleId === LANDING_CONTENT_STYLE_ID;
 
   if (contentSetId) {
     const { error: e1 } = await supabase
@@ -8678,7 +8682,7 @@ bot.action(/^pack_landing:(.+)$/, async (ctx) => {
       if (downErr || !blob) continue;
       const buf = Buffer.from(await blob.arrayBuffer());
       const pos = idx + 1;
-      if (contentSetId) {
+      if (contentSetId && allowContentUpload) {
         const dest = `pack/content/${contentSetId}/${pos}.webp`;
         const { error: upErr } = await supabase.storage.from(examplesBucket).upload(dest, buf, { contentType: "image/webp", upsert: true });
         if (!upErr) copied++;
@@ -8692,7 +8696,10 @@ bot.action(/^pack_landing:(.+)$/, async (ctx) => {
   }
 
   const parts = [];
-  if (contentSetId) parts.push(`cluster=true (${contentSetId})`);
+  if (contentSetId) {
+    parts.push(`cluster=true (${contentSetId})`);
+    if (!allowContentUpload) parts.push("пилюли не обновлены (нужен стиль photo_realistic)");
+  }
   if (styleId) parts.push(`landing=true (${styleId})`);
   if (copied > 0) parts.push(`Storage: ${copied} файлов`);
   await edit(`✅ На лендинг: ${parts.join("; ") || "флаги обновлены"}`);
