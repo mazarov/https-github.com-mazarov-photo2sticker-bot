@@ -118,6 +118,7 @@ erDiagram
 | `is_active` | boolean | Активен ли набор |
 | `mood` | text | Опционально: для автоподбора (romance, everyday, humor, …) |
 | `subject_mode` | text | Совместимость набора: `single` / `multi` / `any` |
+| `cluster` | boolean | Если true — пак показывается в Hero на кластерных страницах (пилюли). Файлы: pack/content/{id}/1..9.webp |
 
 ### `jobs` — Очередь заданий
 
@@ -132,6 +133,8 @@ erDiagram
 | `worker_id` | text | — | ID воркера |
 | `is_first_free` | boolean | false | Бесплатная генерация |
 | `env` | text | 'prod' | Окружение |
+
+Хранение стикеров/паков (sessions vs stickers, бэкап в Storage): [stickers-sessions-storage-analysis.md](./stickers-sessions-storage-analysis.md).
 
 ### `stickers` — Сгенерированные стикеры
 
@@ -149,7 +152,11 @@ erDiagram
 | `is_example` | boolean | false | Пример для стиля |
 | `style_preset_id` | text | — | ID пресета стиля |
 | `idea_source` | text | — | Источник идеи |
+| `pack_batch_id` | uuid | — | Если не NULL — стикер из пака (FK → pack_batches) |
+| `pack_index` | int | — | Порядок в паке (0, 1, …); у одиночных не используется |
 | `env` | text | 'prod' | Окружение |
+
+**Пак vs одиночный:** одиночный = `pack_batch_id IS NULL`; из пака = `pack_batch_id IS NOT NULL`. Подробнее: [stickers-sessions-storage-analysis.md](./stickers-sessions-storage-analysis.md#как-отличить-пак-от-одиночного-стикера).
 
 ### `transactions` — Платежи
 
@@ -190,6 +197,8 @@ erDiagram
 | `name_ru` / `name_en` | text | Название |
 | `sort_order` | int | Порядок |
 | `is_active` | boolean | Активен |
+| `landing` | boolean | Карточка в блоке «Стили» на кластерных и страница /style/[group]/[substyle]. Пак: pack/style/{id}/1..9.webp |
+| `landing_hero_paths` | text[] | Полные пути страниц, на которых в Hero показывать пак этого пресета (pack/style/{id}/1..9). Пустой массив = нигде. Резолв: path = any(landing_hero_paths). |
 
 ### `emotion_presets` — Пресеты эмоций
 
