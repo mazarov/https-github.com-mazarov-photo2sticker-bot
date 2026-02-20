@@ -322,3 +322,46 @@ export async function sendPackPreviewAlert(
     console.error("[Alert] sendPackPreviewAlert error:", err?.response?.data || err);
   }
 }
+
+/** Send pack completed alert with "Показать на лендинге" button (для вывода пака на лендинг). */
+export async function sendPackCompletedLandingAlert(
+  batchId: string,
+  imageBuffer: Buffer,
+  details?: { user?: string; setName?: string; contentSetId?: string; styleId?: string }
+): Promise<void> {
+  const channelId = config.alertChannelId;
+  if (!channelId) return;
+
+  const caption =
+    `📦 Пак собран — можно показать на лендинге\n` +
+    `Batch: ${batchId}` +
+    (details?.user ? `\nUser: ${details.user}` : "") +
+    (details?.setName ? `\nSet: ${details.setName}` : "");
+
+  try {
+    const form = new FormData();
+    form.append("chat_id", channelId);
+    form.append("caption", caption);
+    form.append("photo", imageBuffer, {
+      filename: "pack_completed.webp",
+      contentType: "image/webp",
+    });
+    form.append("reply_markup", JSON.stringify({
+      inline_keyboard: [[
+        { text: "🌐 Показать на лендинге", callback_data: `pack_landing:${batchId}` },
+      ]],
+    }));
+
+    const response = await axios.post(
+      `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`,
+      form,
+      { headers: form.getHeaders(), timeout: 30000 }
+    );
+
+    if (!response.data?.ok) {
+      console.error("[Alert] sendPackCompletedLandingAlert failed:", response.data);
+    }
+  } catch (err: any) {
+    console.error("[Alert] sendPackCompletedLandingAlert error:", err?.response?.data || err);
+  }
+}

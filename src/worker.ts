@@ -6,7 +6,7 @@ import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
 import { getText } from "./lib/texts";
-import { sendAlert, sendNotification, sendPackPreviewAlert } from "./lib/alerts";
+import { sendAlert, sendNotification, sendPackPreviewAlert, sendPackCompletedLandingAlert } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
 import { addTextToSticker, fitStickerIn512WithMargin, addWhiteBorder } from "./lib/image-utils";
@@ -1172,6 +1172,15 @@ async function runPackAssembleJob(job: any) {
       link,
     },
   });
+
+  if (!isPartial && stickerBuffers.length > 0) {
+    sendPackCompletedLandingAlert(batch.id, stickerBuffers[0], {
+      user: `@${user.username || telegramId}`,
+      setName,
+      contentSetId: session.pack_content_set_id ?? undefined,
+      styleId: session.selected_style_id ?? undefined,
+    }).catch((err) => console.warn("[PackAssemble] sendPackCompletedLandingAlert failed:", err?.message));
+  }
 
   console.log("[PackAssemble] Job complete! Set:", setName);
 

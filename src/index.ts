@@ -8603,6 +8603,101 @@ bot.action(/^pack_make_example:(.+)$/, async (ctx) => {
   await ctx.editMessageCaption(`✅ Сохранено как пример пака для стиля "${styleId}"`).catch(() => {});
 });
 
+// Callback: pack_landing (admin only — после сборки пака, кнопка "Показать на лендинге")
+bot.action(/^pack_landing:(.+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
+
+  const batchId = ctx.match[1];
+  const msg = ctx.callbackQuery?.message as any;
+  const isPhoto = Array.isArray(msg?.photo) && msg.photo.length > 0;
+  const edit = (text: string) =>
+    isPhoto ? ctx.editMessageCaption(text).catch(() => {}) : ctx.editMessageText(text).catch(() => {});
+
+  const { data: batch } = await supabase
+    .from("pack_batches")
+    .select("id, session_id")
+    .eq("id", batchId)
+    .maybeSingle();
+  if (!batch?.session_id) {
+    await edit("❌ Батч не найден");
+    return;
+  }
+
+  const { data: session } = await supabase
+    .from("sessions")
+    .select("pack_content_set_id, selected_style_id")
+    .eq("id", batch.session_id)
+    .maybeSingle();
+  if (!session) {
+    await edit("❌ Сессия не найдена");
+    return;
+  }
+
+  const contentSetId = session.pack_content_set_id ?? null;
+  const styleId = session.selected_style_id ?? null;
+
+  if (contentSetId) {
+    const { error: e1 } = await supabase
+      .from("pack_content_sets")
+      .update({ cluster: true })
+      .eq("id", contentSetId);
+    if (e1) {
+      console.error("[pack_landing] pack_content_sets update:", e1);
+      await edit("❌ Ошибка: cluster");
+      return;
+    }
+  }
+  if (styleId) {
+    const { error: e2 } = await supabase
+      .from("style_presets_v2")
+      .update({ landing: true })
+      .eq("id", styleId);
+    if (e2) {
+      console.error("[pack_landing] style_presets_v2 update:", e2);
+      await edit("❌ Ошибка: landing");
+      return;
+    }
+  }
+
+  const { data: stickers } = await supabase
+    .from("stickers")
+    .select("pack_index, result_storage_path")
+    .eq("pack_batch_id", batchId)
+    .not("result_storage_path", "is", null)
+    .order("pack_index", { ascending: true });
+  const bucket = config.supabaseStorageBucket;
+  const examplesBucket = config.supabaseStorageBucketExamples;
+  let copied = 0;
+  if (Array.isArray(stickers) && stickers.length > 0 && bucket && examplesBucket) {
+    for (const row of stickers) {
+      const idx = row.pack_index ?? 0;
+      const path = row.result_storage_path as string;
+      const { data: blob, error: downErr } = await supabase.storage.from(bucket).download(path);
+      if (downErr || !blob) continue;
+      const buf = Buffer.from(await blob.arrayBuffer());
+      const pos = idx + 1;
+      if (contentSetId) {
+        const dest = `pack/content/${contentSetId}/${pos}.webp`;
+        const { error: upErr } = await supabase.storage.from(examplesBucket).upload(dest, buf, { contentType: "image/webp", upsert: true });
+        if (!upErr) copied++;
+      }
+      if (styleId) {
+        const dest = `pack/style/${styleId}/${pos}.webp`;
+        const { error: upErr } = await supabase.storage.from(examplesBucket).upload(dest, buf, { contentType: "image/webp", upsert: true });
+        if (!upErr) copied++;
+      }
+    }
+  }
+
+  const parts = [];
+  if (contentSetId) parts.push(`cluster=true (${contentSetId})`);
+  if (styleId) parts.push(`landing=true (${styleId})`);
+  if (copied > 0) parts.push(`Storage: ${copied} файлов`);
+  await edit(`✅ На лендинг: ${parts.join("; ") || "флаги обновлены"}`);
+});
+
 // Callback: admin_discount — admin sends discount offer to user from alert channel
 bot.action(/^admin_discount:(\d+):(\d+)$/, async (ctx) => {
   console.log("=== admin_discount callback ===");
