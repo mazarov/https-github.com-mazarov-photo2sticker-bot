@@ -14,11 +14,13 @@ import {
   appendSubjectLock,
   buildSubjectLockBlock,
   detectSubjectProfileFromImageBuffer,
+  getSubjectWordForPrompt,
   isSubjectLockEnabled,
   isSubjectModePackFilterEnabled,
   isSubjectPostcheckEnabled,
   isSubjectProfileEnabled,
   normalizeSubjectMode,
+  normalizeSubjectGender,
   normalizeSubjectSourceKind,
   type SubjectProfile,
   type SubjectSourceKind,
@@ -160,6 +162,7 @@ function getSessionSubjectProfileForSource(
 
   const parsedCount = Number(session?.object_count ?? session?.subject_count);
   const parsedConfidence = Number(session?.object_confidence ?? session?.subject_confidence);
+  const subjectGenderVal = normalizeSubjectGender(session?.object_gender ?? session?.subject_gender) ?? null;
 
   return {
     subjectMode: normalizeSubjectMode(session?.object_mode ?? session?.subject_mode),
@@ -168,6 +171,7 @@ function getSessionSubjectProfileForSource(
       Number.isFinite(parsedConfidence) && parsedConfidence >= 0
         ? Math.max(0, Math.min(1, Number(parsedConfidence.toFixed(3))))
         : null,
+    subjectGender: subjectGenderVal,
     sourceFileId,
     sourceKind,
     detectedAt: session?.object_detected_at || session?.subject_detected_at || new Date().toISOString(),
@@ -179,12 +183,14 @@ async function persistSubjectAndObjectProfile(sessionId: string, profile: Subjec
     subject_mode: profile.subjectMode,
     subject_count: profile.subjectCount,
     subject_confidence: profile.subjectConfidence,
+    subject_gender: profile.subjectGender ?? null,
     subject_source_file_id: profile.sourceFileId,
     subject_source_kind: profile.sourceKind,
     subject_detected_at: detectedAt,
     object_mode: profile.subjectMode,
     object_count: profile.subjectCount,
     object_confidence: profile.subjectConfidence,
+    object_gender: profile.subjectGender ?? null,
     object_source_file_id: profile.sourceFileId,
     object_source_kind: profile.sourceKind,
     object_detected_at: detectedAt,
@@ -193,10 +199,10 @@ async function persistSubjectAndObjectProfile(sessionId: string, profile: Subjec
   const { error } = await supabase.from("sessions").update(payload).eq("id", sessionId);
   if (!error) return;
 
-  const unknownObjectColumn =
+  const unknownColumn =
     error.code === "42703" ||
-    /column .*object_/.test(String(error.message || "").toLowerCase());
-  if (!unknownObjectColumn) {
+    /column .*(object_|subject_gender|object_gender)/.test(String(error.message || "").toLowerCase());
+  if (!unknownColumn) {
     console.warn("[subject-profile] failed to persist profile:", error.message);
     return;
   }
@@ -243,6 +249,7 @@ async function ensureSubjectProfileForSource(
     subjectMode: detected.subjectMode,
     subjectCount: detected.subjectCount,
     subjectConfidence: detected.subjectConfidence,
+    subjectGender: detected.subjectGender ?? null,
     sourceFileId,
     sourceKind,
     detectedAt,
@@ -254,12 +261,14 @@ async function ensureSubjectProfileForSource(
     subject_mode: nextProfile.subjectMode,
     subject_count: nextProfile.subjectCount,
     subject_confidence: nextProfile.subjectConfidence,
+    subject_gender: nextProfile.subjectGender ?? null,
     subject_source_file_id: nextProfile.sourceFileId,
     subject_source_kind: nextProfile.sourceKind,
     subject_detected_at: nextProfile.detectedAt,
     object_mode: nextProfile.subjectMode,
     object_count: nextProfile.subjectCount,
     object_confidence: nextProfile.subjectConfidence,
+    object_gender: nextProfile.subjectGender ?? null,
     object_source_file_id: nextProfile.sourceFileId,
     object_source_kind: nextProfile.sourceKind,
     object_detected_at: nextProfile.detectedAt,
@@ -270,6 +279,7 @@ async function ensureSubjectProfileForSource(
     sourceKind,
     subjectMode: nextProfile.subjectMode,
     subjectCount: nextProfile.subjectCount,
+    subjectGender: nextProfile.subjectGender,
   });
 
   return nextProfile;
@@ -592,7 +602,10 @@ async function runPackPreviewJob(job: any) {
   const stickerCount = template.sticker_count || 4;
   const cols = Math.ceil(Math.sqrt(stickerCount));
   const rows = Math.ceil(stickerCount / cols);
-  const sceneDescriptions: string[] = sceneDescriptionsSource;
+  const subjectWord = getSubjectWordForPrompt(packSubjectProfile);
+  const sceneDescriptions: string[] = sceneDescriptionsSource.map((desc: string) =>
+    desc.replace(/\{subject\}/gi, subjectWord)
+  );
   const sceneList = sceneDescriptions
     .map((desc: string, i: number) => `${i + 1}. ${desc}`)
     .join("\n");
