@@ -127,6 +127,7 @@ flowchart TD
 
 - `runPackPreviewJob`:
   - сцены: при `sessions.pack_content_set_id` берёт `pack_content_sets.scene_descriptions` (проверка: is_active, длина = template.sticker_count), иначе `pack_templates.scene_descriptions`
+  - подстановка пола в сцены: плейсхолдер `{subject}` в описаниях заменяется на «man» или «woman» по **`getSubjectWordForPrompt(packSubjectProfile)`** (приоритет: `pack_subject_gender` → `subject_gender`/`object_gender` из детекции). См. [11-subject-profile-and-gender.md](11-subject-profile-and-gender.md)
   - добавляет выбранный пользователем `sessions.selected_style_id` (`style_presets_v2.prompt_hint`) в промпт
   - добавляет `Subject Lock Block` для текущего photo-source (если включен флаг)
   - добавляет `scene cardinality guard` по effective subject mode:

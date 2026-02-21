@@ -70,6 +70,10 @@ stateDiagram-v2
 | `processing_pack` | Сборка и публикация Telegram sticker set |
 | `canceled` | Сессия отменена |
 
+## Subject profile (пол по фото) при смене фото
+
+При любой смене текущего фото в сессии в фоне запускается детекция (subject/object profile, в т.ч. пол). Точки входа: загрузка первого фото в паке (`wait_pack_photo`), загрузка фото в single (`wait_photo` → `wait_style`), первое фото в ассистенте (`assistant_wait_photo`), а также все callback'и «Новое фото» — `pack_new_photo`, `single_new_photo`, `assistant_new_photo` (все ветки). Подробно: [11-subject-profile-and-gender.md](11-subject-profile-and-gender.md).
+
 ## Хендлеры бота
 
 ### Команды

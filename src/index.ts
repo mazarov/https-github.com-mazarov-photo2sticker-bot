@@ -861,7 +861,10 @@ async function ensureSubjectProfileForGeneration(
   generationType: "style" | "emotion" | "motion" | "text"
 ): Promise<SubjectProfile | null> {
   const profileEnabled = await isSubjectProfileEnabled();
-  if (!profileEnabled) return null;
+  if (!profileEnabled) {
+    console.log("[subject-profile] skipped (subject_profile_enabled/object_profile* off) session:", session.id);
+    return null;
+  }
 
   const { sourceFileId, sourceKind } = resolveGenerationSource(session, generationType);
   if (!sourceFileId) return null;
@@ -3168,6 +3171,11 @@ bot.on("photo", async (ctx) => {
         .update({ photos, current_photo_file_id: photo.file_id, state: "assistant_chat", is_active: true })
         .eq("id", newSession.id);
 
+      void ensureSubjectProfileForGeneration(
+        { ...newSession, current_photo_file_id: photo.file_id, photos },
+        "style"
+      ).catch((err) => console.warn("[assistant_wait_photo] subject profile failed:", err?.message || err));
+
       const aSession = await getActiveAssistantSession(user.id);
       if (aSession) {
         const messages: AssistantMessage[] = Array.isArray(aSession.messages) ? [...aSession.messages] : [];
@@ -4768,6 +4776,12 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
+  // Run subject (gender) detection for the newly selected photo so subject_gender is in DB
+  void ensureSubjectProfileForGeneration(
+    { ...session, current_photo_file_id: newPhotoFileId, photos },
+    "style"
+  ).catch((err) => console.warn("[pack_new_photo] subject profile failed:", err?.message || err));
+
   if (session.state === "wait_pack_carousel") {
     const refreshedSession = {
       ...session,
@@ -4894,6 +4908,11 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
       session_rev: nextRev,
     })
     .eq("id", session.id);
+
+  void ensureSubjectProfileForGeneration(
+    { ...session, current_photo_file_id: newPhotoFileId, photos },
+    "style"
+  ).catch((err) => console.warn("[single_new_photo] subject profile failed:", err?.message || err));
 
   await sendStyleKeyboardFlat(ctx, lang, session.id, { selectedStyleId: session.selected_style_id || null });
 });
@@ -8293,6 +8312,11 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
       })
       .eq("id", session.id);
 
+    void ensureSubjectProfileForGeneration(
+      { ...session, current_photo_file_id: newPhotoFileId, photos },
+      "style"
+    ).catch((err) => console.warn("[assistant_new_photo ideas] subject profile failed:", err?.message || err));
+
     if (aSession) {
       await updateAssistantSession(aSession.id, { pending_photo_file_id: null });
     }
@@ -8322,6 +8346,10 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
         session_rev: (session.session_rev || 1) + 1,
       })
       .eq("id", session.id);
+    void ensureSubjectProfileForGeneration(
+      { ...session, current_photo_file_id: newPhotoFileId, photos },
+      "style"
+    ).catch((err) => console.warn("[assistant_new_photo no-aSession] subject profile failed:", err?.message || err));
     await ctx.reply(
       lang === "ru"
         ? "Фото обновлено! Продолжаем — что будем делать со стикером?"
@@ -8369,6 +8397,11 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
       })
       .eq("id", session.id);
 
+    void ensureSubjectProfileForGeneration(
+      { ...session, current_photo_file_id: newPhotoFileId, photos },
+      "style"
+    ).catch((err) => console.warn("[assistant_new_photo chat] subject profile failed:", err?.message || err));
+
     if (toolAction === "show_examples") {
       const styleId = result.toolCall?.args?.style_id;
       await handleShowStyleExamples(ctx, styleId, lang);
@@ -8382,6 +8415,11 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
       .from("sessions")
       .update({ photos, current_photo_file_id: newPhotoFileId })
       .eq("id", session.id);
+
+    void ensureSubjectProfileForGeneration(
+      { ...session, current_photo_file_id: newPhotoFileId, photos },
+      "style"
+    ).catch((e) => console.warn("[assistant_new_photo chat catch] subject profile failed:", e?.message || e));
 
     const msg = lang === "ru"
       ? "Фото обновлено! Продолжаем — опиши стиль стикера."

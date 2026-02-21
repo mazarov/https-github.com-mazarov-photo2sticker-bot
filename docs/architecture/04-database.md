@@ -99,6 +99,8 @@ erDiagram
 | `object_source_file_id` | text | — | Source file_id для object profile |
 | `object_source_kind` | text | — | `photo` или `sticker` (v2) |
 | `object_detected_at` | timestamptz | — | Время обновления object profile |
+| `subject_gender` | text | — | Пол при single: `male` \| `female` \| `unknown`. Для паков: подстановка {subject} → man/woman. См. [11-subject-profile-and-gender.md](11-subject-profile-and-gender.md) |
+| `object_gender` | text | — | Зеркало subject_gender для object-profile flow |
 | `object_instances_json` | jsonb | — | Нормализованные инстансы детектора (bbox/area/edge/confidence) |
 | `env` | text | 'prod' | Окружение |
 
