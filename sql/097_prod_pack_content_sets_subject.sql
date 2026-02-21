@@ -1,11 +1,15 @@
--- 096_pack_content_sets_test_early_seeds.sql
--- Заполнение pack_content_sets_test ранними наборами из docs/19-02-pack-1-content-and-ru-descriptions.md (блок «Ранние наборы»).
--- Названия name_ru/name_en — как в проде (083). Зависит от 095 (таблица pack_content_sets_test). Запускать на тестовой БД.
+-- 097_prod_pack_content_sets_subject.sql
+-- Прод: заменить текущие паки (без subject) на наборы с {subject} из док 19-02-pack-1 (ранние наборы).
+-- 1) Обнуляем выбор пака в сессиях, чтобы не ломать FK при удалении.
+-- 2) Удаляем все наборы из pack_content_sets.
+-- 3) Вставляем 8 наборов с subject_mode=single и сценами с плейсхолдером {subject}.
 
--- Очистка: все данные удаляются, затем загрузка заново.
-TRUNCATE TABLE pack_content_sets_test;
+-- Чтобы при удалении не было нарушений FK (sessions.pack_content_set_id → pack_content_sets.id)
+UPDATE sessions SET pack_content_set_id = NULL WHERE pack_content_set_id IS NOT NULL;
 
-INSERT INTO pack_content_sets_test (
+DELETE FROM pack_content_sets;
+
+INSERT INTO pack_content_sets (
   id, pack_template_id, name_ru, name_en,
   carousel_description_ru, carousel_description_en,
   labels, labels_en, scene_descriptions,
@@ -114,19 +118,4 @@ INSERT INTO pack_content_sets_test (
   '["Happy birthday", "Happy Valentine''s", "Anniversary", "Congrats", "Cheers to us", "To my love", "To you", "Celebration", "Yay"]'::jsonb,
   '["{subject} holding birthday cake with both hands in front of chest, smiling at camera", "{subject} holding single red heart card or prop in front of chest, smiling", "{subject} holding glass raised in toast, anniversary pose, smiling", "{subject} both arms raised in celebration, big smile, no props", "{subject} holding one glass in cheers pose, smiling at camera", "{subject} holding bouquet of flowers with both hands, presenting toward camera", "{subject} holding gift box with both hands, surprised happy expression", "{subject} wearing party hat, hands in celebratory gesture near chest", "{subject} holding one party balloon, smiling at camera"]'::jsonb,
   8, true, 'holiday', 9, 'single', false
-)
-ON CONFLICT (id) DO UPDATE SET
-  pack_template_id = EXCLUDED.pack_template_id,
-  name_ru = EXCLUDED.name_ru,
-  name_en = EXCLUDED.name_en,
-  carousel_description_ru = EXCLUDED.carousel_description_ru,
-  carousel_description_en = EXCLUDED.carousel_description_en,
-  labels = EXCLUDED.labels,
-  labels_en = EXCLUDED.labels_en,
-  scene_descriptions = EXCLUDED.scene_descriptions,
-  sort_order = EXCLUDED.sort_order,
-  is_active = EXCLUDED.is_active,
-  mood = EXCLUDED.mood,
-  sticker_count = EXCLUDED.sticker_count,
-  subject_mode = EXCLUDED.subject_mode,
-  cluster = EXCLUDED.cluster;
+);
