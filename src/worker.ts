@@ -281,6 +281,18 @@ async function ensureSubjectProfileForSource(
     subjectCount: nextProfile.subjectCount,
     subjectGender: nextProfile.subjectGender,
   });
+  sendAlert({
+    type: "subject_profile_detected",
+    message: "Subject profile saved (worker)",
+    details: {
+      sessionId: session.id,
+      sourceKind,
+      subjectMode: nextProfile.subjectMode,
+      subjectCount: nextProfile.subjectCount ?? "-",
+      subjectGender: nextProfile.subjectGender ?? "-",
+      subjectConfidence: nextProfile.subjectConfidence ?? "-",
+    },
+  }).catch(() => {});
 
   return nextProfile;
 }
