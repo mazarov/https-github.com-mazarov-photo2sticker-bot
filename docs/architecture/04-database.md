@@ -121,6 +121,9 @@ erDiagram
 | `mood` | text | Опционально: для автоподбора (romance, everyday, humor, …) |
 | `subject_mode` | text | Совместимость набора: `single` / `multi` / `any` |
 | `cluster` | boolean | Если true — пак показывается в Hero на кластерных страницах (пилюли). Файлы: pack/content/{id}/1..9.webp |
+| `segment_id` | text | FK → pack_segments (группа для UI, см. 19-02-pack-2) |
+
+**Сегменты (pack_segments):** таблица групп для карусели: id (reactions, sarcasm, home, events, affection_support, after_dark, boundaries), name_ru, name_en, sort_order. Карусель сортируется по sort_order сегмента, затем по sort_order набора.
 
 **Тестовая таблица:** при `APP_ENV=test` бот и воркер читают из `pack_content_sets_test` (та же структура). Имя таблицы задаётся в `config.packContentSetsTable`. FK с `sessions.pack_content_set_id` снят — id может относиться к любой из таблиц в зависимости от окружения.
 

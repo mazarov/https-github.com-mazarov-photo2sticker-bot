@@ -94,11 +94,32 @@ const PROMPT_TEMPLATES_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 let packContentSetsCache: { data: any[]; timestamp: number } | null = null;
 const PACK_CONTENT_SETS_CACHE_TTL = 30 * 1000; // 30 seconds
 
+let packSegmentsCache: { data: { id: string; sort_order: number }[]; timestamp: number } | null = null;
+const PACK_SEGMENTS_CACHE_TTL = 60 * 1000; // 60 seconds
+
 function safeAnswerCbQuery(ctx: any, payload?: any) {
   if (typeof ctx?.answerCbQuery !== "function") return;
   ctx.answerCbQuery(payload).catch((err: any) => {
     console.warn("answerCbQuery failed:", err?.description || err?.message || err);
   });
+}
+
+async function getPackSegments(): Promise<{ id: string; sort_order: number }[]> {
+  const now = Date.now();
+  if (packSegmentsCache && now - packSegmentsCache.timestamp < PACK_SEGMENTS_CACHE_TTL) {
+    return packSegmentsCache.data;
+  }
+  const { data, error } = await supabase
+    .from("pack_segments")
+    .select("id, sort_order")
+    .order("sort_order", { ascending: true });
+  if (error) {
+    console.warn("[pack_segments] load error:", error.message);
+    return packSegmentsCache?.data || [];
+  }
+  const rows = Array.isArray(data) ? data : [];
+  packSegmentsCache = { data: rows, timestamp: now };
+  return rows;
 }
 
 async function getActivePackContentSets(): Promise<any[]> {
@@ -118,7 +139,15 @@ async function getActivePackContentSets(): Promise<any[]> {
     return packContentSetsCache?.data || [];
   }
 
-  const rows = Array.isArray(data) ? data : [];
+  let rows = Array.isArray(data) ? data : [];
+  const segments = await getPackSegments();
+  const segmentOrderById = new Map<string, number>(segments.map((s) => [s.id, s.sort_order]));
+  rows = rows.slice().sort((a, b) => {
+    const orderA = segmentOrderById.get(a?.segment_id) ?? 999;
+    const orderB = segmentOrderById.get(b?.segment_id) ?? 999;
+    if (orderA !== orderB) return orderA - orderB;
+    return (a?.sort_order ?? 0) - (b?.sort_order ?? 0);
+  });
   packContentSetsCache = { data: rows, timestamp: now };
   return rows;
 }
