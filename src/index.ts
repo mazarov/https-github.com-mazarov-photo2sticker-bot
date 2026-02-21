@@ -18,6 +18,7 @@ import {
   isSubjectModePackFilterEnabled,
   isSubjectProfileEnabled,
   normalizeSubjectMode,
+  normalizeSubjectGender,
   normalizeSubjectSourceKind,
   resolveGenerationSource,
   type SubjectProfile,
@@ -794,6 +795,7 @@ function getSessionSubjectProfileForSource(
 
   const parsedCount = Number(session?.object_count ?? session?.subject_count);
   const parsedConfidence = Number(session?.object_confidence ?? session?.subject_confidence);
+  const subjectGenderVal = normalizeSubjectGender(session?.object_gender ?? session?.subject_gender) ?? null;
 
   return {
     subjectMode: sessionMode,
@@ -802,6 +804,7 @@ function getSessionSubjectProfileForSource(
       Number.isFinite(parsedConfidence) && parsedConfidence >= 0
         ? Math.max(0, Math.min(1, Number(parsedConfidence.toFixed(3))))
         : null,
+    subjectGender: subjectGenderVal,
     sourceFileId,
     sourceKind,
     detectedAt: session?.object_detected_at || session?.subject_detected_at || new Date().toISOString(),
@@ -813,12 +816,14 @@ async function persistSubjectAndObjectProfile(sessionId: string, profile: Subjec
     subject_mode: profile.subjectMode,
     subject_count: profile.subjectCount,
     subject_confidence: profile.subjectConfidence,
+    subject_gender: profile.subjectGender ?? null,
     subject_source_file_id: profile.sourceFileId,
     subject_source_kind: profile.sourceKind,
     subject_detected_at: detectedAt,
     object_mode: profile.subjectMode,
     object_count: profile.subjectCount,
     object_confidence: profile.subjectConfidence,
+    object_gender: profile.subjectGender ?? null,
     object_source_file_id: profile.sourceFileId,
     object_source_kind: profile.sourceKind,
     object_detected_at: detectedAt,
@@ -827,10 +832,10 @@ async function persistSubjectAndObjectProfile(sessionId: string, profile: Subjec
   const { error } = await supabase.from("sessions").update(payload).eq("id", sessionId);
   if (!error) return;
 
-  const unknownObjectColumn =
+  const unknownColumn =
     error.code === "42703" ||
-    /column .*object_/.test(String(error.message || "").toLowerCase());
-  if (!unknownObjectColumn) {
+    /column .*(object_|subject_gender|object_gender)/.test(String(error.message || "").toLowerCase());
+  if (!unknownColumn) {
     console.warn("[subject-profile] failed to persist profile:", error.message);
     return;
   }
@@ -876,6 +881,7 @@ async function ensureSubjectProfileForGeneration(
       subjectMode,
       subjectCount: detected.subjectCount,
       subjectConfidence: detected.subjectConfidence,
+      subjectGender: detected.subjectGender ?? null,
       sourceFileId,
       sourceKind,
       detectedAt,
@@ -887,12 +893,14 @@ async function ensureSubjectProfileForGeneration(
       subject_mode: nextProfile.subjectMode,
       subject_count: nextProfile.subjectCount,
       subject_confidence: nextProfile.subjectConfidence,
+      subject_gender: nextProfile.subjectGender ?? null,
       subject_source_file_id: nextProfile.sourceFileId,
       subject_source_kind: nextProfile.sourceKind,
       subject_detected_at: nextProfile.detectedAt,
       object_mode: nextProfile.subjectMode,
       object_count: nextProfile.subjectCount,
       object_confidence: nextProfile.subjectConfidence,
+      object_gender: nextProfile.subjectGender ?? null,
       object_source_file_id: nextProfile.sourceFileId,
       object_source_kind: nextProfile.sourceKind,
       object_detected_at: nextProfile.detectedAt,
@@ -902,6 +910,7 @@ async function ensureSubjectProfileForGeneration(
       sourceKind,
       subjectMode: nextProfile.subjectMode,
       subjectCount: nextProfile.subjectCount,
+      subjectGender: nextProfile.subjectGender,
     });
     return nextProfile;
   } catch (err: any) {
@@ -910,6 +919,7 @@ async function ensureSubjectProfileForGeneration(
       subjectMode: "unknown",
       subjectCount: null,
       subjectConfidence: null,
+      subjectGender: null,
       sourceFileId,
       sourceKind,
       detectedAt,
@@ -921,12 +931,14 @@ async function ensureSubjectProfileForGeneration(
       subject_mode: fallbackProfile.subjectMode,
       subject_count: fallbackProfile.subjectCount,
       subject_confidence: fallbackProfile.subjectConfidence,
+      subject_gender: fallbackProfile.subjectGender ?? null,
       subject_source_file_id: fallbackProfile.sourceFileId,
       subject_source_kind: fallbackProfile.sourceKind,
       subject_detected_at: fallbackProfile.detectedAt,
       object_mode: fallbackProfile.subjectMode,
       object_count: fallbackProfile.subjectCount,
       object_confidence: fallbackProfile.subjectConfidence,
+      object_gender: fallbackProfile.subjectGender ?? null,
       object_source_file_id: fallbackProfile.sourceFileId,
       object_source_kind: fallbackProfile.sourceKind,
       object_detected_at: fallbackProfile.detectedAt,
@@ -3212,6 +3224,12 @@ bot.on("photo", async (ctx) => {
       })
       .eq("id", session.id);
 
+    // Run subject (gender) detection on upload so subject_gender is in DB before carousel/generation
+    void ensureSubjectProfileForGeneration(
+      { ...session, current_photo_file_id: photo.file_id, photos: packPhotos },
+      "style"
+    ).catch((err) => console.warn("[pack_photo] subject profile on upload failed:", err?.message || err));
+
     // Send style selector (pack flow: always show Back to poses)
     await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
     return;
@@ -3289,6 +3307,12 @@ bot.on("photo", async (ctx) => {
   if (error) {
     console.error("Failed to update session to wait_style:", error);
   }
+
+  // Run subject (gender) detection on upload so subject_gender is in DB before style selection
+  void ensureSubjectProfileForGeneration(
+    { ...session, current_photo_file_id: photo.file_id, photos },
+    "style"
+  ).catch((err) => console.warn("[single_photo] subject profile on upload failed:", err?.message || err));
 
   await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
 });

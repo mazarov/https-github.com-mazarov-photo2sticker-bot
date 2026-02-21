@@ -603,6 +603,7 @@ async function runPackPreviewJob(job: any) {
   const cols = Math.ceil(Math.sqrt(stickerCount));
   const rows = Math.ceil(stickerCount / cols);
   const subjectWord = getSubjectWordForPrompt(packSubjectProfile);
+  console.log("[PackPreview] {subject} ->", subjectWord, "| packSubjectProfile.subjectGender:", packSubjectProfile?.subjectGender ?? "null", "| subjectMode:", packSubjectProfile?.subjectMode);
   const sceneDescriptions: string[] = sceneDescriptionsSource.map((desc: string) =>
     desc.replace(/\{subject\}/gi, subjectWord)
   );
