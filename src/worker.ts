@@ -430,7 +430,7 @@ async function runPackPreviewJob(job: any) {
   let baseContentSet: any = null;
   if (session.pack_content_set_id) {
     const { data: selectedSet } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active, subject_mode")
       .eq("id", session.pack_content_set_id)
       .maybeSingle();
@@ -441,7 +441,7 @@ async function runPackPreviewJob(job: any) {
   }
   if (!baseContentSet && templateId) {
     const { data: firstSet } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active, subject_mode")
       .eq("pack_template_id", templateId)
       .eq("is_active", true)
@@ -472,7 +472,7 @@ async function runPackPreviewJob(job: any) {
   console.log("[PackPreview] session.pack_content_set_id:", session.pack_content_set_id ?? "(not set)");
   if (session.pack_content_set_id) {
     const { data: contentSet, error: contentSetErr } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("scene_descriptions, is_active")
       .eq("id", session.pack_content_set_id)
       .maybeSingle();
@@ -884,7 +884,7 @@ async function runPackAssembleJob(job: any) {
   let baseContentSet: any = null;
   if (session.pack_content_set_id) {
     const { data: selectedSet } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active, subject_mode")
       .eq("id", session.pack_content_set_id)
       .maybeSingle();
@@ -895,7 +895,7 @@ async function runPackAssembleJob(job: any) {
   }
   if (!baseContentSet && templateId) {
     const { data: firstSet } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("id, pack_template_id, sticker_count, labels, labels_en, scene_descriptions, is_active, subject_mode")
       .eq("pack_template_id", templateId)
       .eq("is_active", true)
@@ -922,7 +922,7 @@ async function runPackAssembleJob(job: any) {
   let labelsSource: string[] = (lang === "ru" ? template.labels : (template.labels_en || template.labels)) || [];
   if (session.pack_content_set_id) {
     const { data: contentSet } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("labels, labels_en, is_active")
       .eq("id", session.pack_content_set_id)
       .maybeSingle();

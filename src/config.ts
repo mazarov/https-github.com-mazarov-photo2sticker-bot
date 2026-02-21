@@ -10,6 +10,8 @@ function required(name: string): string {
 
 export const config = {
   appEnv: process.env.APP_ENV || "prod",  // "prod" | "test"
+  /** Таблица наборов паков: на test — pack_content_sets_test, иначе pack_content_sets. */
+  packContentSetsTable: process.env.APP_ENV === "test" ? "pack_content_sets_test" : "pack_content_sets",
   telegramBotToken: required("TELEGRAM_BOT_TOKEN"),
   telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET,
   supabaseUrl: required("SUPABASE_SUPABASE_PUBLIC_URL"),
@@ -30,7 +32,14 @@ export const config = {
   publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
   jobPollIntervalMs: Number(process.env.JOB_POLL_INTERVAL_MS || 2000),
   botUsername: process.env.BOT_USERNAME || "",
-  alertChannelId: process.env.ALERT_CHANNEL_ID || "",
+  /** Канал для алертов. На тесте: PROD_ALERT_CHANNEL_ID (если задан) или ALERT_CHANNEL_ID, чтобы слать в прод-чат. */
+  get alertChannelId(): string {
+    const env = process.env.APP_ENV || "prod";
+    if (env === "test") {
+      return process.env.PROD_ALERT_CHANNEL_ID || process.env.ALERT_CHANNEL_ID || "";
+    }
+    return process.env.ALERT_CHANNEL_ID || "";
+  },
   supportBotToken: process.env.SUPPORT_BOT_TOKEN || "",
   supportChannelId: process.env.SUPPORT_CHANNEL_ID || "",
   supportBotUsername: process.env.SUPPORT_BOT_USERNAME || "p2s_support_bot",

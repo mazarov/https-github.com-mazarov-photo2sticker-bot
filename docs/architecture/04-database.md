@@ -82,7 +82,7 @@ erDiagram
 | `sticker_ideas_state` | jsonb | — | Состояние идей стикеров (Sticker Ideas After Photo) |
 | `selected_style_group` | text | — | Выбранная группа стилей |
 | `pack_template_id` | text | — | FK → pack_templates (flow «Сделать пак») |
-| `pack_content_set_id` | text | — | FK → pack_content_sets (выбранный набор подписей/сцен) |
+| `pack_content_set_id` | text | — | id набора (таблица по env: pack_content_sets или pack_content_sets_test) |
 | `pack_carousel_index` | int | — | Индекс текущей карточки в карусели наборов |
 | `pack_sheet_file_id` | text | — | file_id сгенерированного листа превью |
 | `flow_kind` | text | — | Вид потока (`single`/`assistant`/`pack`) |
@@ -121,6 +121,8 @@ erDiagram
 | `mood` | text | Опционально: для автоподбора (romance, everyday, humor, …) |
 | `subject_mode` | text | Совместимость набора: `single` / `multi` / `any` |
 | `cluster` | boolean | Если true — пак показывается в Hero на кластерных страницах (пилюли). Файлы: pack/content/{id}/1..9.webp |
+
+**Тестовая таблица:** при `APP_ENV=test` бот и воркер читают из `pack_content_sets_test` (та же структура). Имя таблицы задаётся в `config.packContentSetsTable`. FK с `sessions.pack_content_set_id` снят — id может относиться к любой из таблиц в зависимости от окружения.
 
 ### `jobs` — Очередь заданий
 

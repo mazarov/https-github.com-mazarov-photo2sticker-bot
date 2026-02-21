@@ -108,7 +108,7 @@ async function getActivePackContentSets(): Promise<any[]> {
   }
 
   const { data, error } = await supabase
-    .from("pack_content_sets")
+    .from(config.packContentSetsTable)
     .select("*")
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
@@ -3500,7 +3500,7 @@ async function sendPackStyleSelectionStep(
       const targetSessionRef = formatCallbackSessionRef(targetSessionId, session?.session_rev);
       if (session?.pack_content_set_id) {
         const { data: contentSet } = await supabase
-          .from("pack_content_sets")
+          .from(config.packContentSetsTable)
           .select("name_ru, name_en")
           .eq("id", session.pack_content_set_id)
           .maybeSingle();
@@ -3736,7 +3736,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
   const templateId = ctx.match[1];
 
   const { data: contentSetsForTemplate, error: contentSetsErr } = await supabase
-    .from("pack_content_sets")
+    .from(config.packContentSetsTable)
     .select("id")
     .eq("pack_template_id", templateId)
     .eq("is_active", true)
@@ -4094,7 +4094,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
   if (!session || session.state !== "wait_pack_carousel") return;
 
   const { data: selectedContentSet } = await supabase
-    .from("pack_content_sets")
+    .from(config.packContentSetsTable)
     .select("id, pack_template_id, subject_mode")
     .eq("id", contentSetId)
     .maybeSingle();
@@ -4294,7 +4294,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   let selectedSetSubjectMode: "single" | "multi" | "any" = "any";
   if (session.pack_content_set_id) {
     const { data: selectedContentSet, error: setErr } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("sticker_count, subject_mode")
       .eq("id", session.pack_content_set_id)
       .maybeSingle();
@@ -4310,7 +4310,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   }
   if (!session.pack_content_set_id) {
     const { data: firstContentSet, error: firstSetErr } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("sticker_count")
       .eq("pack_template_id", session.pack_template_id)
       .eq("is_active", true)
@@ -4463,7 +4463,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
   let stickerCount = 4;
   if (session.pack_content_set_id) {
     const { data: selectedContentSet, error: setErr } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("sticker_count")
       .eq("id", session.pack_content_set_id)
       .maybeSingle();
@@ -4476,7 +4476,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
   }
   if (!session.pack_content_set_id) {
     const { data: firstContentSet, error: firstSetErr } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .select("sticker_count")
       .eq("pack_template_id", session.pack_template_id)
       .eq("is_active", true)
@@ -8729,7 +8729,7 @@ bot.action(/^pack_landing:(.+)$/, async (ctx) => {
 
   if (contentSetId) {
     const { error: e1 } = await supabase
-      .from("pack_content_sets")
+      .from(config.packContentSetsTable)
       .update({ cluster: true })
       .eq("id", contentSetId);
     if (e1) {
