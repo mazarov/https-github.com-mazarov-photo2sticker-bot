@@ -526,7 +526,7 @@ export async function detectSubjectProfileFromImageBuffer(
       "- single = exactly 1 main object",
       "- multi = 2 or more main objects",
       "- unknown if cannot decide reliably",
-      "- subject_gender: only when object_mode is single and the main object is a person. Use male or female for perceived gender; unknown if not a person or cannot tell. When object_mode is multi or unknown, omit subject_gender or set to null.",
+      "- subject_gender: REQUIRED when object_mode is single. Use male or female for the perceived gender of the main person; use unknown only if the main object is not a person (e.g. animal) or gender cannot be determined. When object_mode is multi or unknown, set subject_gender to null. Always output the subject_gender key in JSON for single mode.",
       "- Ignore tiny peripheral fragments touching edges if they are not primary objects",
       "- Do not count reflections, posters, statues, drawings, toy figurines as separate main objects",
       "- object_instances may be empty if uncertain",
@@ -567,7 +567,11 @@ export async function detectSubjectProfileFromImageBuffer(
         if (!rawText) {
           return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null, subjectGender: null };
         }
-        return await hardenDetectedProfile(parseDetectorPayload(rawText));
+        const result = await hardenDetectedProfile(parseDetectorPayload(rawText));
+        if (result.subjectMode === "single" && result.subjectGender === null) {
+          console.warn("[subject-profile] detector returned single but no subject_gender; model may have omitted it");
+        }
+        return result;
       } catch (err: any) {
         lastError = err;
         const isTimeout = err?.code === "ETIMEDOUT" || err?.cause?.code === "ETIMEDOUT";
