@@ -5,10 +5,15 @@ import { getAppConfig } from "./app-config";
 export type SubjectMode = "single" | "multi" | "unknown";
 export type SubjectSourceKind = "photo" | "sticker";
 
+/** Пол субъекта на фото (для single). Используется для подстановки man/woman в промпт паков. */
+export type SubjectGender = "male" | "female" | "unknown";
+
 export interface SubjectProfile {
   subjectMode: SubjectMode;
   subjectCount: number | null;
   subjectConfidence: number | null;
+  /** Определён только при subjectMode === "single". Для multi — null. */
+  subjectGender: SubjectGender | null;
   sourceFileId: string;
   sourceKind: SubjectSourceKind;
   detectedAt: string;
@@ -67,6 +72,22 @@ export function inferSubjectModeByCount(count: number | null): SubjectMode {
   if (count === null) return "unknown";
   if (count <= 1) return "single";
   return "multi";
+}
+
+export function normalizeSubjectGender(value: unknown): SubjectGender | null {
+  if (value == null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "male" || normalized === "man") return "male";
+  if (normalized === "female" || normalized === "woman") return "female";
+  if (normalized === "unknown") return "unknown";
+  return null;
+}
+
+/** Возвращает слово для подстановки в промпт сцен пака: "man" или "woman". При unknown или multi — "man" по умолчанию. */
+export function getSubjectWordForPrompt(profile: Pick<SubjectProfile, "subjectMode" | "subjectGender"> | null): "man" | "woman" {
+  if (!profile || profile.subjectMode !== "single") return "man";
+  if (profile.subjectGender === "female") return "woman";
+  return "man";
 }
 
 export function resolveGenerationSource(
@@ -298,15 +319,18 @@ async function hardenDetectedProfile(detected: {
   objectMode: SubjectMode;
   objectCount: number | null;
   objectConfidence: number | null;
+  objectGender: SubjectGender | null;
   objectInstances: DetectorObjectInstance[];
 }): Promise<{
   subjectMode: SubjectMode;
   subjectCount: number | null;
   subjectConfidence: number | null;
+  subjectGender: SubjectGender | null;
 }> {
   let subjectMode = normalizeSubjectMode(detected.objectMode);
   let subjectCount = normalizeCount(detected.objectCount);
   let subjectConfidence = normalizeConfidence(detected.objectConfidence);
+  let subjectGender: SubjectGender | null = normalizeSubjectGender(detected.objectGender);
 
   const deduped = dedupInstances(detected.objectInstances);
   const minAreaRatio = await getObjectMinAreaRatio();
@@ -366,8 +390,11 @@ async function hardenDetectedProfile(detected: {
   if (subjectMode === "unknown") {
     subjectCount = null;
   }
+  if (subjectMode !== "single") {
+    subjectGender = null;
+  }
 
-  return { subjectMode, subjectCount, subjectConfidence };
+  return { subjectMode, subjectCount, subjectConfidence, subjectGender };
 }
 
 function extractTextFromGeminiResponse(data: any): string {
@@ -383,6 +410,7 @@ function parseDetectorPayload(raw: string): {
   objectMode: SubjectMode;
   objectCount: number | null;
   objectConfidence: number | null;
+  objectGender: SubjectGender | null;
   objectInstances: DetectorObjectInstance[];
 } {
   const text = (raw || "").trim();
@@ -425,6 +453,9 @@ function parseDetectorPayload(raw: string): {
       parsed?.subjectConfidence ??
       parsed?.confidence
   );
+  let objectGender = normalizeSubjectGender(
+    parsed?.subject_gender ?? parsed?.subjectGender ?? parsed?.object_gender ?? parsed?.objectGender ?? parsed?.gender
+  );
   const rawInstances: unknown[] = Array.isArray(parsed?.object_instances)
     ? parsed.object_instances
     : Array.isArray(parsed?.objectInstances)
@@ -452,6 +483,11 @@ function parseDetectorPayload(raw: string): {
     if (confidenceMatch?.[1]) {
       objectConfidence = normalizeConfidence(Number(confidenceMatch[1]));
     }
+    const genderMatch = text.match(/\b(male|female|unknown)\b/i);
+    if (genderMatch?.[1]) {
+      const g = normalizeSubjectGender(genderMatch[1]);
+      if (g) objectGender = g;
+    }
   }
 
   if (objectMode === "unknown") {
@@ -460,8 +496,11 @@ function parseDetectorPayload(raw: string): {
   if (objectMode !== "unknown" && objectCount === null) {
     objectCount = objectMode === "single" ? 1 : null;
   }
+  if (objectMode !== "single") {
+    objectGender = null;
+  }
 
-  return { objectMode, objectCount, objectConfidence, objectInstances };
+  return { objectMode, objectCount, objectConfidence, objectGender, objectInstances };
 }
 
 const DETECTOR_TIMEOUT_MS = 45000;
@@ -474,6 +513,7 @@ export async function detectSubjectProfileFromImageBuffer(
   subjectMode: SubjectMode;
   subjectCount: number | null;
   subjectConfidence: number | null;
+  subjectGender: SubjectGender | null;
 }> {
   try {
     const model = await getAppConfig("gemini_model_subject_detector", "gemini-2.0-flash");
@@ -481,11 +521,12 @@ export async function detectSubjectProfileFromImageBuffer(
       "Count main prominent objects visible in the source image.",
       "Object can be a person, animal, mascot, or character-like entity.",
       "Return strict JSON only with keys:",
-      '{"object_mode":"single|multi|unknown","object_count":number|null,"object_confidence":0..1,"object_instances":[{"bbox":{"x":0..1,"y":0..1,"width":0..1,"height":0..1},"area_ratio":0..1,"edge_touch":true|false,"confidence":0..1,"is_primary_candidate":true|false}]}',
+      '{"object_mode":"single|multi|unknown","object_count":number|null,"object_confidence":0..1,"subject_gender":"male|female|unknown","object_instances":[{"bbox":{"x":0..1,"y":0..1,"width":0..1,"height":0..1},"area_ratio":0..1,"edge_touch":true|false,"confidence":0..1,"is_primary_candidate":true|false}]}',
       "Rules:",
       "- single = exactly 1 main object",
       "- multi = 2 or more main objects",
       "- unknown if cannot decide reliably",
+      "- subject_gender: only when object_mode is single and the main object is a person. Use male or female for perceived gender; unknown if not a person or cannot tell. When object_mode is multi or unknown, omit subject_gender or set to null.",
       "- Ignore tiny peripheral fragments touching edges if they are not primary objects",
       "- Do not count reflections, posters, statues, drawings, toy figurines as separate main objects",
       "- object_instances may be empty if uncertain",
@@ -524,7 +565,7 @@ export async function detectSubjectProfileFromImageBuffer(
 
         const rawText = extractTextFromGeminiResponse(response.data);
         if (!rawText) {
-          return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null };
+          return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null, subjectGender: null };
         }
         return await hardenDetectedProfile(parseDetectorPayload(rawText));
       } catch (err: any) {
@@ -549,7 +590,7 @@ export async function detectSubjectProfileFromImageBuffer(
     throw lastError;
   } catch (err: any) {
     console.warn("[subject-profile] detector failed:", err?.response?.data?.error?.message || err?.message || err);
-    return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null };
+    return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null, subjectGender: null };
   }
 }
 
