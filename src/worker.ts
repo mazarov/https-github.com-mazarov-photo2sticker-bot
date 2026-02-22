@@ -533,9 +533,23 @@ async function runPackPreviewJob(job: any) {
   }
   const subjectLockBlock =
     lockEnabled && packSubjectProfile ? buildSubjectLockBlock(packSubjectProfile) : "";
-  const styleBlockWithSubject = subjectLockBlock
+  let styleBlockWithSubject = subjectLockBlock
     ? appendSubjectLock(styleBlock, subjectLockBlock)
     : styleBlock;
+  // For photo-realistic style: avoid "illustration" so the model outputs a photo, not a drawing
+  const isPhotoRealisticStyle =
+    session.selected_style_id === "photo_realistic" ||
+    /\bphoto-realistic\b|photo_realistic/i.test(styleBlock);
+  if (isPhotoRealisticStyle) {
+    styleBlockWithSubject = styleBlockWithSubject.replace(
+      /\bcharacter illustration\b/gi,
+      "photographic image"
+    );
+    if (!/output must be a photograph|must be a photo\b/i.test(styleBlockWithSubject)) {
+      styleBlockWithSubject +=
+        "\n\nOutput MUST be a photograph, not a drawing, illustration, or stylized art.";
+    }
+  }
   const subjectModeForPrompt = packSubjectProfile?.subjectMode || normalizeSubjectMode(session.object_mode ?? session.subject_mode);
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
   if (subjectFilterEnabled) {
@@ -1378,10 +1392,21 @@ async function runJob(job: any) {
   if (!subjectProfile) {
     subjectProfile = await ensureSubjectProfileForSource(session, sourceFileId, sourceKind, fileBuffer, mimeType);
   }
-  const promptForGeneration =
+  let promptForGeneration =
     lockEnabled && subjectProfile
       ? appendSubjectLock(session.prompt_final || "", buildSubjectLockBlock(subjectProfile))
       : (session.prompt_final || "");
+  // For photo-realistic style: avoid "illustration" so the model outputs a photo, not a drawing
+  const isPhotoRealistic =
+    session.selected_style_id === "photo_realistic" ||
+    /\bphoto-realistic\b|photo_realistic/i.test(promptForGeneration);
+  if (isPhotoRealistic) {
+    promptForGeneration = promptForGeneration.replace(/\bcharacter illustration\b/gi, "photographic image");
+    if (!/output must be a photograph|must be a photo\b/i.test(promptForGeneration)) {
+      promptForGeneration +=
+        "\n\nOutput MUST be a photograph, not a drawing, illustration, or stylized art.";
+    }
+  }
 
   await updateProgress(3);
   console.log("Calling Gemini image generation...");
