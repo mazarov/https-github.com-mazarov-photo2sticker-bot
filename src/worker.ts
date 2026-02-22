@@ -667,7 +667,27 @@ ${selectedStylePromptHint ? `0. STYLE (apply in every cell): ${selectedStyleProm
 5. SEAMLESS GRID: The image must be one continuous surface — magenta background flows from cell to cell with NO visible division. Do NOT draw white lines, grid lines, stripes, or any separator between the 9 images. We split the image programmatically; you must not add any marking or line between cells.
 6. LIKENESS: In EVERY cell — EYE COLOR must match the reference EXACTLY (same hue and intensity). Preserve freckles, moles, beauty marks, birthmarks, face shape, skin tone. Do NOT change eye color or omit distinctive features that appear in the reference.
 7. Style must be IDENTICAL across all cells — same art style, proportions, colors.
-8. Do NOT add any text, labels, or captions in the cells. Text will be added programmatically later.`;
+8. Do NOT add any text, labels, or captions in the cells. Text will be added programmatically later.
+
+CRITICAL RULES FOR THE GRID — FRAMING & EXPRESSION STANDARD:
+
+FRAMING STANDARD (MANDATORY IN EVERY CELL):
+All characters must be framed CHEST-UP (mid-torso to head). Do NOT use full-body framing unless explicitly required by the pose. The head must occupy approximately 35–45% of the vertical space of the cell. The camera distance must feel slightly closer than natural — intimate but not extreme close-up.
+
+NO EXCESS EMPTY SPACE:
+Do NOT leave excessive "air" above the head. Reduce unnecessary vertical empty space. The subject must visually dominate the frame while still respecting mandatory padding. Avoid distant, catalog-style composition.
+
+NATURAL EXPRESSION ONLY (NO THEATRICAL FACES):
+Expressions must be realistic and subtle. Do NOT exaggerate facial muscles, widen eyes unnaturally, over-stretch lips, or create cartoon-like emotions. Avoid over-posed or staged facial expressions. The emotion must look lived-in, not performed.
+
+EMOTION INTENSITY LIMIT (70% RULE):
+Emotional intensity must stay at approximately 60–70% of maximum. Never push to 100–120% exaggerated emotion. Prefer micro-expressions, restrained smiles, soft eyebrow movement, natural mouth positions, and believable eye engagement.
+
+AUTHENTIC MOMENT OVER POSE:
+The character must appear caught mid-action, not posing for a photo. Avoid static "holding object and smiling" compositions. Every cell should feel like a real moment rather than a staged portrait.
+
+CONSISTENT PROXIMITY ACROSS CELLS:
+Maintain similar camera distance across the entire grid. Do not mix distant shots with tight portraits unless intentionally designed for progression. The grid must feel cohesive in proximity and scale.`;
 
   const hasCollage = !!collageBase64;
   const prompt = hasCollage
