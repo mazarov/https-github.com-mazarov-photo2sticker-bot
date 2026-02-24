@@ -200,6 +200,7 @@ Rules:
 - Captions = what the SENDER would write in a chat as their own message. Inner thought / reaction, NOT a description of what the character is doing.
 - FORBIDDEN: narration, status updates, stage directions (e.g. "Recording...", "Докладываю...", "Reactions received.", "Записываю на нейтральном фоне"). If it reads like a script or report, it is wrong.
 - REQUIRED: short, chat-ready lines the user would send as a sticker (e.g. "Love that for me.", "Of course.", "С 23-м. Держись."). At least 1–2 lines must be punchy, quotable "hook" lines people would forward.
+- LENGTH: each caption must be one short line. Max 15–20 characters for both RU and EN. Very brief — a few words only. Long phrases are forbidden; they don't fit on a sticker.
 - Order strictly by moments[0]..moments[8]. Tone from the plan, but always first-person sendable.`;
 
 export interface CriticFeedbackContext {
@@ -240,6 +241,7 @@ Output strict JSON with key: scene_descriptions (array of 9 strings).
 
 Each scene: one sentence with placeholder {subject}, chest-up, mid-motion. Format: "{subject} [framing], [body position], [small action] — [moment in one phrase]".
 Rules:
+- Background must be SIMPLE: neutral wall, plain background, soft blur, or single-tone. No busy interiors, detailed furniture, or cluttered environments — the background is removed for stickers, so keep it minimal (e.g. "against neutral wall", "plain background", "soft bokeh").
 - 2-3 scenes with gaze at camera; at most one with closed eyes.
 - One day, one environment; when theme requires costume (e.g. military, profession) or setting (barracks, office), specify in EVERY scene.
 - Expression intensity ~70%; no static photo pose; variety across 3×3 grid.`;
@@ -272,14 +274,13 @@ async function runScenes(
 // --- Critic agent ---
 const CRITIC_SYSTEM = `You are the quality gate for sticker packs. You must reject any pack that is not truly sendable and coherent.
 
-Evaluate the full pack spec. Output strict JSON with keys: pass (boolean), reasons (array of strings: what's wrong or what works), suggestions (array of 1-3 concrete improvement strings for the team, e.g. "caption 4 is descriptive, replace with inner thought", "scene 7 missing gaze at camera").
+Evaluate the FULL pack spec: both labels (captions) AND scene_descriptions. You must check captions and scenes separately.
+
+Output strict JSON with keys: pass (boolean), reasons (array of strings: what's wrong or what works), suggestions (array of 1-3 concrete improvement strings for the team, e.g. "caption 4 is descriptive, replace with inner thought", "scene 7 missing gaze at camera", "scene 3 has complex background — use plain/neutral").
 
 Reject (pass=false) when:
-- Generic or descriptive captions (not inner thoughts).
-- Broken one-day continuity or inconsistent setting.
-- Missing costume/environment in scenes when theme requires it (e.g. military, office).
-- Typos or nonsense in labels.
-- Weak virality: no clear share moment or hook.
+- Captions: generic or descriptive (not inner thoughts); too long (max 15–20 characters per label, RU and EN); typos or nonsense; weak virality (no clear share/hook).
+- Scenes: complex or busy backgrounds (must be simple/neutral — background is cut out for stickers); broken one-day continuity or inconsistent setting; missing costume/environment when theme requires it (e.g. military, office); missing gaze-at-camera where needed (2–3 scenes).
 
 Be strict. Pass only when the pack is truly sendable and coherent. Do not soften the verdict.`;
 
@@ -346,7 +347,15 @@ export async function runPackGenerationPipeline(
     let spec = assembleSpec(plan, captions, scenes);
 
     for (let iter = 0; iter < maxIterations; iter++) {
+      // #region agent log
+      const maxLenRu = Math.max(0, ...(spec.labels || []).map((l) => String(l).length));
+      const maxLenEn = Math.max(0, ...(spec.labels_en || []).map((l) => String(l).length));
+      fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'pack-multiagent.ts:beforeCritic',message:'spec before Critic',data:{iter:iter+1,maxLabelLenRu,maxLabelLenEn,sampleRu:(spec.labels||[])[0],sampleEn:(spec.labels_en||[])[0]},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       const critic = await runCritic(spec);
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'pack-multiagent.ts:criticResult',message:'Critic result',data:{pass:critic.pass,reasonsCount:(critic.reasons||[]).length,firstReason:(critic.reasons||[])[0],suggestionsCount:(critic.suggestions||[]).length},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       console.log("[pack-multiagent] Critic iteration", iter + 1, "pass:", critic.pass, "reasons:", critic.reasons, "suggestions:", critic.suggestions);
       if (critic.pass) {
         return { ok: true, spec, plan, packId: spec.id };

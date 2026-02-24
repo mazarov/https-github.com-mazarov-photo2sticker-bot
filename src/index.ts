@@ -4152,9 +4152,13 @@ bot.action(["pack_admin_pack_save", "pack_admin_save_rejected"], async (ctx) => 
 
   const uniqueSpec = await ensureUniquePackId(spec);
 
+  // Чтобы новый пак появился в карусели паков, используем тот же pack_template_id, что у существующих паков (карусель фильтрует по первому паку в списке).
+  const existingSets = await getActivePackContentSets();
+  const carouselTemplateId = existingSets[0]?.pack_template_id ?? "couple_v1";
+
   const { error: insertErr } = await supabase.from(config.packContentSetsTable).insert({
     id: uniqueSpec.id,
-    pack_template_id: uniqueSpec.pack_template_id,
+    pack_template_id: carouselTemplateId,
     name_ru: uniqueSpec.name_ru,
     name_en: uniqueSpec.name_en,
     carousel_description_ru: uniqueSpec.carousel_description_ru,
