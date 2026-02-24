@@ -4142,7 +4142,7 @@ bot.action(["pack_admin_pack_save", "pack_admin_save_rejected"], async (ctx) => 
   const spec = session.pending_rejected_pack_spec as PackSpecRow | null;
   if (!spec?.id) {
     await ctx.reply(lang === "ru" ? "Нет пака для сохранения." : "No pack to save.");
-    await supabase.from("sessions").update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null }).eq("id", session.id);
+    await supabase.from("sessions").update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null, pending_critic_reasons: null }).eq("id", session.id);
     return;
   }
 
@@ -4171,7 +4171,7 @@ bot.action(["pack_admin_pack_save", "pack_admin_save_rejected"], async (ctx) => 
     segment_id: uniqueSpec.segment_id,
   });
 
-  await supabase.from("sessions").update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null }).eq("id", session.id);
+  await supabase.from("sessions").update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null, pending_critic_reasons: null }).eq("id", session.id);
 
   if (insertErr) {
     await ctx.reply((lang === "ru" ? "❌ Ошибка записи: " : "❌ Insert error: ") + insertErr.message);
@@ -4202,7 +4202,7 @@ bot.action("pack_admin_pack_cancel", async (ctx) => {
 
   await supabase
     .from("sessions")
-    .update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null })
+    .update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null, pending_critic_reasons: null })
     .eq("id", session.id);
 
   const msg = lang === "ru" ? "❌ Отменено. Пак не сохранён." : "❌ Cancelled. Pack not saved.";
@@ -4231,6 +4231,7 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
 
   const plan = session.pending_pack_plan as BossPlan | null;
   const suggestions: string[] = Array.isArray(session.pending_critic_suggestions) ? session.pending_critic_suggestions : [];
+  const reasons: string[] = Array.isArray((session as any).pending_critic_reasons) ? (session as any).pending_critic_reasons : [];
 
   let reworkPlan: BossPlan | null = plan?.id ? plan : null;
   if (!reworkPlan?.id) {
@@ -4253,7 +4254,7 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
 
   try {
     const previousSpec = (session.pending_rejected_pack_spec as PackSpecRow | null) ?? null;
-    const { spec, critic } = await reworkOneIteration(reworkPlan, suggestions, previousSpec);
+    const { spec, critic } = await reworkOneIteration(reworkPlan, suggestions, previousSpec, reasons.length ? reasons : undefined);
 
     await supabase
       .from("sessions")
@@ -4261,6 +4262,7 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
         pending_rejected_pack_spec: spec as any,
         pending_pack_plan: reworkPlan as any,
         pending_critic_suggestions: (critic.suggestions ?? []) as any,
+        pending_critic_reasons: (critic.reasons ?? []) as any,
       })
       .eq("id", session.id);
 
@@ -5509,6 +5511,7 @@ bot.on("text", async (ctx) => {
           pending_rejected_pack_spec: result.spec as any,
           pending_pack_plan: (result.plan ?? null) as any,
           pending_critic_suggestions: (result.criticSuggestions ?? []) as any,
+          pending_critic_reasons: (result.criticReasons ?? []) as any,
         })
         .eq("id", session.id);
 

@@ -391,20 +391,25 @@ export async function runPackGenerationPipeline(
 }
 
 /**
- * One rework iteration: Captions(plan, suggestions, previousSpec) → Scenes → Assembly → Critic.
+ * One rework iteration: Captions(plan, suggestions, previousSpec, reasons?) → Scenes → Assembly → Critic.
  * Used when admin taps "Переделать" to iterate without re-running Concept/Boss.
- * Agents receive previous context: reasons/suggestions and the rejected spec (labels, scene_descriptions).
+ * Agents receive previous context: reasons + suggestions and the rejected spec (labels, scene_descriptions).
  */
 export async function reworkOneIteration(
   plan: BossPlan,
   suggestions: string[],
-  previousSpec?: PackSpecRow | null
+  previousSpec?: PackSpecRow | null,
+  reasons?: string[] | null
 ): Promise<{ spec: PackSpecRow; critic: CriticOutput }> {
   const criticContext: CriticFeedbackContext = {
     suggestions: suggestions?.length ? suggestions : [],
+    reasons: reasons?.length ? reasons : undefined,
     previousSpec: previousSpec ?? undefined,
   };
-  const hasContext = criticContext.suggestions.length > 0 || !!criticContext.previousSpec;
+  const hasContext =
+    criticContext.suggestions.length > 0 ||
+    (criticContext.reasons?.length ?? 0) > 0 ||
+    !!criticContext.previousSpec;
   const captions = await runCaptions(plan, hasContext ? criticContext : undefined);
   const scenes = await runScenes(plan, captions, hasContext ? criticContext : undefined);
   const spec = assembleSpec(plan, captions, scenes);
