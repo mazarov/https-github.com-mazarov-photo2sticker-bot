@@ -2029,15 +2029,16 @@ async function getActiveSession(userId: string) {
   return fallbackByCreatedAt;
 }
 
+const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "wait_pack_approval", "processing_pack"] as const;
+
 /** Get session that is in pack flow (for pack callbacks when user may have is_active assistant session). */
 async function getPackFlowSession(userId: string) {
-  const packStates = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "wait_pack_approval", "processing_pack"];
   const { data } = await supabase
     .from("sessions")
     .select("*")
     .eq("user_id", userId)
     .eq("env", config.appEnv)
-    .in("state", packStates)
+    .in("state", PACK_FLOW_STATES as unknown as string[])
     .order("updated_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .limit(1)
@@ -2069,14 +2070,13 @@ async function resolveSessionForIncomingPhoto(userId: string) {
 
 async function getPackFlowSessionById(userId: string, sessionId?: string | null) {
   if (!sessionId) return null;
-  const packStates = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "wait_pack_approval", "processing_pack"];
   const { data } = await supabase
     .from("sessions")
     .select("*")
     .eq("id", sessionId)
     .eq("user_id", userId)
     .eq("env", config.appEnv)
-    .in("state", packStates)
+    .in("state", PACK_FLOW_STATES as unknown as string[])
     .maybeSingle();
   return data;
 }
@@ -4007,8 +4007,16 @@ bot.action("pack_admin_generate", async (ctx) => {
   const user = await getUser(telegramId);
   if (!user?.id) return;
   const lang = user.lang || "en";
-  const session = await getPackFlowSession(user.id);
+  let session = await getPackFlowSession(user.id);
   if (!session?.id) {
+    // Fallback: active session may be pack (e.g. carousel shown from getActiveSession path); use it if state is pack flow.
+    const active = await getActiveSession(user.id);
+    if (active?.id && (PACK_FLOW_STATES as readonly string[]).includes(active.state)) {
+      session = active;
+    }
+  }
+  if (!session?.id) {
+    console.log("[pack_admin_generate] No pack session for user", user.id, "env:", config.appEnv);
     await ctx.reply(lang === "ru" ? "Нет активной сессии пака." : "No active pack session.");
     return;
   }
