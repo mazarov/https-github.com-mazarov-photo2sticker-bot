@@ -181,8 +181,8 @@ function getPackContentSetsForTemplate(contentSets: any[], templateId: string): 
   return contentSets.filter((set) => String(set?.pack_template_id || "") === String(templateId));
 }
 
-/** Admin-only row for "Сгенерировать пак" (test bot only). */
-function getPackCarouselAdminRow(telegramId: number): { text: string; callback_data: string }[] {
+/** Admin-only row for "Сгенерировать пак" (test bot only). Pass sessionId so the handler loads session by id. */
+function getPackCarouselAdminRow(telegramId: number, sessionId?: string): { text: string; callback_data: string }[] {
   const isTest = config.appEnv === "test";
   const isAdmin = config.adminIds.includes(telegramId);
   if (!isTest || !isAdmin) {
@@ -191,7 +191,8 @@ function getPackCarouselAdminRow(telegramId: number): { text: string; callback_d
     }
     return [];
   }
-  return [{ text: "🛠 Сгенерировать пак", callback_data: "pack_admin_generate" }];
+  const callbackData = sessionId ? `pack_admin_generate:${sessionId}` : "pack_admin_generate";
+  return [{ text: "🛠 Сгенерировать пак", callback_data: callbackData }];
 }
 
 interface StylePreset {
@@ -3743,7 +3744,7 @@ async function handlePackMenuEntry(
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow(telegramId);
+  const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const keyboard = {
     inline_keyboard: [
       [
@@ -3961,7 +3962,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow(telegramId);
+  const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const keyboard = {
     inline_keyboard: [
       [
@@ -3998,8 +3999,8 @@ bot.action("pack_carousel_next", async (ctx) => {
   await updatePackCarouselCard(ctx, 1);
 });
 
-// Admin-only (test bot): start pack generation flow — ask for theme
-bot.action("pack_admin_generate", async (ctx) => {
+// Admin-only (test bot): start pack generation flow — ask for theme. Session from callback_data or resolvePackSessionForEvent.
+bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
@@ -4007,21 +4008,19 @@ bot.action("pack_admin_generate", async (ctx) => {
   const user = await getUser(telegramId);
   if (!user?.id) return;
   const lang = user.lang || "en";
-  let session = await getPackFlowSession(user.id);
-  if (!session?.id) {
-    // Fallback: active session may be pack (e.g. carousel shown from getActiveSession path); use it if state is pack flow.
-    const active = await getActiveSession(user.id);
-    if (active?.id && (PACK_FLOW_STATES as readonly string[]).includes(active.state)) {
-      session = active;
-    }
-  }
-  if (!session?.id) {
-    console.log("[pack_admin_generate] No pack session for user", user.id, "env:", config.appEnv);
-    await ctx.reply(lang === "ru" ? "Нет активной сессии пака." : "No active pack session.");
+  const rawPayload = ctx.match?.[1] ?? null;
+  const explicitSessionId = typeof rawPayload === "string" && rawPayload.length > 0 ? rawPayload.trim() : null;
+  const { session, reasonCode } = await resolvePackSessionForEvent(
+    user.id,
+    ["wait_pack_carousel"],
+    explicitSessionId
+  );
+  if (!session?.id || reasonCode === "wrong_state") {
+    await rejectPackEvent(ctx, lang, "pack_admin_generate", reasonCode || "session_not_found");
     return;
   }
 
-  // Same pattern as pack_show_carousel: one active session per user — deactivate others so getActiveSession() returns this one when user sends theme.
+  // One active session per user — deactivate others so getActiveSession() returns this one when user sends theme.
   await supabase
     .from("sessions")
     .update({ is_active: false })
@@ -4076,7 +4075,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow(telegramId);
+  const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const keyboard = {
     inline_keyboard: [
       [
@@ -4127,7 +4126,7 @@ async function renderPackCarouselForSession(
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow((ctx.from as any)?.id ?? 0);
+  const adminRow = getPackCarouselAdminRow((ctx.from as any)?.id ?? 0, session.id);
   const keyboard = {
     inline_keyboard: [
       [
