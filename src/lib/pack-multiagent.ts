@@ -83,6 +83,7 @@ export interface PackSpecRow {
 export interface PackGenerationResult {
   ok: boolean;
   spec?: PackSpecRow;
+  plan?: BossPlan;
   packId?: string;
   error?: string;
   criticReasons?: string[];
@@ -311,7 +312,7 @@ export async function runPackGenerationPipeline(
     for (let iter = 0; iter < maxIterations; iter++) {
       const critic = await runCritic(spec);
       if (critic.pass) {
-        return { ok: true, spec, packId: spec.id };
+        return { ok: true, spec, plan, packId: spec.id };
       }
       if (iter === maxIterations - 1) {
         return {
@@ -319,6 +320,8 @@ export async function runPackGenerationPipeline(
           error: "Pack rejected by Critic",
           criticReasons: critic.reasons,
           criticSuggestions: critic.suggestions,
+          spec,
+          plan,
         };
       }
       captions = await runCaptions(plan, critic.suggestions);
@@ -332,6 +335,21 @@ export async function runPackGenerationPipeline(
     console.error("[pack-multiagent] pipeline error:", message);
     return { ok: false, error: message };
   }
+}
+
+/**
+ * One rework iteration: Captions(plan, suggestions) → Scenes → Assembly → Critic.
+ * Used when admin taps "Переделать" to iterate without re-running Concept/Boss.
+ */
+export async function reworkOneIteration(
+  plan: BossPlan,
+  suggestions: string[]
+): Promise<{ spec: PackSpecRow; critic: CriticOutput }> {
+  const captions = await runCaptions(plan, suggestions.length ? suggestions : undefined);
+  const scenes = await runScenes(plan, captions, suggestions.length ? suggestions : undefined);
+  const spec = assembleSpec(plan, captions, scenes);
+  const critic = await runCritic(spec);
+  return { spec, critic };
 }
 
 /**

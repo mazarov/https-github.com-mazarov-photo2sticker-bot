@@ -48,8 +48,10 @@ import {
 } from "./lib/assistant-db";
 import {
   runPackGenerationPipeline,
+  reworkOneIteration,
   subjectTypeFromSession,
   type PackSpecRow,
+  type BossPlan,
 } from "./lib/pack-multiagent";
 
 const bot = new Telegraf(config.telegramBotToken, {
@@ -4065,6 +4067,168 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   );
 });
 
+// Admin (test bot): Save — save pending pack to DB (buttons "Сохранить" and legacy "Save anyway")
+bot.action(["pack_admin_pack_save", "pack_admin_save_rejected"], async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id) ?? (await getPackFlowSession(user.id)) ?? null;
+  if (!session?.id) {
+    await ctx.reply(lang === "ru" ? "Сессия не найдена." : "Session not found.");
+    return;
+  }
+
+  const spec = session.pending_rejected_pack_spec as PackSpecRow | null;
+  if (!spec?.id) {
+    await ctx.reply(lang === "ru" ? "Нет пака для сохранения." : "No pack to save.");
+    await supabase.from("sessions").update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null }).eq("id", session.id);
+    return;
+  }
+
+  const uniqueSpec = await ensureUniquePackId(spec);
+
+  const { error: insertErr } = await supabase.from(config.packContentSetsTable).insert({
+    id: uniqueSpec.id,
+    pack_template_id: uniqueSpec.pack_template_id,
+    name_ru: uniqueSpec.name_ru,
+    name_en: uniqueSpec.name_en,
+    carousel_description_ru: uniqueSpec.carousel_description_ru,
+    carousel_description_en: uniqueSpec.carousel_description_en,
+    labels: uniqueSpec.labels,
+    labels_en: uniqueSpec.labels_en,
+    scene_descriptions: uniqueSpec.scene_descriptions,
+    sort_order: uniqueSpec.sort_order,
+    is_active: uniqueSpec.is_active,
+    mood: uniqueSpec.mood,
+    sticker_count: uniqueSpec.sticker_count,
+    subject_mode: uniqueSpec.subject_mode,
+    cluster: uniqueSpec.cluster,
+    segment_id: uniqueSpec.segment_id,
+  });
+
+  await supabase.from("sessions").update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null }).eq("id", session.id);
+
+  if (insertErr) {
+    await ctx.reply((lang === "ru" ? "❌ Ошибка записи: " : "❌ Insert error: ") + insertErr.message);
+    return;
+  }
+
+  clearPackContentSetsCache();
+  const successText = (lang === "ru" ? "✅ Пак сохранён: " : "✅ Pack saved: ") + uniqueSpec.id;
+  try {
+    await ctx.editMessageText(successText).catch(() => ctx.reply(successText));
+  } catch {
+    await ctx.reply(successText);
+  }
+});
+
+// Admin (test bot): Cancel — clear pending pack, do not save
+bot.action("pack_admin_pack_cancel", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id) ?? (await getPackFlowSession(user.id)) ?? null;
+  if (!session?.id) return;
+
+  await supabase
+    .from("sessions")
+    .update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null })
+    .eq("id", session.id);
+
+  const msg = lang === "ru" ? "❌ Отменено. Пак не сохранён." : "❌ Cancelled. Pack not saved.";
+  try {
+    await ctx.editMessageText(msg);
+  } catch {
+    await ctx.reply(msg);
+  }
+});
+
+// Admin (test bot): Rework — one more Captions → Scenes → Critic iteration, then show approval again
+bot.action("pack_admin_pack_rework", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id) ?? (await getPackFlowSession(user.id)) ?? null;
+  if (!session?.id) {
+    await ctx.reply(lang === "ru" ? "Сессия не найдена." : "Session not found.");
+    return;
+  }
+
+  const plan = session.pending_pack_plan as BossPlan | null;
+  const suggestions: string[] = Array.isArray(session.pending_critic_suggestions) ? session.pending_critic_suggestions : [];
+
+  if (!plan?.id) {
+    await ctx.reply(lang === "ru" ? "Нет плана для переделки. Запустите генерацию заново." : "No plan for rework. Run generation again.");
+    return;
+  }
+
+  const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Переделываю (Captions → Scenes → Critic)…" : "⏳ Reworking (Captions → Scenes → Critic)…").catch(() => null);
+
+  try {
+    const { spec, critic } = await reworkOneIteration(plan, suggestions);
+
+    await supabase
+      .from("sessions")
+      .update({
+        pending_rejected_pack_spec: spec as any,
+        pending_pack_plan: plan as any,
+        pending_critic_suggestions: (critic.suggestions ?? []) as any,
+      })
+      .eq("id", session.id);
+
+    const summary =
+      (lang === "ru" ? "Пак после переделки.\n\n" : "Pack after rework.\n\n") +
+      (critic.pass
+        ? (lang === "ru" ? "✅ Critic одобрил.\n\n" : "✅ Critic approved.\n\n")
+        : (lang === "ru" ? "⚠️ Critic не одобрил.\n\n" : "⚠️ Critic did not approve.\n\n")) +
+      (lang === "ru" ? "ID: " : "ID: ") +
+      spec.id +
+      "\n" +
+      (lang === "ru" ? "Название: " : "Name: ") +
+      (lang === "ru" ? spec.name_ru : spec.name_en);
+
+    const saveBtn = lang === "ru" ? "✅ Сохранить" : "✅ Save";
+    const cancelBtn = lang === "ru" ? "❌ Отменить" : "❌ Cancel";
+    const reworkBtn = lang === "ru" ? "🔄 Переделать" : "🔄 Rework";
+    const keyboard = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: saveBtn, callback_data: "pack_admin_pack_save" }, { text: cancelBtn, callback_data: "pack_admin_pack_cancel" }],
+          [{ text: reworkBtn, callback_data: "pack_admin_pack_rework" }],
+        ],
+      },
+    };
+
+    if (statusMsg?.message_id && ctx.chat?.id) {
+      await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, summary, keyboard).catch(() => ctx.reply(summary, keyboard));
+    } else {
+      await ctx.reply(summary, keyboard);
+    }
+  } catch (err: any) {
+    const msg = (lang === "ru" ? "❌ Ошибка переделки: " : "❌ Rework error: ") + (err?.message || String(err));
+    if (statusMsg?.message_id && ctx.chat?.id) {
+      await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, msg).catch(() => ctx.reply(msg));
+    } else {
+      await ctx.reply(msg);
+    }
+  }
+});
+
 async function updatePackCarouselCard(ctx: any, delta: number) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -5254,18 +5418,49 @@ bot.on("text", async (ctx) => {
       .update({ state: "wait_pack_carousel", is_active: true })
       .eq("id", session.id);
 
-    if (!result.ok) {
+    if (!result.ok && !result.spec) {
       const errText = result.error || "Unknown error";
-      const reasons = (result.criticReasons || []).join("\n• ");
-      const suggestions = (result.criticSuggestions || []).join("\n• ");
-      await ctx.telegram.editMessageText(
-        ctx.chat!.id,
-        (statusMsg as any).message_id,
-        undefined,
-        (lang === "ru" ? "❌ Пак отклонён Critic.\n\n" : "❌ Pack rejected by Critic.\n\n") +
-          (reasons ? `• ${reasons}\n\n` : "") +
-          (suggestions ? (lang === "ru" ? "Предложения: " : "Suggestions: ") + suggestions : "")
-      ).catch(() => ctx.reply(errText));
+      await ctx.telegram.editMessageText(ctx.chat!.id, (statusMsg as any).message_id, undefined, "❌ " + errText).catch(() => ctx.reply("❌ " + errText));
+      return;
+    }
+
+    if (!result.ok && result.criticReasons?.length) {
+      console.log("[pack_admin] Critic rejection (internal):", { reasons: result.criticReasons, suggestions: result.criticSuggestions });
+    }
+
+    // После пайплайна всегда показываем результат админу и три кнопки: Сохранить, Отменить, Переделать.
+    if (result.spec && config.appEnv === "test" && config.adminIds.includes(telegramId)) {
+      await supabase
+        .from("sessions")
+        .update({
+          pending_rejected_pack_spec: result.spec as any,
+          pending_pack_plan: (result.plan ?? null) as any,
+          pending_critic_suggestions: (result.criticSuggestions ?? []) as any,
+        })
+        .eq("id", session.id);
+
+      const summary =
+        (lang === "ru" ? "Пак готов к согласованию.\n\n" : "Pack ready for approval.\n\n") +
+        (result.ok
+          ? (lang === "ru" ? "✅ Critic одобрил.\n\n" : "✅ Critic approved.\n\n")
+          : (lang === "ru" ? "⚠️ Critic не одобрил (можно сохранить или переделать).\n\n" : "⚠️ Critic did not approve (you can save or rework).\n\n")) +
+        (lang === "ru" ? "ID: " : "ID: ") +
+        result.spec.id +
+        "\n" +
+        (lang === "ru" ? "Название: " : "Name: ") +
+        (lang === "ru" ? result.spec.name_ru : result.spec.name_en);
+
+      const saveBtn = lang === "ru" ? "✅ Сохранить" : "✅ Save";
+      const cancelBtn = lang === "ru" ? "❌ Отменить" : "❌ Cancel";
+      const reworkBtn = lang === "ru" ? "🔄 Переделать" : "🔄 Rework";
+      await ctx.telegram.editMessageText(ctx.chat!.id, (statusMsg as any).message_id, undefined, summary, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: saveBtn, callback_data: "pack_admin_pack_save" }, { text: cancelBtn, callback_data: "pack_admin_pack_cancel" }],
+            [{ text: reworkBtn, callback_data: "pack_admin_pack_rework" }],
+          ],
+        },
+      }).catch(() => ctx.reply(summary));
       return;
     }
 
