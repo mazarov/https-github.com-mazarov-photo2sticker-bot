@@ -141,7 +141,7 @@ async function openAiChatJson<T>(
         { role: "user", content: userMessage },
       ],
       response_format: { type: "json_object" },
-      max_tokens: options?.maxTokens ?? 4096,
+      max_completion_tokens: options?.maxTokens ?? 4096,
       temperature: options?.temperature ?? 0.7,
     },
     {
