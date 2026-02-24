@@ -46,6 +46,11 @@ import {
   reactivateAssistantSession,
   type AssistantSessionRow,
 } from "./lib/assistant-db";
+import {
+  runPackGenerationPipeline,
+  subjectTypeFromSession,
+  type PackSpecRow,
+} from "./lib/pack-multiagent";
 
 const bot = new Telegraf(config.telegramBotToken, {
   handlerTimeout: 180_000, // 3 min — pack ideas generation with GPT-4o vision can be slow
@@ -152,9 +157,41 @@ async function getActivePackContentSets(): Promise<any[]> {
   return rows;
 }
 
+function clearPackContentSetsCache(): void {
+  packContentSetsCache = null;
+}
+
+/** Ensure pack id is unique in pack_content_sets_test; append _v2, _v3 if needed. */
+async function ensureUniquePackId(spec: PackSpecRow): Promise<PackSpecRow> {
+  let candidate = spec.id;
+  for (let i = 0; i < 20; i++) {
+    const { data } = await supabase
+      .from(config.packContentSetsTable)
+      .select("id")
+      .eq("id", candidate)
+      .maybeSingle();
+    if (!data) return { ...spec, id: candidate };
+    candidate = `${spec.id}_v${i + 2}`;
+  }
+  return { ...spec, id: candidate };
+}
+
 function getPackContentSetsForTemplate(contentSets: any[], templateId: string): any[] {
   if (!Array.isArray(contentSets)) return [];
   return contentSets.filter((set) => String(set?.pack_template_id || "") === String(templateId));
+}
+
+/** Admin-only row for "Сгенерировать пак" (test bot only). */
+function getPackCarouselAdminRow(telegramId: number): { text: string; callback_data: string }[] {
+  const isTest = config.appEnv === "test";
+  const isAdmin = config.adminIds.includes(telegramId);
+  if (!isTest || !isAdmin) {
+    if (isTest) {
+      console.log("[pack_carousel] Admin button hidden: telegramId=" + telegramId + " not in adminIds (length=" + config.adminIds.length + ")");
+    }
+    return [];
+  }
+  return [{ text: "🛠 Сгенерировать пак", callback_data: "pack_admin_generate" }];
 }
 
 interface StylePreset {
@@ -1911,6 +1948,7 @@ const SESSION_FALLBACK_ACTIVE_STATES = [
   "wait_pack_photo",
   "wait_pack_carousel",
   "wait_pack_preview_payment",
+  "wait_pack_generate_request",
   "wait_pack_approval",
   "generating_pack_preview",
   "processing_pack",
@@ -2975,6 +3013,7 @@ bot.on("photo", async (ctx) => {
     "wait_pack_photo",
     "wait_pack_carousel",
     "wait_pack_preview_payment",
+    "wait_pack_generate_request",
     "wait_pack_approval",
     "generating_pack_preview",
     "processing_pack",
@@ -3704,6 +3743,7 @@ async function handlePackMenuEntry(
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const adminRow = getPackCarouselAdminRow(telegramId);
   const keyboard = {
     inline_keyboard: [
       [
@@ -3712,6 +3752,7 @@ async function handlePackMenuEntry(
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+      ...(adminRow.length ? [adminRow] : []),
     ],
   };
   let msg: any = null;
@@ -3920,6 +3961,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const adminRow = getPackCarouselAdminRow(telegramId);
   const keyboard = {
     inline_keyboard: [
       [
@@ -3928,6 +3970,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+      ...(adminRow.length ? [adminRow] : []),
     ],
   };
   await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
@@ -3953,6 +3996,33 @@ bot.action("pack_carousel_next", async (ctx) => {
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
   safeAnswerCbQuery(ctx, isRu ? "↪️ Листаю наборы..." : "↪️ Switching sets...");
   await updatePackCarouselCard(ctx, 1);
+});
+
+// Admin-only (test bot): start pack generation flow — ask for theme
+bot.action("pack_admin_generate", async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  const session = await getPackFlowSession(user.id);
+  if (!session?.id) {
+    await ctx.reply(lang === "ru" ? "Нет активной сессии пака." : "No active pack session.");
+    return;
+  }
+
+  await supabase
+    .from("sessions")
+    .update({ state: "wait_pack_generate_request", is_active: true })
+    .eq("id", session.id);
+
+  await ctx.reply(
+    lang === "ru"
+      ? "Введите тему пака одной фразой (например: офисный юмор, 23 февраля Z стиль). Контекст фото берётся из текущей сессии."
+      : "Enter the pack theme in one phrase (e.g. office humor, Feb 23 Z style). Photo context is taken from the current session."
+  );
 });
 
 async function updatePackCarouselCard(ctx: any, delta: number) {
@@ -3992,6 +4062,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const adminRow = getPackCarouselAdminRow(telegramId);
   const keyboard = {
     inline_keyboard: [
       [
@@ -4000,6 +4071,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+      ...(adminRow.length ? [adminRow] : []),
     ],
   };
   try {
@@ -4041,6 +4113,7 @@ async function renderPackCarouselForSession(
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const adminRow = getPackCarouselAdminRow((ctx.from as any)?.id ?? 0);
   const keyboard = {
     inline_keyboard: [
       [
@@ -4049,6 +4122,7 @@ async function renderPackCarouselForSession(
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+      ...(adminRow.length ? [adminRow] : []),
     ],
   };
 
@@ -5092,6 +5166,89 @@ bot.on("text", async (ctx) => {
   const session = await getActiveSession(user.id);
   if (!session?.id) {
     await ctx.reply(await getText(lang, "start.need_start"));
+    return;
+  }
+
+  // === Admin pack generation: theme text → run pipeline → insert (test bot only) ===
+  if (
+    session.state === "wait_pack_generate_request" &&
+    config.appEnv === "test" &&
+    config.adminIds.includes(telegramId)
+  ) {
+    const request = ctx.message.text?.trim() || "";
+    if (!request) {
+      await ctx.reply(lang === "ru" ? "Введите тему одной фразой." : "Enter the theme in one phrase.");
+      return;
+    }
+
+    const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Генерирую пак (Concept → Boss → Captions → Scenes → Critic)…" : "⏳ Generating pack (Concept → Boss → Captions → Scenes → Critic)…");
+
+    const subjectType = subjectTypeFromSession(session);
+    const result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2 });
+
+    await supabase
+      .from("sessions")
+      .update({ state: "wait_pack_carousel", is_active: true })
+      .eq("id", session.id);
+
+    if (!result.ok) {
+      const errText = result.error || "Unknown error";
+      const reasons = (result.criticReasons || []).join("\n• ");
+      const suggestions = (result.criticSuggestions || []).join("\n• ");
+      await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        (statusMsg as any).message_id,
+        undefined,
+        (lang === "ru" ? "❌ Пак отклонён Critic.\n\n" : "❌ Pack rejected by Critic.\n\n") +
+          (reasons ? `• ${reasons}\n\n` : "") +
+          (suggestions ? (lang === "ru" ? "Предложения: " : "Suggestions: ") + suggestions : "")
+      ).catch(() => ctx.reply(errText));
+      return;
+    }
+
+    if (!result.spec) {
+      await ctx.telegram.editMessageText(ctx.chat!.id, (statusMsg as any).message_id, undefined, "❌ No spec returned.").catch(() => {});
+      return;
+    }
+
+    const spec = await ensureUniquePackId(result.spec);
+
+    const { error: insertErr } = await supabase.from(config.packContentSetsTable).insert({
+      id: spec.id,
+      pack_template_id: spec.pack_template_id,
+      name_ru: spec.name_ru,
+      name_en: spec.name_en,
+      carousel_description_ru: spec.carousel_description_ru,
+      carousel_description_en: spec.carousel_description_en,
+      labels: spec.labels,
+      labels_en: spec.labels_en,
+      scene_descriptions: spec.scene_descriptions,
+      sort_order: spec.sort_order,
+      is_active: spec.is_active,
+      mood: spec.mood,
+      sticker_count: spec.sticker_count,
+      subject_mode: spec.subject_mode,
+      cluster: spec.cluster,
+      segment_id: spec.segment_id,
+    });
+
+    if (insertErr) {
+      await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        (statusMsg as any).message_id,
+        undefined,
+        (lang === "ru" ? "❌ Ошибка записи в БД: " : "❌ DB insert error: ") + insertErr.message
+      ).catch(() => {});
+      return;
+    }
+
+    clearPackContentSetsCache();
+
+    const successText =
+      (lang === "ru" ? "✅ Пак сохранён: " : "✅ Pack saved: ") +
+      spec.id +
+      (spec.id !== result.spec!.id ? ` (уникальный id: был ${result.spec!.id})` : "");
+    await ctx.telegram.editMessageText(ctx.chat!.id, (statusMsg as any).message_id, undefined, successText).catch(() => ctx.reply(successText));
     return;
   }
 
@@ -11388,6 +11545,7 @@ const server = app.listen(config.port, () => {
   } else {
     console.log("[Config] Alert channel: configured");
   }
+  console.log("[Config] APP_ENV=" + config.appEnv + " pack_admin_button=" + (config.appEnv === "test" && config.adminIds.length > 0 ? "available (adminIds=" + config.adminIds.length + ")" : "hidden"));
 });
 
 // ============================================
