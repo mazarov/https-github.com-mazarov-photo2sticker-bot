@@ -232,6 +232,31 @@ function formatCriticBlock(reasons: string[] | undefined, suggestions: string[] 
   return out.length > 3500 ? out.slice(0, 3497) + "…" : out;
 }
 
+/** Форматирует подписи и сцены пака для показа админу на языке пользователя (isRu → только RU подписи, иначе только EN). Лимит ~2500 символов. */
+function formatPackSpecPreview(
+  spec: { labels?: string[]; labels_en?: string[]; scene_descriptions?: string[] },
+  isRu: boolean,
+  maxLen: number = 2400
+): string {
+  const lines: string[] = [];
+  const labels = Array.isArray(spec.labels) ? spec.labels : [];
+  const labelsEn = Array.isArray(spec.labels_en) ? spec.labels_en : [];
+  const scenes = Array.isArray(spec.scene_descriptions) ? spec.scene_descriptions : [];
+  const captions = isRu ? labels : labelsEn;
+  if (captions.length) {
+    lines.push(isRu ? "Подписи:" : "Labels:");
+    captions.forEach((l, i) => lines.push(`${i + 1}. ${l}`));
+  }
+  if (scenes.length) {
+    if (lines.length) lines.push("");
+    lines.push(isRu ? "Сцены:" : "Scenes:");
+    scenes.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
+  }
+  const out = lines.length ? "\n\n" + lines.join("\n") : "";
+  if (out.length > maxLen) return out.slice(0, maxLen - 1) + "…";
+  return out;
+}
+
 interface StylePreset {
   id: string;
   name_ru: string;
@@ -4239,7 +4264,7 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
       })
       .eq("id", session.id);
 
-    const summary =
+    const summaryRaw =
       (lang === "ru" ? "Пак после переделки.\n\n" : "Pack after rework.\n\n") +
       (critic.pass
         ? (lang === "ru" ? "✅ Critic одобрил.\n\n" : "✅ Critic approved.\n\n")
@@ -4251,7 +4276,9 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
       "\n" +
       (lang === "ru" ? "Название: " : "Name: ") +
       (lang === "ru" ? spec.name_ru : spec.name_en) +
+      formatPackSpecPreview(spec, lang === "ru") +
       (critic.pass ? "" : formatCriticBlock(critic.reasons, critic.suggestions, lang === "ru"));
+    const summary = summaryRaw.length > 4090 ? summaryRaw.slice(0, 4087) + "…" : summaryRaw;
 
     const saveBtn = lang === "ru" ? "✅ Сохранить" : "✅ Save";
     const cancelBtn = lang === "ru" ? "❌ Отменить" : "❌ Cancel";
@@ -5490,7 +5517,7 @@ bot.on("text", async (ctx) => {
         })
         .eq("id", session.id);
 
-      const summary =
+      const summaryRaw =
         (lang === "ru" ? "Пак готов к согласованию.\n\n" : "Pack ready for approval.\n\n") +
         (result.ok
           ? (lang === "ru" ? "✅ Critic одобрил.\n\n" : "✅ Critic approved.\n\n")
@@ -5502,7 +5529,9 @@ bot.on("text", async (ctx) => {
         "\n" +
         (lang === "ru" ? "Название: " : "Name: ") +
         (lang === "ru" ? result.spec.name_ru : result.spec.name_en) +
+        formatPackSpecPreview(result.spec, lang === "ru") +
         formatCriticBlock(result.criticReasons, result.criticSuggestions, lang === "ru");
+      const summary = summaryRaw.length > 4090 ? summaryRaw.slice(0, 4087) + "…" : summaryRaw;
 
       const saveBtn = lang === "ru" ? "✅ Сохранить" : "✅ Save";
       const cancelBtn = lang === "ru" ? "❌ Отменить" : "❌ Cancel";
