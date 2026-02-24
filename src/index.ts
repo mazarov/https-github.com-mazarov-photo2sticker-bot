@@ -4227,7 +4227,8 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
   ).catch(() => null);
 
   try {
-    const { spec, critic } = await reworkOneIteration(reworkPlan, suggestions);
+    const previousSpec = (session.pending_rejected_pack_spec as PackSpecRow | null) ?? null;
+    const { spec, critic } = await reworkOneIteration(reworkPlan, suggestions, previousSpec);
 
     await supabase
       .from("sessions")

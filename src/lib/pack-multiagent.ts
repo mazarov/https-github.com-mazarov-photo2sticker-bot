@@ -200,11 +200,32 @@ Rules:
 - Captions = inner thoughts / internal comment, not emotion labels. Not "Happy" but "Love that for me.", "Of course.", "We move."
 - Short, natural in chat, in the plan's tone. Order strictly by moments[0]..moments[8].`;
 
-async function runCaptions(plan: BossPlan, criticSuggestions?: string[]): Promise<CaptionsOutput> {
+export interface CriticFeedbackContext {
+  suggestions: string[];
+  reasons?: string[];
+  previousSpec?: PackSpecRow;
+}
+
+async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContext): Promise<CaptionsOutput> {
   const model = await getModelForAgent("captions");
   let userMessage = `Plan:\n${JSON.stringify(plan, null, 2)}\n\nOutput labels and labels_en as JSON.`;
-  if (criticSuggestions?.length) {
-    userMessage += `\n\nCritic feedback (apply these fixes):\n${criticSuggestions.join("\n")}`;
+  if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
+    const parts: string[] = [];
+    if (criticFeedback.reasons?.length) {
+      parts.push("Critic reasons (what was wrong):\n" + criticFeedback.reasons.join("\n"));
+    }
+    if (criticFeedback.previousSpec && (criticFeedback.previousSpec.labels?.length || criticFeedback.previousSpec.labels_en?.length)) {
+      parts.push(
+        "Previous version (rejected — improve this):\nlabels (RU): " +
+          JSON.stringify(criticFeedback.previousSpec.labels) +
+          "\nlabels_en (EN): " +
+          JSON.stringify(criticFeedback.previousSpec.labels_en)
+      );
+    }
+    if (criticFeedback.suggestions?.length) {
+      parts.push("Critic suggestions (apply these fixes):\n" + criticFeedback.suggestions.join("\n"));
+    }
+    userMessage += "\n\n" + parts.join("\n\n");
   }
   return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage);
 }
@@ -223,12 +244,24 @@ Rules:
 async function runScenes(
   plan: BossPlan,
   captions: CaptionsOutput,
-  criticSuggestions?: string[]
+  criticFeedback?: CriticFeedbackContext
 ): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
   let userMessage = `Plan:\n${JSON.stringify(plan, null, 2)}\n\nLabels (RU): ${JSON.stringify(captions.labels)}\nLabels (EN): ${JSON.stringify(captions.labels_en)}\n\nOutput scene_descriptions as JSON.`;
-  if (criticSuggestions?.length) {
-    userMessage += `\n\nCritic feedback (apply these fixes):\n${criticSuggestions.join("\n")}`;
+  if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
+    const parts: string[] = [];
+    if (criticFeedback.reasons?.length) {
+      parts.push("Critic reasons (what was wrong):\n" + criticFeedback.reasons.join("\n"));
+    }
+    if (criticFeedback.previousSpec?.scene_descriptions?.length) {
+      parts.push(
+        "Previous version (rejected — improve this):\nscene_descriptions: " + JSON.stringify(criticFeedback.previousSpec.scene_descriptions)
+      );
+    }
+    if (criticFeedback.suggestions?.length) {
+      parts.push("Critic suggestions (apply these fixes):\n" + criticFeedback.suggestions.join("\n"));
+    }
+    userMessage += "\n\n" + parts.join("\n\n");
   }
   return openAiChatJson<ScenesOutput>(model, SCENES_SYSTEM, userMessage);
 }
@@ -325,8 +358,13 @@ export async function runPackGenerationPipeline(
           plan,
         };
       }
-      captions = await runCaptions(plan, critic.suggestions);
-      scenes = await runScenes(plan, captions, critic.suggestions);
+      const criticContext: CriticFeedbackContext = {
+        suggestions: critic.suggestions ?? [],
+        reasons: critic.reasons,
+        previousSpec: spec,
+      };
+      captions = await runCaptions(plan, criticContext);
+      scenes = await runScenes(plan, captions, criticContext);
       spec = assembleSpec(plan, captions, scenes);
     }
 
@@ -339,15 +377,22 @@ export async function runPackGenerationPipeline(
 }
 
 /**
- * One rework iteration: Captions(plan, suggestions) → Scenes → Assembly → Critic.
+ * One rework iteration: Captions(plan, suggestions, previousSpec) → Scenes → Assembly → Critic.
  * Used when admin taps "Переделать" to iterate without re-running Concept/Boss.
+ * Agents receive previous context: reasons/suggestions and the rejected spec (labels, scene_descriptions).
  */
 export async function reworkOneIteration(
   plan: BossPlan,
-  suggestions: string[]
+  suggestions: string[],
+  previousSpec?: PackSpecRow | null
 ): Promise<{ spec: PackSpecRow; critic: CriticOutput }> {
-  const captions = await runCaptions(plan, suggestions.length ? suggestions : undefined);
-  const scenes = await runScenes(plan, captions, suggestions.length ? suggestions : undefined);
+  const criticContext: CriticFeedbackContext = {
+    suggestions: suggestions?.length ? suggestions : [],
+    previousSpec: previousSpec ?? undefined,
+  };
+  const hasContext = criticContext.suggestions.length > 0 || !!criticContext.previousSpec;
+  const captions = await runCaptions(plan, hasContext ? criticContext : undefined);
+  const scenes = await runScenes(plan, captions, hasContext ? criticContext : undefined);
   const spec = assembleSpec(plan, captions, scenes);
   const critic = await runCritic(spec);
   console.log("[pack-multiagent] Rework Critic pass:", critic.pass, "reasons:", critic.reasons, "suggestions:", critic.suggestions);
