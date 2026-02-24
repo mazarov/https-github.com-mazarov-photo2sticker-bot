@@ -49,6 +49,7 @@ import {
 import {
   runPackGenerationPipeline,
   reworkOneIteration,
+  specToMinimalPlan,
   subjectTypeFromSession,
   type PackSpecRow,
   type BossPlan,
@@ -195,6 +196,19 @@ function getPackCarouselAdminRow(telegramId: number, sessionId?: string): { text
   }
   const callbackData = sessionId ? `pack_admin_generate:${sessionId}` : "pack_admin_generate";
   return [{ text: "🛠 Сгенерировать пак", callback_data: callbackData }];
+}
+
+/** Форматирует причины и предложения Critic для показа админу (при отклонении). */
+function formatCriticBlock(reasons: string[] | undefined, suggestions: string[] | undefined, isRu: boolean): string {
+  const parts: string[] = [];
+  if (reasons?.length) {
+    parts.push((isRu ? "Причины отклонения:\n" : "Rejection reasons:\n") + reasons.map((r) => "• " + r).join("\n"));
+  }
+  if (suggestions?.length) {
+    parts.push((isRu ? "Предложения:\n" : "Suggestions:\n") + suggestions.map((s) => "• " + s).join("\n"));
+  }
+  const out = parts.length ? "\n\n" + parts.join("\n\n") : "";
+  return out.length > 3500 ? out.slice(0, 3497) + "…" : out;
 }
 
 interface StylePreset {
@@ -4153,7 +4167,7 @@ bot.action("pack_admin_pack_cancel", async (ctx) => {
   }
 });
 
-// Admin (test bot): Rework — one more Captions → Scenes → Critic iteration, then show approval again
+// Admin (test bot): Rework — передаём фидбек Critic (suggestions) агентам Captions и Scenes, они генерируют заново, затем снова Critic; показываем результат и те же кнопки.
 bot.action("pack_admin_pack_rework", async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -4172,21 +4186,33 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
   const plan = session.pending_pack_plan as BossPlan | null;
   const suggestions: string[] = Array.isArray(session.pending_critic_suggestions) ? session.pending_critic_suggestions : [];
 
-  if (!plan?.id) {
+  let reworkPlan: BossPlan | null = plan?.id ? plan : null;
+  if (!reworkPlan?.id) {
+    const spec = session.pending_rejected_pack_spec as PackSpecRow | null;
+    if (spec?.id) {
+      reworkPlan = specToMinimalPlan(spec);
+    }
+  }
+
+  if (!reworkPlan?.id) {
     await ctx.reply(lang === "ru" ? "Нет плана для переделки. Запустите генерацию заново." : "No plan for rework. Run generation again.");
     return;
   }
 
-  const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Переделываю (Captions → Scenes → Critic)…" : "⏳ Reworking (Captions → Scenes → Critic)…").catch(() => null);
+  const statusMsg = await ctx.reply(
+    lang === "ru"
+      ? "⏳ Передаю фидбек Critic агентам Captions и Scenes, запускаю ещё одну итерацию…"
+      : "⏳ Passing Critic feedback to Captions & Scenes agents, running one more iteration…"
+  ).catch(() => null);
 
   try {
-    const { spec, critic } = await reworkOneIteration(plan, suggestions);
+    const { spec, critic } = await reworkOneIteration(reworkPlan, suggestions);
 
     await supabase
       .from("sessions")
       .update({
         pending_rejected_pack_spec: spec as any,
-        pending_pack_plan: plan as any,
+        pending_pack_plan: reworkPlan as any,
         pending_critic_suggestions: (critic.suggestions ?? []) as any,
       })
       .eq("id", session.id);
@@ -4195,12 +4221,15 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
       (lang === "ru" ? "Пак после переделки.\n\n" : "Pack after rework.\n\n") +
       (critic.pass
         ? (lang === "ru" ? "✅ Critic одобрил.\n\n" : "✅ Critic approved.\n\n")
-        : (lang === "ru" ? "⚠️ Critic не одобрил.\n\n" : "⚠️ Critic did not approve.\n\n")) +
+        : (lang === "ru"
+            ? "⚠️ Critic не одобрил. Ниже — его фидбек для следующей итерации (кнопка «Переделать» отдаст его агентам).\n\n"
+            : "⚠️ Critic did not approve. Below is his feedback for the next iteration (Rework will pass it to the agents).\n\n")) +
       (lang === "ru" ? "ID: " : "ID: ") +
       spec.id +
       "\n" +
       (lang === "ru" ? "Название: " : "Name: ") +
-      (lang === "ru" ? spec.name_ru : spec.name_en);
+      (lang === "ru" ? spec.name_ru : spec.name_en) +
+      (critic.pass ? "" : formatCriticBlock(critic.reasons, critic.suggestions, lang === "ru"));
 
     const saveBtn = lang === "ru" ? "✅ Сохранить" : "✅ Save";
     const cancelBtn = lang === "ru" ? "❌ Отменить" : "❌ Cancel";
@@ -5443,12 +5472,15 @@ bot.on("text", async (ctx) => {
         (lang === "ru" ? "Пак готов к согласованию.\n\n" : "Pack ready for approval.\n\n") +
         (result.ok
           ? (lang === "ru" ? "✅ Critic одобрил.\n\n" : "✅ Critic approved.\n\n")
-          : (lang === "ru" ? "⚠️ Critic не одобрил (можно сохранить или переделать).\n\n" : "⚠️ Critic did not approve (you can save or rework).\n\n")) +
+          : (lang === "ru"
+              ? "⚠️ Critic не одобрил (можно сохранить или переделать: фидбек Critic уйдёт агентам Captions/Scenes, те сгенерируют заново).\n\n"
+              : "⚠️ Critic did not approve (you can save or rework: Critic feedback goes to Captions/Scenes agents for another iteration).\n\n")) +
         (lang === "ru" ? "ID: " : "ID: ") +
         result.spec.id +
         "\n" +
         (lang === "ru" ? "Название: " : "Name: ") +
-        (lang === "ru" ? result.spec.name_ru : result.spec.name_en);
+        (lang === "ru" ? result.spec.name_ru : result.spec.name_en) +
+        formatCriticBlock(result.criticReasons, result.criticSuggestions, lang === "ru");
 
       const saveBtn = lang === "ru" ? "✅ Сохранить" : "✅ Save";
       const cancelBtn = lang === "ru" ? "❌ Отменить" : "❌ Cancel";

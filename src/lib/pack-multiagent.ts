@@ -352,6 +352,27 @@ export async function reworkOneIteration(
   return { spec, critic };
 }
 
+/** Build minimal BossPlan from PackSpecRow when pending_pack_plan was not persisted (e.g. migration 113 not applied). */
+export function specToMinimalPlan(spec: PackSpecRow): BossPlan {
+  return {
+    id: spec.id,
+    pack_template_id: spec.pack_template_id,
+    subject_mode: spec.subject_mode,
+    name_ru: spec.name_ru,
+    name_en: spec.name_en,
+    carousel_description_ru: spec.carousel_description_ru,
+    carousel_description_en: spec.carousel_description_en,
+    mood: spec.mood || "everyday",
+    sort_order: Number(spec.sort_order) || 200,
+    segment_id: spec.segment_id || "home",
+    story_arc: "",
+    tone: "",
+    moments: Array.isArray(spec.labels) && spec.labels.length >= 9
+      ? spec.labels.slice(0, 9)
+      : Array(9).fill("moment"),
+  };
+}
+
 /**
  * Derive SubjectType from session (subject_mode + subject_gender).
  * Use when we have already run subject detection on the user's photo.
