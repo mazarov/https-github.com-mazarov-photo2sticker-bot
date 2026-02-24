@@ -166,17 +166,38 @@ function clearPackContentSetsCache(): void {
 
 /** Ensure pack id is unique in pack_content_sets_test; append _v2, _v3 if needed. */
 async function ensureUniquePackId(spec: PackSpecRow): Promise<PackSpecRow> {
-  let candidate = spec.id;
+  const normalized = normalizeSpecSegmentId(spec);
+  let candidate = normalized.id;
   for (let i = 0; i < 20; i++) {
     const { data } = await supabase
       .from(config.packContentSetsTable)
       .select("id")
       .eq("id", candidate)
       .maybeSingle();
-    if (!data) return { ...spec, id: candidate };
-    candidate = `${spec.id}_v${i + 2}`;
+    if (!data) return { ...normalized, id: candidate };
+    candidate = `${normalized.id}_v${i + 2}`;
   }
-  return { ...spec, id: candidate };
+  return { ...normalized, id: candidate };
+}
+
+/** Valid segment_id values (FK pack_segments). Boss/LLM may return other strings — normalize to avoid insert error. */
+const VALID_PACK_SEGMENT_IDS = new Set([
+  "reactions",
+  "sarcasm",
+  "home",
+  "events",
+  "affection_support",
+  "after_dark",
+  "boundaries",
+]);
+
+function normalizeSpecSegmentId(spec: PackSpecRow): PackSpecRow {
+  const sid = String(spec?.segment_id || "").trim().toLowerCase();
+  const valid = sid && VALID_PACK_SEGMENT_IDS.has(sid) ? sid : "home";
+  if (valid !== (spec.segment_id || "")) {
+    console.log("[pack_admin] segment_id normalized:", spec.segment_id, "->", valid);
+  }
+  return { ...spec, segment_id: valid };
 }
 
 function getPackContentSetsForTemplate(contentSets: any[], templateId: string): any[] {

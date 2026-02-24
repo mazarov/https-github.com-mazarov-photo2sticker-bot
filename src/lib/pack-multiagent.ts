@@ -311,6 +311,7 @@ export async function runPackGenerationPipeline(
 
     for (let iter = 0; iter < maxIterations; iter++) {
       const critic = await runCritic(spec);
+      console.log("[pack-multiagent] Critic iteration", iter + 1, "pass:", critic.pass, "reasons:", critic.reasons, "suggestions:", critic.suggestions);
       if (critic.pass) {
         return { ok: true, spec, plan, packId: spec.id };
       }
@@ -349,6 +350,7 @@ export async function reworkOneIteration(
   const scenes = await runScenes(plan, captions, suggestions.length ? suggestions : undefined);
   const spec = assembleSpec(plan, captions, scenes);
   const critic = await runCritic(spec);
+  console.log("[pack-multiagent] Rework Critic pass:", critic.pass, "reasons:", critic.reasons, "suggestions:", critic.suggestions);
   return { spec, critic };
 }
 
