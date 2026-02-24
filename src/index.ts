@@ -2133,13 +2133,16 @@ async function rejectSessionEvent(
 
 async function getSessionByIdForUser(userId: string, sessionId?: string | null) {
   if (!sessionId) return null;
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("sessions")
     .select("*")
     .eq("id", sessionId)
     .eq("user_id", userId)
     .eq("env", config.appEnv)
     .maybeSingle();
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'index.ts:getSessionByIdForUser',message:'getSessionByIdForUser result',data:{hypothesisId:'B_D',sessionId,userId,appEnv:config.appEnv,dataId:data?.id,dataUserId:data?.user_id,dataEnv:data?.env,dataState:data?.state,error:error?.message},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   return data;
 }
 
@@ -4011,10 +4014,17 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   const rawPayload = ctx.match?.[1] ?? null;
   const explicitSessionId = typeof rawPayload === "string" && rawPayload.length > 0 ? rawPayload.trim() : null;
 
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'index.ts:pack_admin_generate',message:'pack_admin_generate entry',data:{hypothesisId:'A_C',telegramId,userId:user.id,explicitSessionId,appEnv:config.appEnv,callbackData:(ctx.callbackQuery as any)?.data},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
   let session: any = null;
   let reasonCode: "session_not_found" | "wrong_state" | undefined;
   if (explicitSessionId) {
     const byId = await getSessionByIdForUser(user.id, explicitSessionId);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'index.ts:pack_admin_generate',message:'after getSessionByIdForUser',data:{hypothesisId:'A_E',byIdFound:!!byId,byIdId:byId?.id,byIdUserId:byId?.user_id,byIdEnv:byId?.env,byIdState:byId?.state,reasonCode},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (byId?.id && byId.env === config.appEnv && byId.state === "wait_pack_carousel") {
       session = byId;
     } else if (byId?.id) {
@@ -4038,10 +4048,15 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
     .update({ is_active: false })
     .eq("user_id", user.id)
     .eq("env", config.appEnv);
-  await supabase
+  const { error: updateErr } = await supabase
     .from("sessions")
     .update({ state: "wait_pack_generate_request", is_active: true })
     .eq("id", session.id);
+  if (updateErr) {
+    console.warn("[pack_admin_generate] Failed to set wait_pack_generate_request:", updateErr.message, "sessionId:", session.id);
+    await ctx.reply(lang === "ru" ? "Не удалось обновить сессию. Нажми «Сгенерировать пак» ещё раз." : "Failed to update session. Tap «Сгенерировать пак» again.");
+    return;
+  }
 
   await ctx.reply(
     lang === "ru"
@@ -5204,6 +5219,12 @@ bot.on("text", async (ctx) => {
       if (packSession?.id) {
         session = packSession;
       }
+      if (!session?.id) {
+        const packFlow = await getPackFlowSession(user.id);
+        if (packFlow?.id && packFlow.state === "wait_pack_carousel") {
+          session = packFlow;
+        }
+      }
     }
   }
   if (!session?.id) {
@@ -5212,11 +5233,11 @@ bot.on("text", async (ctx) => {
   }
 
   // === Admin pack generation: theme text → run pipeline → insert (test bot only) ===
-  if (
-    session.state === "wait_pack_generate_request" &&
+  const isAdminPackThemeRequest =
     config.appEnv === "test" &&
-    config.adminIds.includes(telegramId)
-  ) {
+    config.adminIds.includes(telegramId) &&
+    (session.state === "wait_pack_generate_request" || session.state === "wait_pack_carousel");
+  if (isAdminPackThemeRequest) {
     const request = ctx.message.text?.trim() || "";
     if (!request) {
       await ctx.reply(lang === "ru" ? "Введите тему одной фразой." : "Enter the theme in one phrase.");
