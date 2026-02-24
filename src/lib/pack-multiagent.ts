@@ -197,8 +197,10 @@ const CAPTIONS_SYSTEM = `You are a caption writer for sticker packs. Given a pac
 Output strict JSON with keys: labels (array of 9 strings, RU), labels_en (array of 9 strings, EN).
 
 Rules:
-- Captions = inner thoughts / internal comment, not emotion labels. Not "Happy" but "Love that for me.", "Of course.", "We move."
-- Short, natural in chat, in the plan's tone. Order strictly by moments[0]..moments[8].`;
+- Captions = what the SENDER would write in a chat as their own message. Inner thought / reaction, NOT a description of what the character is doing.
+- FORBIDDEN: narration, status updates, stage directions (e.g. "Recording...", "Докладываю...", "Reactions received.", "Записываю на нейтральном фоне"). If it reads like a script or report, it is wrong.
+- REQUIRED: short, chat-ready lines the user would send as a sticker (e.g. "Love that for me.", "Of course.", "С 23-м. Держись."). At least 1–2 lines must be punchy, quotable "hook" lines people would forward.
+- Order strictly by moments[0]..moments[8]. Tone from the plan, but always first-person sendable.`;
 
 export interface CriticFeedbackContext {
   suggestions: string[];
@@ -211,6 +213,7 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
   let userMessage = `Plan:\n${JSON.stringify(plan, null, 2)}\n\nOutput labels and labels_en as JSON.`;
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
+    parts.push("CRITICAL: Write only what the sender would send in a chat as a sticker. No narration, no description of actions (e.g. no 'докладываю', 'записываю', 'reactions received').");
     if (criticFeedback.reasons?.length) {
       parts.push("Critic reasons (what was wrong):\n" + criticFeedback.reasons.join("\n"));
     }
