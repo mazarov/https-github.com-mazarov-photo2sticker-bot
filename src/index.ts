@@ -3999,7 +3999,7 @@ bot.action("pack_carousel_next", async (ctx) => {
   await updatePackCarouselCard(ctx, 1);
 });
 
-// Admin-only (test bot): start pack generation flow — ask for theme. Session from callback_data or resolvePackSessionForEvent.
+// Admin-only (test bot): start pack generation flow — ask for theme. When session id is in callback, load by id (no state filter) to avoid RLS/timing issues.
 bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -4010,14 +4010,26 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
   const rawPayload = ctx.match?.[1] ?? null;
   const explicitSessionId = typeof rawPayload === "string" && rawPayload.length > 0 ? rawPayload.trim() : null;
-  const { session, reasonCode } = await resolvePackSessionForEvent(
-    user.id,
-    ["wait_pack_carousel"],
-    explicitSessionId
-  );
-  if (!session?.id || reasonCode === "wrong_state") {
-    await rejectPackEvent(ctx, lang, "pack_admin_generate", reasonCode || "session_not_found");
-    return;
+
+  let session: any = null;
+  let reasonCode: "session_not_found" | "wrong_state" | undefined;
+  if (explicitSessionId) {
+    const byId = await getSessionByIdForUser(user.id, explicitSessionId);
+    if (byId?.id && byId.env === config.appEnv && byId.state === "wait_pack_carousel") {
+      session = byId;
+    } else if (byId?.id) {
+      reasonCode = "wrong_state";
+    } else {
+      reasonCode = "session_not_found";
+    }
+  }
+  if (!session) {
+    const resolved = await resolvePackSessionForEvent(user.id, ["wait_pack_carousel"], explicitSessionId);
+    session = resolved.session;
+    if (!session?.id || resolved.reasonCode === "wrong_state") {
+      await rejectPackEvent(ctx, lang, "pack_admin_generate", reasonCode || resolved.reasonCode || "session_not_found");
+      return;
+    }
   }
 
   // One active session per user — deactivate others so getActiveSession() returns this one when user sends theme.
