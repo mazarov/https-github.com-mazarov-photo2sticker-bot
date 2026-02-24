@@ -656,6 +656,8 @@ Each cell = ONE image with a DISTINCT pose/emotion from the list below. Every ce
 Scenes (one per cell, left-to-right, top-to-bottom):
 ${sceneList}
 
+GAZE DIRECTION (MANDATORY): Each scene description may specify where the character is looking (e.g. "gaze at camera", "direct gaze at camera", "looking down", "eyes to the left"). You MUST follow the gaze direction specified in each scene. If a scene says "gaze at camera" or "eyes open, direct gaze at camera", that cell MUST show the character looking directly at the viewer/camera — do not substitute averted or downcast gaze. If a scene says "eyes closed", only that cell may have closed eyes. This is critical for sticker pack engagement.
+
 ${sceneCardinalityGuard ? `${sceneCardinalityGuard}\n` : ""}
 
 CRITICAL RULES FOR THE GRID:
