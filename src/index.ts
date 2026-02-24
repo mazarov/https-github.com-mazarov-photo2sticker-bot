@@ -895,14 +895,11 @@ async function sendProgressStart(ctx: any, sessionId: string, lang: string) {
   }
 }
 
-// Instruct model to preserve distinctive facial features that make the person recognizable (freckles, moles, eye color)
-const LIKENESS_SUFFIX = `\n\nLIKENESS — Preserve the person's recognizable identity from the reference image:
-- Preserve and clearly show distinctive facial features: freckles, moles, beauty marks, birthmarks. If visible in the reference, they must appear in the output.
-- Eye color MUST match the reference exactly (same hue and intensity).
-- Preserve face shape, skin tone, and any other details that make the person identifiable to those who know them.`;
-
 // Shared composition/background rules — same for single sticker and pack (unified prompt flow)
-const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. The COMPLETE character (including all limbs, hands, fingers, elbows, hair) must be fully visible with nothing cropped by image edges.\n3. Leave at least 15% empty space on EVERY side of the character.\n4. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
+const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
+
+// Pack only: composition without magenta, 15%, and full-visibility rule (all in CRITICAL RULES FOR THE GRID in worker).
+const COMPOSITION_SUFFIX_PACK = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
 
 function getMimeTypeByTelegramPath(filePath: string): string {
   if (filePath.endsWith(".webp")) return "image/webp";
@@ -1172,7 +1169,7 @@ async function startGeneration(
   const creditsNeeded = 1;
 
   options.promptFinal = await applySubjectLockToPrompt(session, options.generationType, options.promptFinal);
-  options.promptFinal = options.promptFinal + LIKENESS_SUFFIX + COMPOSITION_SUFFIX;
+  options.promptFinal = options.promptFinal + COMPOSITION_SUFFIX;
 
   console.log("=== startGeneration ===");
   console.log("user.id:", user?.id);
@@ -1975,7 +1972,6 @@ Subject: Analyze the provided photo.
 Recreate in a NEW dynamic sticker-friendly pose matching the emotion and pose above.
 Do NOT copy the original photo's pose, angle, or composition.
 Preserve recognizable facial features, hairstyle, and clothing style for every person.
-Preserve distinctive details that make the person identifiable: freckles, moles, beauty marks, birthmarks; eye color MUST match the reference exactly.
 Include only what the person(s) are wearing — no background objects or scenery from the photo.
 
 Composition: Head, shoulders, and upper body visible with generous padding on all sides.
@@ -4661,20 +4657,15 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     }
   };
 
-  // Same prompt as single sticker: agent + composition suffix (unified flow)
+  // Same prompt as single sticker: for pack we omit style at start (style only in GRID rule 0 in worker); keep subject lock + COMPOSITION. LIKENESS only in worker GRID p.6.
   let packPromptFinal: string | null = null;
   let packStyleUserInput: string | null = null;
   if (session.selected_style_id) {
     const preset = await getStylePresetV2ById(session.selected_style_id);
     if (preset?.prompt_hint) {
       packStyleUserInput = preset.prompt_hint;
-      const promptResult = await generatePrompt(packStyleUserInput);
-      const stylePart =
-        promptResult.ok && !promptResult.retry
-          ? (promptResult.prompt || packStyleUserInput)
-          : packStyleUserInput;
-      packPromptFinal = await applySubjectLockToPrompt(session, "style", stylePart);
-      packPromptFinal = packPromptFinal + LIKENESS_SUFFIX + COMPOSITION_SUFFIX;
+      packPromptFinal = await applySubjectLockToPrompt(session, "style", "");
+      packPromptFinal = packPromptFinal + COMPOSITION_SUFFIX_PACK;
     }
   }
 

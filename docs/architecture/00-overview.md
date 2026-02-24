@@ -87,6 +87,11 @@ graph TB
 
 → Подробнее: [04-database.md](./04-database.md)
 
+### Модели и пайплайн паков
+Используемые модели (Gemini, OpenAI), конфигурация через env и app_config, рекомендации по моделям для пайплайна генерации паков при переносе в test-бота.
+
+→ Подробнее: [12-models-and-pack-generation.md](./12-models-and-pack-generation.md)
+
 ### Оплата (Telegram Stars)
 Пакеты кредитов, paywall для новых пользователей, автопродолжение генерации. Офлайн-конверсии в **Яндекс.Метрику** (yclid → оплата) для оптимизации Директа — см. раздел «Яндекс Метрика» в [05-payment.md](./05-payment.md).
 
@@ -113,8 +118,15 @@ src/
     └── supabase.ts          # Supabase клиент
 
 sql/                         # Миграции БД (001-071)
+landing/                     # SEO-лендинг (Next.js) — см. landing/README.md и landing/docs/
 docs/architecture/           # Эта документация
 ```
+
+### Лендинг (`landing/`)
+
+SEO-сайт на Next.js: главная, кластерные страницы (/bot, /telegram, …), каталог стилей. CTA ведёт в бота с UTM и yclid в deep link. Данные: конфиг в коде + Supabase (стили, hero-пресеты, контент-паки).
+
+→ [landing/README.md](../../landing/README.md), [landing/docs/](../../landing/docs/README.md) — документация лендинга.
 
 ## Потоки пользователя (высокоуровневый)
 

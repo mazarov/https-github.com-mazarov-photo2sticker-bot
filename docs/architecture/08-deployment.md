@@ -93,6 +93,7 @@ git checkout feature/xxx
 | `PORT` | `3001` | Порт API |
 | `JOB_POLL_INTERVAL_MS` | `2000` | Интервал поллинга заданий |
 | `ALERT_CHANNEL_ID` | — | Telegram ID канала алертов |
+| `PROD_ALERT_CHANNEL_ID` | — | Только для **test**: если задан, алерты с теста уходят в этот канал (обычно продовый). Иначе используется `ALERT_CHANNEL_ID`. |
 | `SUPPORT_BOT_TOKEN` | — | Токен бота поддержки |
 | `SUPPORT_CHANNEL_ID` | — | ID канала поддержки |
 | `ADMIN_IDS` | — | Telegram ID админов (через запятую) |

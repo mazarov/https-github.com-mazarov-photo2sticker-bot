@@ -20,6 +20,15 @@ export async function getFilePath(fileId: string): Promise<string> {
   return res.data.result.file_path as string;
 }
 
+/** Bot API getStickerSet. name = short name of the set (e.g. from t.me/addstickers/Name). */
+export async function getStickerSet(name: string): Promise<{ name: string; title: string; stickers: { file_id: string }[] }> {
+  const res = await axios.get(`${apiBase}/getStickerSet`, { params: { name } });
+  if (!res.data?.ok) {
+    throw new Error(`Telegram getStickerSet failed: ${JSON.stringify(res.data)}`);
+  }
+  return res.data.result;
+}
+
 export async function downloadFile(filePath: string): Promise<Buffer> {
   const url = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
   const res = await axios.get(url, { responseType: "arraybuffer" });

@@ -8,8 +8,9 @@ alwaysApply: false
 
 ## Общее
 
-Лендинг — **отдельный git submodule** (`landing/`), репо: `https://github.com/mazarov/photo2sticker.git`.
-Коммиты в файлы `landing/` делаются **внутри submodule** (отдельная git-история).
+Лендинг — **отдельный git-репозиторий**, подключённый как submodule (`landing/`), репо: `https://github.com/mazarov/photo2sticker.git`.
+
+**Правило:** все изменения по лендингу (файлы в `landing/`) коммитить и пушить **в субмодуль landing**, а не в корневой репо. После пуша в landing при необходимости обновить ссылку на субмодуль в корне: `git add landing && git commit && git push`.
 
 ## Стек
 

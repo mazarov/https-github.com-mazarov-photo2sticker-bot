@@ -1,27 +1,27 @@
 ---
-description: Полный пайплайн генерации пака — Concept → Boss → Captions → Scenes → сборка (при «сгенерируй пак»)
+description: Full pack generation pipeline — Concept → Boss → Captions → Scenes → assembly (on "generate pack")
 ---
 
-# Pack Generation — полный пайплайн
+# Pack Generation — full pipeline
 
-Когда пользователь просит **сгенерировать пак** (фразы вроде «сгенерируй пак», «pack по запросу», «стикерпак на тему», «сделай пак: офисный юмор») — выполни полный пайплайн **в рамках одного чата**, последовательно играя роли агентов. Используй логику из соответствующих rule-файлов и из `docs/pack-multiagent-requirements.md`.
+When the user asks to **generate a pack** (phrases like "generate pack", "pack on request", "sticker pack on theme", "make a pack: office humor") — run the full pipeline **in one chat**, playing each agent role in sequence. Use the logic from the corresponding rule files and from `docs/pack-multiagent-requirements.md`.
 
-**Повторная генерация той же темы:** если пользователь снова запрашивает ту же тему (напр. уже генерировали «День интроверта» и снова «сгенерируй пак День интроверта»), без дополнительных указаний модель часто выдаёт те же фразы и моменты. Чтобы получить **другой набор подписей и сцен**, пользователь может добавить в запрос: «другой вариант», «новый угол», «другие формулировки», «более ироничный» и т.п. — тогда передай это в Concept (и далее в цепочке), чтобы агенты сознательно варьировали тон, моменты и подписи. Если пользователь не указал вариацию — выполни пайплайн как обычно; в ответе можно кратко напомнить: «Для другого набора фраз в следующий раз добавь в запрос «другой вариант» или «новый угол»».
+**Regenerating the same theme:** If the user requests the same theme again (e.g. already generated "Introvert's day" and again "generate pack Introvert's day"), without extra instructions the model often outputs the same phrases and moments. To get a **different set of captions and scenes**, the user can add to the request: "different take", "new angle", "different wording", "more ironic", etc. — then pass this to Concept (and down the chain) so agents consciously vary tone, moments, and captions. If the user did not specify variation — run the pipeline as usual; in the reply you can briefly remind: "For a different set of phrases next time add 'different take' or 'new angle' to the request."
 
-## Порядок действий
+## Order of steps
 
-1. **Контекст фото.** Если пользователь не указал — уточни или прими subject_type по умолчанию (напр. single) и напиши в ответе, какой контекст использован.
-2. **Concept:** по запросу + контексту фото выдай бриф (JSON: subject_type, setting, persona, tone, timeline=one_day, situation_types, shareability_hook, title_hint). Концепт должен подходить под персонажа(ов) на фото. Правила — как в @pack-concept.mdc.
-3. **Boss:** по брифу выдай план (JSON: id, pack_template_id, subject_mode, name_ru/en, carousel_description_ru/en, mood, sort_order, segment_id, story_arc, tone, day_structure, moments[9]). Правила — как в @pack-boss.mdc.
-4. **Captions:** по плану выдай labels и labels_en (по 9 строк). Правила — как в @pack-captions.mdc.
-5. **Scenes:** по плану и подписям выдай scene_descriptions (9 строк с {subject}). Правила — как в @pack-scenes.mdc.
-6. **Сборка:** собери итог в формат **pack_content_sets** (раздел 1 докa): одна строка со всеми колонками (id, pack_template_id, name_ru, name_en, carousel_description_ru/en, labels, labels_en, scene_descriptions, sort_order, is_active=true, mood, sticker_count=9, subject_mode, cluster=false, segment_id). Выдай в виде таблицы или JSON, готового для вставки в миграцию/БД.
-7. **Опционально:** если пользователь просит проверку — выполни роль Critic (@pack-critic.mdc) и при pass=false предложи итерацию.
+1. **Photo context.** If the user did not specify — clarify or assume default subject_type (e.g. single) and state in the reply which context was used.
+2. **Concept:** from request + photo context output brief (JSON: subject_type, setting, persona, tone, timeline=one_day, situation_types, shareability_hook, title_hint). Concept must fit the character(s) in the photo. Rules — as in @pack-concept.mdc.
+3. **Boss:** from brief output plan (JSON: id, pack_template_id, subject_mode, name_ru/en, carousel_description_ru/en, mood, sort_order, segment_id, story_arc, tone, day_structure, moments[9]). Rules — as in @pack-boss.mdc.
+4. **Captions:** from plan output labels and labels_en (9 strings each). Rules — as in @pack-captions.mdc.
+5. **Scenes:** from plan and captions output scene_descriptions (9 strings with {subject}). Rules — as in @pack-scenes.mdc.
+6. **Assembly:** assemble the result into **pack_content_sets** format (section 1 of doc): one row with all columns (id, pack_template_id, name_ru, name_en, carousel_description_ru/en, labels, labels_en, scene_descriptions, sort_order, is_active=true, mood, sticker_count=9, subject_mode, cluster=false, segment_id). Output as table or JSON ready for migration/DB insert.
+7. **Critic (mandatory):** run the Critic role (@pack-critic.mdc) on the assembled spec. If pass=false — apply suggestions: re-run Captions (and if needed Scenes) with the feedback, then reassemble and run Critic again until pass=true. Do not skip this step.
 
-## Обязательно учитывать
+## Must account for
 
-- **STICKER PACK MASTER SYSTEM** (раздел 5 докa): моменты, не эмоции; 70% интенсивность; без статичных поз; баланс сетки 3×3; подписи = внутренний комментарий; один день, виральность.
-- **Контекст фото** (раздел 0.6): концепт и план под того, кто на фото (single/couple, пол при необходимости).
-- Итоговый формат выхода = схема таблицы `pack_content_sets` (раздел 1).
+- **STICKER PACK MASTER SYSTEM** (section 5 of doc): moments not emotions; 70% intensity; no static poses; 3×3 grid balance; captions = internal comment; one day, virality.
+- **Photo context** (section 0.6): concept and plan for who is in the photo (single/couple, gender if needed).
+- Final output format = `pack_content_sets` table schema (section 1).
 
-Если запрос короткий (напр. «сгенерируй пак: офисный юмор»), выполни все шаги подряд и в конце выдай готовую спеку. Если ответ получается слишком длинным — можно выдать итог компактно (таблица по разделу 1) и предложить по шагам через @pack-concept.mdc → @pack-boss.mdc и т.д. для правок.
+If the request is short (e.g. "generate pack: office humor"), run all steps in a row and at the end output the ready spec. If the reply gets too long — you can output the result compactly (table per section 1) and offer step-by-step edits via @pack-concept.mdc → @pack-boss.mdc etc.

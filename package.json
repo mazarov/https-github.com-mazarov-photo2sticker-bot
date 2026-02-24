@@ -2,6 +2,7 @@
   "name": "photo2sticker-bot-service",
   "version": "1.0.0",
   "private": true,
+  "engines": { "node": ">=20" },
   "scripts": {
     "deploy:test": "bash scripts/deploy-to-test.sh",
     "dev:api": "tsx src/index.ts",
@@ -17,7 +18,18 @@
     "broadcast:packs:test": "DOTENV_CONFIG_PATH=.env tsx src/broadcast-packs.ts --test",
     "retry:yandex-conversions": "tsx scripts/retry-yandex-conversions.ts",
     "retry:yandex-conversions:dry": "tsx scripts/retry-yandex-conversions.ts --dry-run",
-    "fill-sticker-examples:test": "DOTENV_CONFIG_PATH=.env.test tsx scripts/fill-sticker-examples-public-url.ts"
+    "fill-sticker-examples:test": "DOTENV_CONFIG_PATH=.env.test tsx scripts/fill-sticker-examples-public-url.ts",
+    "backfill-stickers-to-storage": "DOTENV_CONFIG_PATH=.env tsx scripts/backfill-stickers-to-storage.ts",
+    "backfill-stickers-to-storage:test": "DOTENV_CONFIG_PATH=.env.test tsx scripts/backfill-stickers-to-storage.ts",
+    "backfill-stickers-to-storage:all": "DOTENV_CONFIG_PATH=.env tsx scripts/backfill-stickers-to-storage.ts && DOTENV_CONFIG_PATH=.env tsx scripts/backfill-stickers-to-storage.ts --from-sessions",
+    "backfill-stickers-to-storage:all:test": "DOTENV_CONFIG_PATH=.env.test tsx scripts/backfill-stickers-to-storage.ts && DOTENV_CONFIG_PATH=.env.test tsx scripts/backfill-stickers-to-storage.ts --from-sessions",
+    "backfill-stickers-to-storage:test:all": "tsx scripts/backfill-stickers-to-storage-test.ts",
+    "set-user-stickers-is-example": "DOTENV_CONFIG_PATH=.env tsx scripts/set-user-stickers-is-example.ts",
+    "fill-public-url-for-examples": "DOTENV_CONFIG_PATH=.env tsx scripts/fill-public-url-for-examples.ts",
+    "fill-public-url-for-examples:test": "DOTENV_CONFIG_PATH=.env.test tsx scripts/fill-public-url-for-examples.ts --env=test",
+    "pull-test-stickers-from-telegram": "tsx scripts/pull-test-stickers-from-telegram.ts",
+    "pull-test-stickers:step1": "DOTENV_CONFIG_PATH=.env.test tsx scripts/pull-test-stickers-step1-sessions.ts",
+    "import-stickers-from-pack": "DOTENV_CONFIG_PATH=.env.test tsx scripts/import-stickers-from-pack-links.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.48.0",

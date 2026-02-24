@@ -239,6 +239,8 @@ const SCENES_SYSTEM = `You are a scene writer for sticker pack image generation.
 
 Output strict JSON with key: scene_descriptions (array of 9 strings).
 
+CRITICAL: scene_descriptions are VISUAL ONLY. Do NOT include any caption text, label text, or quotes in the scene description. Labels (captions) are stored separately and added to the sticker later — they must never appear inside scene_descriptions. Describe only: pose, expression, gaze, background, action. No text, no speech, no written words in the scene.
+
 Each scene: one sentence with placeholder {subject}, chest-up, mid-motion. Format: "{subject} [framing], [body position], [small action] — [moment in one phrase]".
 Rules:
 - Background must be SIMPLE: neutral wall, plain background, soft blur, or single-tone. No busy interiors, detailed furniture, or cluttered environments — the background is removed for stickers, so keep it minimal (e.g. "against neutral wall", "plain background", "soft bokeh").
@@ -276,7 +278,7 @@ const CRITIC_SYSTEM = `You are the quality gate for sticker packs. You must reje
 
 Evaluate the FULL pack spec: both labels (captions) AND scene_descriptions. You must check captions and scenes separately.
 
-Output strict JSON with keys: pass (boolean), reasons (array of strings: what's wrong or what works), suggestions (array of 1-3 concrete improvement strings for the team, e.g. "caption 4 is descriptive, replace with inner thought", "scene 7 missing gaze at camera", "scene 3 has complex background — use plain/neutral").
+Output strict JSON with keys: pass (boolean), reasons (array of strings: what's wrong or what works), suggestions (array of 1-3 concrete improvement strings for the team). Write reasons and suggestions in Russian (на русском языке). Example: "подпись 4 описательная — заменить на внутреннюю реплику", "в сцене 7 нет взгляда в камеру", "в сцене 3 сложный фон — сделать нейтральный".
 
 Reject (pass=false) when:
 - Captions: generic or descriptive (not inner thoughts); too long (max 15–20 characters per label, RU and EN); typos or nonsense; weak virality (no clear share/hook).

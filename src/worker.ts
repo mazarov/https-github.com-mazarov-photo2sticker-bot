@@ -531,11 +531,9 @@ async function runPackPreviewJob(job: any) {
   if (!packSubjectProfile) {
     packSubjectProfile = await ensureSubjectProfileForSource(session, photoFileId, "photo", photoBuffer, photoMime);
   }
-  const subjectLockBlock =
-    lockEnabled && packSubjectProfile ? buildSubjectLockBlock(packSubjectProfile) : "";
-  let styleBlockWithSubject = subjectLockBlock
-    ? appendSubjectLock(styleBlock, subjectLockBlock)
-    : styleBlock;
+  // Pack: one-character rule only in CRITICAL RULES FOR THE GRID; no SUBJECT LOCK block at start.
+  const subjectLockBlock = "";
+  let styleBlockWithSubject = styleBlock;
   // For photo-realistic style: avoid "illustration" so the model outputs a photo, not a drawing
   const isPhotoRealisticStyle =
     session.selected_style_id === "photo_realistic" ||
@@ -636,29 +634,16 @@ async function runPackPreviewJob(job: any) {
   const sceneList = sceneDescriptions
     .map((desc: string, i: number) => `${i + 1}. ${desc}`)
     .join("\n");
-  const sceneCardinalityGuard =
-    subjectModeForPrompt === "single"
-      ? `SUBJECT COUNT ENFORCEMENT:
-- The source contains exactly ONE main person.
-- Every scene MUST depict the same single person only.
-- If a scene description implies a couple or another person ("man and woman", "couple", "both", etc.), reinterpret it as a SOLO action with festive props/facial expression only.
-- Never add a second person, partner, or any prominent secondary character.`
-      : subjectModeForPrompt === "multi"
-        ? `SUBJECT COUNT ENFORCEMENT:
-- Keep the same two main people from source in every scene.
-- Do not add extra people or replace either person.`
-        : "";
   // Pack-only task: grid layout, scenes, format rules. Style + composition = styleBlock (same as single sticker).
   const packTaskBlock = `[TASK — PACK GRID ONLY]
 Create a ${cols}x${rows} grid of images (${stickerCount} cells total).
-Each cell = ONE image with a DISTINCT pose/emotion from the list below. Every cell MUST have visible margins (at least 15% empty space on each side of the character) — no tight cropping; background removal requires this.
+Each cell = ONE image with a DISTINCT pose/emotion from the list below.
 
 Scenes (one per cell, left-to-right, top-to-bottom):
 ${sceneList}
 
 GAZE DIRECTION (MANDATORY): Each scene description may specify where the character is looking (e.g. "gaze at camera", "direct gaze at camera", "looking down", "eyes to the left"). You MUST follow the gaze direction specified in each scene. If a scene says "gaze at camera" or "eyes open, direct gaze at camera", that cell MUST show the character looking directly at the viewer/camera — do not substitute averted or downcast gaze. If a scene says "eyes closed", only that cell may have closed eyes. This is critical for sticker pack engagement.
 
-${sceneCardinalityGuard ? `${sceneCardinalityGuard}\n` : ""}
 
 CRITICAL RULES FOR THE GRID:
 The character(s) must look EXACTLY like the person(s) in the reference photo.
@@ -670,26 +655,8 @@ ${selectedStylePromptHint ? `0. STYLE (apply in every cell): ${selectedStyleProm
 6. LIKENESS: In EVERY cell — EYE COLOR must match the reference EXACTLY (same hue and intensity). Preserve freckles, moles, beauty marks, birthmarks, face shape, skin tone. Do NOT change eye color or omit distinctive features that appear in the reference.
 7. Style must be IDENTICAL across all cells — same art style, proportions, colors.
 8. Do NOT add any text, labels, or captions in the cells. Text will be added programmatically later.
-
-CRITICAL RULES FOR THE GRID — FRAMING & EXPRESSION STANDARD:
-
-FRAMING STANDARD (MANDATORY IN EVERY CELL):
-All characters must be framed CHEST-UP (mid-torso to head). Do NOT use full-body framing unless explicitly required by the pose. The head must occupy approximately 35–45% of the vertical space of the cell. The camera distance must feel slightly closer than natural — intimate but not extreme close-up.
-
-NO EXCESS EMPTY SPACE:
-Do NOT leave excessive "air" above the head. Reduce unnecessary vertical empty space. The subject must visually dominate the frame while still respecting mandatory padding. Avoid distant, catalog-style composition.
-
-NATURAL EXPRESSION ONLY (NO THEATRICAL FACES):
-Expressions must be realistic and subtle. Do NOT exaggerate facial muscles, widen eyes unnaturally, over-stretch lips, or create cartoon-like emotions. Avoid over-posed or staged facial expressions. The emotion must look lived-in, not performed.
-
-EMOTION INTENSITY LIMIT (70% RULE):
-Emotional intensity must stay at approximately 60–70% of maximum. Never push to 100–120% exaggerated emotion. Prefer micro-expressions, restrained smiles, soft eyebrow movement, natural mouth positions, and believable eye engagement.
-
-AUTHENTIC MOMENT OVER POSE:
-The character must appear caught mid-action, not posing for a photo. Avoid static "holding object and smiling" compositions. Every cell should feel like a real moment rather than a staged portrait.
-
-CONSISTENT PROXIMITY ACROSS CELLS:
-Maintain similar camera distance across the entire grid. Do not mix distant shots with tight portraits unless intentionally designed for progression. The grid must feel cohesive in proximity and scale.`;
+9. FRAMING: All characters CHEST-UP (mid-torso to head). Head ~35–45% of cell height. Camera distance slightly closer than natural. Do NOT leave excessive "air" above the head; subject must dominate the frame while respecting padding. No full-body unless the pose requires it.
+10. EXPRESSION: Realistic and subtle. No exaggerated facial muscles, cartoon emotions, or staged poses. Emotion intensity ~60–70% of maximum. Character caught mid-action, not posing for a photo. Consistent camera distance across all cells.`;
 
   const hasCollage = !!collageBase64;
   const prompt = hasCollage
