@@ -2031,7 +2031,7 @@ async function getActiveSession(userId: string) {
 
 /** Get session that is in pack flow (for pack callbacks when user may have is_active assistant session). */
 async function getPackFlowSession(userId: string) {
-  const packStates = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "generating_pack_preview", "wait_pack_approval", "processing_pack"];
+  const packStates = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "wait_pack_approval", "processing_pack"];
   const { data } = await supabase
     .from("sessions")
     .select("*")
@@ -2069,7 +2069,7 @@ async function resolveSessionForIncomingPhoto(userId: string) {
 
 async function getPackFlowSessionById(userId: string, sessionId?: string | null) {
   if (!sessionId) return null;
-  const packStates = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "generating_pack_preview", "wait_pack_approval", "processing_pack"];
+  const packStates = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "wait_pack_approval", "processing_pack"];
   const { data } = await supabase
     .from("sessions")
     .select("*")
@@ -4013,6 +4013,12 @@ bot.action("pack_admin_generate", async (ctx) => {
     return;
   }
 
+  // Same pattern as pack_show_carousel: one active session per user — deactivate others so getActiveSession() returns this one when user sends theme.
+  await supabase
+    .from("sessions")
+    .update({ is_active: false })
+    .eq("user_id", user.id)
+    .eq("env", config.appEnv);
   await supabase
     .from("sessions")
     .update({ state: "wait_pack_generate_request", is_active: true })
@@ -5163,7 +5169,24 @@ bot.on("text", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
+  let session = await getActiveSession(user.id);
+  if (!session?.id) {
+    // Defensive: pack_admin_generate already deactivates others so this session is the only active one; if getActiveSession still missed it (e.g. race), find by state.
+    if (config.appEnv === "test" && config.adminIds.includes(telegramId)) {
+      const { data: packSession } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("env", config.appEnv)
+        .eq("state", "wait_pack_generate_request")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (packSession?.id) {
+        session = packSession;
+      }
+    }
+  }
   if (!session?.id) {
     await ctx.reply(await getText(lang, "start.need_start"));
     return;
