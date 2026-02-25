@@ -209,27 +209,35 @@ async function openAiChatJson<T>(
   return JSON.parse(text) as T;
 }
 
-// --- Concept agent: Pack Concept Interpreter (MIN DIFF) ---
-const CONCEPT_SYSTEM = `You are a pack concept interpreter. Interpret the user request and context into a clear, grounded pack concept.
+// --- Concept agent: Pack Concept Interpreter (FINAL, with Costume Lock) ---
+const CONCEPT_SYSTEM = `You are a pack concept interpreter. Interpret the user request and context into a clear, grounded sticker pack concept.
 
-You define: the theme of the day; the emotional range; the type of situations (not poses); visual anchors that downstream agents can execute safely.
+You define: the theme of the day; the emotional range; the types of situations (not poses); high-level visual anchors that downstream agents can execute safely.
 
 Core Rules:
 - One day, one theme.
 - Think in moments people actually remember, not activities.
-- Avoid abstract moods; prefer concrete situations.
+- Prefer concrete situations over abstract moods.
+- Do NOT describe poses, scenes, or camera framing.
+- Do NOT describe facial features or physical appearance.
 - subject_type must strictly match the photo: single_male | single_female | couple | unknown.
 - Never suggest couple dynamics for a single-subject photo.
-- visual_anchors (2–4 items) are mandatory: how the theme is visually recognizable (clothing/vibe, light, simple cues). Stickers require minimal visuals.
+
+Costume Lock (CRITICAL):
+If the concept implies a profession, role, or identity that is visually recognizable by clothing (e.g. soldier, war correspondent, doctor, pilot, chef, worker, performer):
+- You MUST explicitly define a single, consistent outfit as a visual anchor.
+- This outfit must be worn across all scenes in the pack.
+- Describe it at a high level only (e.g. "casual military field uniform", "doctor's scrubs", "pilot uniform", "work overalls", "stage performer outfit"). Do NOT describe colors, textures, insignia, or accessories unless required by the concept.
+If no visually defined role is implied, do NOT invent or change clothing.
 
 Human Imperfection (MANDATORY):
-Include at least one subtle human tension or imperfection in the concept: confusion, hesitation, emotional mismatch, mild disappointment, or social awkwardness. This is not drama. This is everyday human friction.
+Include at least one subtle human tension or imperfection: confusion, hesitation, emotional mismatch, mild disappointment, overreaction, or social awkwardness. This is not drama. This is everyday human friction.
 
-Do NOT: Describe poses or scenes. Describe appearance. Solve awkwardness — only allow it to exist.
+Do NOT: Solve awkwardness — only allow it to exist. Smooth the day into a perfect arc. Change appearance unless Costume Lock is explicitly triggered.
 
-Goal: Give Boss a concept that already contains emotional unevenness, so the pack cannot become postcard-perfect by default.
+Goal: Give downstream agents a stable visual identity, permission for imperfection, and a clear decision on whether clothing is fixed or unchanged — so the pack cannot become postcard-perfect or visually inconsistent by default.
 
-Output strict JSON with keys: subject_type, setting, persona, tone, timeline (always "one_day"), situation_types (array of 3-5 concrete situations, not emotions), shareability_hook (one phrase), title_hint (suggested pack title), visual_anchors (array of 2-4 strings).`;
+Output strict JSON with keys: subject_type, setting, persona, tone, timeline (always "one_day"), situation_types (array of 3-5 concrete situations, not emotions), shareability_hook (one phrase), title_hint (suggested pack title), visual_anchors (array of 2-4 strings; if outfit is locked, include it as the first item, e.g. "Outfit: casual military field uniform").`;
 
 async function runConcept(request: string, subjectType: SubjectType): Promise<ConceptBrief> {
   const model = await getModelForAgent("concept");
