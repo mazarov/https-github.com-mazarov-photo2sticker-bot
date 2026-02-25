@@ -53,6 +53,7 @@ import {
   subjectTypeFromSession,
   type PackSpecRow,
   type BossPlan,
+  type CriticOutput,
 } from "./lib/pack-multiagent";
 
 const bot = new Telegraf(config.telegramBotToken, {
@@ -4288,13 +4289,26 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
 
   const statusMsg = await ctx.reply(
     lang === "ru"
-      ? "⏳ Передаю фидбек Critic агентам Captions и Scenes, запускаю ещё одну итерацию…"
-      : "⏳ Passing Critic feedback to Captions & Scenes agents, running one more iteration…"
+      ? "⏳ Передаю фидбек Critic агентам, до 2 итераций переделки…"
+      : "⏳ Passing Critic feedback to agents, up to 2 rework iterations…"
   ).catch(() => null);
 
   try {
-    const previousSpec = (session.pending_rejected_pack_spec as PackSpecRow | null) ?? null;
-    const { spec, critic } = await reworkOneIteration(reworkPlan, suggestions, previousSpec, reasons.length ? reasons : undefined);
+    let previousSpec = (session.pending_rejected_pack_spec as PackSpecRow | null) ?? null;
+    let reworkSuggestions = suggestions;
+    let reworkReasons = reasons;
+    let spec: PackSpecRow;
+    let critic: CriticOutput;
+    const maxReworkIterations = 2;
+    for (let i = 0; i < maxReworkIterations; i++) {
+      const result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons.length ? reworkReasons : undefined);
+      spec = result.spec;
+      critic = result.critic;
+      if (critic.pass) break;
+      previousSpec = spec;
+      reworkSuggestions = critic.suggestions ?? [];
+      reworkReasons = critic.reasons ?? [];
+    }
 
     await supabase
       .from("sessions")
