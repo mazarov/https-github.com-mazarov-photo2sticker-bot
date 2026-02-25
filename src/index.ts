@@ -4297,17 +4297,16 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
     let previousSpec = (session.pending_rejected_pack_spec as PackSpecRow | null) ?? null;
     let reworkSuggestions = suggestions;
     let reworkReasons = reasons;
-    let spec: PackSpecRow;
-    let critic: CriticOutput;
-    const maxReworkIterations = 2;
-    for (let i = 0; i < maxReworkIterations; i++) {
-      const result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons.length ? reworkReasons : undefined);
-      spec = result.spec;
-      critic = result.critic;
-      if (critic.pass) break;
+    let result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons.length ? reworkReasons : undefined);
+    let spec = result.spec;
+    let critic = result.critic;
+    if (!critic.pass) {
       previousSpec = spec;
       reworkSuggestions = critic.suggestions ?? [];
       reworkReasons = critic.reasons ?? [];
+      result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons.length ? reworkReasons : undefined);
+      spec = result.spec;
+      critic = result.critic;
     }
 
     await supabase
