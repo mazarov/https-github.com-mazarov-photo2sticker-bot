@@ -4240,7 +4240,7 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
 
   const callbackData = (ctx.callbackQuery as any)?.data;
   const explicitSessionId = parsePackAdminSessionId(callbackData);
-  const session = explicitSessionId
+  let session = explicitSessionId
     ? await getSessionByIdForUser(user.id, explicitSessionId)
     : (await getActiveSession(user.id)) ?? (await getPackFlowSession(user.id)) ?? null;
   if (!session?.id) {
@@ -4248,9 +4248,9 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
     return;
   }
 
-  const plan = session.pending_pack_plan as BossPlan | null;
-  const suggestions: string[] = Array.isArray(session.pending_critic_suggestions) ? session.pending_critic_suggestions : [];
-  const reasons: string[] = Array.isArray((session as any).pending_critic_reasons) ? (session as any).pending_critic_reasons : [];
+  let plan = session.pending_pack_plan as BossPlan | null;
+  let suggestions: string[] = Array.isArray(session.pending_critic_suggestions) ? session.pending_critic_suggestions : [];
+  let reasons: string[] = Array.isArray((session as any).pending_critic_reasons) ? (session as any).pending_critic_reasons : [];
 
   let reworkPlan: BossPlan | null = plan?.id ? plan : null;
   if (!reworkPlan?.id) {
@@ -4260,8 +4260,29 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
     }
   }
 
+  // Architectural: only use session from callback. If data missing, one retry (replica lag); no substitution with another session.
+  if (!reworkPlan?.id && explicitSessionId) {
+    await new Promise((r) => setTimeout(r, 400));
+    session = (await getSessionByIdForUser(user.id, explicitSessionId)) ?? session;
+    plan = session?.pending_pack_plan as BossPlan | null;
+    suggestions = Array.isArray(session?.pending_critic_suggestions) ? session.pending_critic_suggestions : [];
+    reasons = Array.isArray((session as any)?.pending_critic_reasons) ? (session as any).pending_critic_reasons : [];
+    reworkPlan = plan?.id ? plan : null;
+    if (!reworkPlan?.id) {
+      const spec = session?.pending_rejected_pack_spec as PackSpecRow | null;
+      if (spec?.id) reworkPlan = specToMinimalPlan(spec);
+    }
+  }
+
   if (!reworkPlan?.id) {
-    await ctx.reply(lang === "ru" ? "Нет плана для переделки. Запустите генерацию заново." : "No plan for rework. Run generation again.");
+    console.warn("[pack_admin_pack_rework] No plan: sessionId=", (session as any)?.id, "explicitSessionId=", explicitSessionId, "hasPendingSpec=", !!(session as any)?.pending_rejected_pack_spec);
+    const msgStale = lang === "ru"
+      ? "Кнопка устарела. Используй последнее сообщение с результатом пака (кнопки Сохранить / Переделать)."
+      : "Button is stale. Use the latest message with the pack result (Save / Rework buttons).";
+    const msgNoPlan = lang === "ru"
+      ? "Нет плана для переделки. Запустите генерацию заново."
+      : "No plan for rework. Run generation again.";
+    await ctx.reply(explicitSessionId ? msgNoPlan : msgStale);
     return;
   }
 
@@ -5525,7 +5546,7 @@ bot.on("text", async (ctx) => {
 
     // После пайплайна всегда показываем результат админу и три кнопки: Сохранить, Отменить, Переделать.
     if (result.spec && config.appEnv === "test" && config.adminIds.includes(telegramId)) {
-      await supabase
+      const { error: updateErr } = await supabase
         .from("sessions")
         .update({
           pending_rejected_pack_spec: result.spec as any,
@@ -5534,6 +5555,9 @@ bot.on("text", async (ctx) => {
           pending_critic_reasons: (result.criticReasons ?? []) as any,
         })
         .eq("id", session.id);
+      if (updateErr) {
+        console.error("[pack_admin] Failed to save pending pack to session:", session.id, updateErr.message, updateErr.code);
+      }
 
       const summaryRaw =
         (lang === "ru" ? "Пак готов к согласованию.\n\n" : "Pack ready for approval.\n\n") +
