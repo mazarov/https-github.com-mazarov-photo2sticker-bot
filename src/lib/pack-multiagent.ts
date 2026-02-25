@@ -366,7 +366,7 @@ async function runScenes(
     }
     userMessage += "\n\n" + parts.join("\n\n");
   }
-  const raw = await openAiChatJson<{ scene_descriptions: string[]; scene_descriptions_ru?: string[] }>(model, SCENES_SYSTEM, userMessage);
+  const raw = await openAiChatJson<{ scene_descriptions: string[]; scene_descriptions_ru?: string[] }>(model, SCENES_SYSTEM, userMessage, { maxTokens: 8192 });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, 9) : [];
   const sceneDescriptionsRu = Array.isArray(raw.scene_descriptions_ru) ? raw.scene_descriptions_ru.slice(0, 9) : [];
   return { scene_descriptions: sceneDescriptions, scene_descriptions_ru: sceneDescriptionsRu };
