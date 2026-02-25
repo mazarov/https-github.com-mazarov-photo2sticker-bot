@@ -2149,6 +2149,13 @@ function parseCallbackSessionRef(raw?: string | null): { sessionId: string | nul
   return Number.isInteger(maybeRev) && maybeRev > 0 ? { sessionId, rev: maybeRev } : { sessionId, rev: null };
 }
 
+/** Parse session_id from pack admin callback_data (e.g. "pack_admin_pack_save:uuid" → uuid). Used so Save/Cancel/Rework act on the session that holds the result. */
+function parsePackAdminSessionId(callbackData?: string | null): string | null {
+  if (!callbackData || typeof callbackData !== "string") return null;
+  const parts = callbackData.split(":");
+  return parts.length >= 2 && parts[1]?.trim() ? parts[1].trim() : null;
+}
+
 function formatCallbackSessionRef(sessionId?: string | null, sessionRev?: number | null): string | null {
   if (!sessionId) return null;
   const rev = Number(sessionRev);
@@ -4123,8 +4130,8 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   );
 });
 
-// Admin (test bot): Save — save pending pack to DB (buttons "Сохранить" and legacy "Save anyway")
-bot.action(["pack_admin_pack_save", "pack_admin_save_rejected"], async (ctx) => {
+// Admin (test bot): Save — save pending pack to DB (buttons "Сохранить" and legacy "Save anyway"). Session id in callback_data ties to the message.
+bot.action(/^(pack_admin_pack_save|pack_admin_save_rejected)(:.+)?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
@@ -4133,7 +4140,11 @@ bot.action(["pack_admin_pack_save", "pack_admin_save_rejected"], async (ctx) => 
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id) ?? (await getPackFlowSession(user.id)) ?? null;
+  const callbackData = (ctx.callbackQuery as any)?.data;
+  const explicitSessionId = parsePackAdminSessionId(callbackData);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : (await getActiveSession(user.id)) ?? (await getPackFlowSession(user.id)) ?? null;
   if (!session?.id) {
     await ctx.reply(lang === "ru" ? "Сессия не найдена." : "Session not found.");
     return;
@@ -4187,8 +4198,8 @@ bot.action(["pack_admin_pack_save", "pack_admin_save_rejected"], async (ctx) => 
   }
 });
 
-// Admin (test bot): Cancel — clear pending pack, do not save
-bot.action("pack_admin_pack_cancel", async (ctx) => {
+// Admin (test bot): Cancel — clear pending pack, do not save. Session id in callback_data ties to the message.
+bot.action(/^pack_admin_pack_cancel(:.+)?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
@@ -4197,7 +4208,11 @@ bot.action("pack_admin_pack_cancel", async (ctx) => {
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id) ?? (await getPackFlowSession(user.id)) ?? null;
+  const callbackData = (ctx.callbackQuery as any)?.data;
+  const explicitSessionId = parsePackAdminSessionId(callbackData);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : (await getActiveSession(user.id)) ?? (await getPackFlowSession(user.id)) ?? null;
   if (!session?.id) return;
 
   await supabase
@@ -4213,8 +4228,8 @@ bot.action("pack_admin_pack_cancel", async (ctx) => {
   }
 });
 
-// Admin (test bot): Rework — передаём фидбек Critic (suggestions) агентам Captions и Scenes, они генерируют заново, затем снова Critic; показываем результат и те же кнопки.
-bot.action("pack_admin_pack_rework", async (ctx) => {
+// Admin (test bot): Rework — передаём фидбек Critic агентам Captions и Scenes; session id в callback_data привязывает кнопку к сессии с результатом.
+bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
@@ -4223,7 +4238,11 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id) ?? (await getPackFlowSession(user.id)) ?? null;
+  const callbackData = (ctx.callbackQuery as any)?.data;
+  const explicitSessionId = parsePackAdminSessionId(callbackData);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : (await getActiveSession(user.id)) ?? (await getPackFlowSession(user.id)) ?? null;
   if (!session?.id) {
     await ctx.reply(lang === "ru" ? "Сессия не найдена." : "Session not found.");
     return;
@@ -4285,11 +4304,12 @@ bot.action("pack_admin_pack_rework", async (ctx) => {
     const saveBtn = lang === "ru" ? "✅ Сохранить" : "✅ Save";
     const cancelBtn = lang === "ru" ? "❌ Отменить" : "❌ Cancel";
     const reworkBtn = lang === "ru" ? "🔄 Переделать" : "🔄 Rework";
+    const sid = session.id;
     const keyboard = {
       reply_markup: {
         inline_keyboard: [
-          [{ text: saveBtn, callback_data: "pack_admin_pack_save" }, { text: cancelBtn, callback_data: "pack_admin_pack_cancel" }],
-          [{ text: reworkBtn, callback_data: "pack_admin_pack_rework" }],
+          [{ text: saveBtn, callback_data: `pack_admin_pack_save:${sid}` }, { text: cancelBtn, callback_data: `pack_admin_pack_cancel:${sid}` }],
+          [{ text: reworkBtn, callback_data: `pack_admin_pack_rework:${sid}` }],
         ],
       },
     };
@@ -5534,11 +5554,12 @@ bot.on("text", async (ctx) => {
       const saveBtn = lang === "ru" ? "✅ Сохранить" : "✅ Save";
       const cancelBtn = lang === "ru" ? "❌ Отменить" : "❌ Cancel";
       const reworkBtn = lang === "ru" ? "🔄 Переделать" : "🔄 Rework";
+      const sid = session.id;
       await ctx.telegram.editMessageText(ctx.chat!.id, (statusMsg as any).message_id, undefined, summary, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: saveBtn, callback_data: "pack_admin_pack_save" }, { text: cancelBtn, callback_data: "pack_admin_pack_cancel" }],
-            [{ text: reworkBtn, callback_data: "pack_admin_pack_rework" }],
+            [{ text: saveBtn, callback_data: `pack_admin_pack_save:${sid}` }, { text: cancelBtn, callback_data: `pack_admin_pack_cancel:${sid}` }],
+            [{ text: reworkBtn, callback_data: `pack_admin_pack_rework:${sid}` }],
           ],
         },
       }).catch(() => ctx.reply(summary));
