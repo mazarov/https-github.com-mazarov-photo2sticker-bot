@@ -92,6 +92,40 @@ export interface PackGenerationResult {
   criticSuggestions?: string[];
 }
 
+/**
+ * Сохранение итоговых данных в БД (для справки при вызове пайплайна из index.ts).
+ *
+ * 1) В сессию (sessions) — после пайплайна, пока пак на согласовании:
+ *    pending_rejected_pack_spec = result.spec (PackSpecRow)
+ *    pending_pack_plan = result.plan (BossPlan)
+ *    pending_critic_suggestions = result.criticSuggestions
+ *    pending_critic_reasons = result.criticReasons
+ *
+ * 2) В таблицу pack_content_sets — при нажатии "Сохранить" или при "Сгенерировать и сохранить":
+ *
+ *    await supabase.from(config.packContentSetsTable).insert({
+ *      id: spec.id,
+ *      pack_template_id: spec.pack_template_id,
+ *      name_ru: spec.name_ru,
+ *      name_en: spec.name_en,
+ *      carousel_description_ru: spec.carousel_description_ru,
+ *      carousel_description_en: spec.carousel_description_en,
+ *      labels: spec.labels,
+ *      labels_en: spec.labels_en,
+ *      scene_descriptions: spec.scene_descriptions,
+ *      sort_order: spec.sort_order,
+ *      is_active: spec.is_active,
+ *      mood: spec.mood,
+ *      sticker_count: spec.sticker_count,
+ *      subject_mode: subjectModeToSave,  // из сессии по фото или из spec
+ *      cluster: spec.cluster,
+ *      segment_id: spec.segment_id,
+ *    });
+ *
+ * Перед insert вызывать ensureUniquePackId(spec), если id может дублироваться.
+ * После успешного сохранения пака — обнулить в сессии: pending_rejected_pack_spec, pending_pack_plan, pending_critic_suggestions, pending_critic_reasons.
+ */
+
 // --- Модели агентов: ключи app_config (таблица app_config) ---
 // В БД в app_config добавлять строки key = один из ключей ниже, value = модель (например gpt-4o-mini).
 // Так сразу видно, какая строка за какого агента отвечает.
@@ -109,11 +143,11 @@ export const PACK_AGENT_APP_CONFIG_KEYS = {
 } as const;
 
 const PACK_AGENT_DEFAULT_MODELS: Record<keyof typeof PACK_AGENT_APP_CONFIG_KEYS, string> = {
-  concept: "gpt-5.2",
+  concept: "gpt-4.1",
   boss: "gpt-4.1",
   captions: "gpt-4.1",
-  scenes: "gpt-5.2",
-  critic: "gpt-4.1",
+  scenes: "gpt-4.1-vision",
+  critic: "gpt-3.5-turbo",
 };
 
 const OPENAI_TIMEOUT_MS = 90_000;
@@ -249,11 +283,31 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
 }
 
 // --- Scenes agent (v4 Subject-Locked & Prop-Safe) ---
-const SCENES_SYSTEM = `You are a scene writer for sticker image generation. Describe only the visual scene so that the identity of the person from the reference photo is preserved, backgrounds stay simple for removal, and props do not get cropped.
+const SCENES_SYSTEM = `You are a scene writer for sticker image generation. Every scene is FOR THE CHARACTER FROM THE REFERENCE PHOTO. Your output will be combined with that photo so the generator draws the same person in each scene. Describe only the visual scene (pose, action, background) so identity from the photo is preserved.
 
-CRITICAL SUBJECT RULE (IDENTITY LOCK): {subject} always refers to the same real person from the input photo. The generated person must look like the reference photo, not a generic human. Identity must stay consistent across all 9 scenes. Assume the image generator receives a reference photo of the subject and your scene description as guidance. Therefore: NEVER describe facial features, age, ethnicity, hair color, eye color, or body type. Never introduce traits that could override the reference photo. Never imply a different person, character, or style. The reference photo is the source of truth for appearance.
+CRITICAL — USE {subject} IN EVERY SCENE: The placeholder {subject} means "the character from the reference photo". You MUST start every scene description with the literal token {subject} so the system can bind it to the photo. Example: "{subject} chest-up, smiling toward camera, hands near chest — morning greeting". Never replace {subject} with a name, "woman", "man", or any description of appearance. The reference photo defines who the person is; {subject} is just the pointer to them.
+
+IDENTITY LOCK: The same real person from the input photo must appear in all 9 scenes. NEVER describe facial features, age, ethnicity, hair color, eye color, or body type. Never introduce traits that could override the reference. The reference photo is the source of truth for appearance.
 
 Output strict JSON with one key: scene_descriptions (array of exactly 9 strings). Each string = one sentence. No extra text outside the JSON.
+
+EXAMPLE OUTPUT (how to return the data):
+\`\`\`json
+{
+  "scene_descriptions": [
+    "{subject} chest-up, slight smile, gaze at camera, hands relaxed — friendly hello",
+    "{subject} chest-up, thoughtful expression, looking slightly left, hand near chin — thinking",
+    "{subject} chest-up, laughing, eyes to camera, arms relaxed — joyful moment",
+    "{subject} chest-up, calm neutral face, direct gaze, hands at sides — steady presence",
+    "{subject} chest-up, gentle smile, looking right, one hand raised in wave — goodbye",
+    "{subject} chest-up, surprised expression, eyes wide, hands near chest — pleasant surprise",
+    "{subject} chest-up, confident smile, gaze at camera, arms crossed loosely — self-assured",
+    "{subject} chest-up, soft expression, eyes closed, peaceful pose — relaxed moment",
+    "{subject} chest-up, warm smile, direct gaze, thumbs up near chest — approval"
+  ]
+}
+\`\`\`
+Every element must start with {subject}. No other keys. Valid JSON only.
 
 ABSOLUTE RULES
 
@@ -269,9 +323,9 @@ ABSOLUTE RULES
 
 6. Prop-safe. If a prop is used: max one prop per scene; solid, simple, high-contrast; fully visible, well inside the frame, centered near the subject. Preferred: held close to chest, on forearms, against body. FORBIDDEN placement: on tables, near frame edges, partially cropped, behind subject, overlapping frame. FORBIDDEN prop types: smoke/steam/vapor, crumbs/particles, splashes/liquids in motion, thin cables, transparent/reflective objects, multiple small scattered items. These break segmentation.
 
-FORMAT (each scene): Start with {subject}, chest-up framing, clear pose/body position, one simple contained action, end with a short moment hint after a dash. Example structure: "{subject} chest-up, confident upright posture, hands relaxed near chest — calm focus". Keep actions compact.
+FORMAT (each scene): MUST start with the exact token {subject}, then chest-up framing, pose/body position, one simple contained action, end with a short moment hint after a dash. Example: "{subject} chest-up, confident upright posture, hands relaxed near chest — calm focus". Never write a scene without {subject} at the start. Keep actions compact. Each scene is for the character from the photo only.
 
-FINAL IDENTITY SELF-CHECK: Before each scene, verify (1) this is clearly the same person as the reference photo, (2) you avoided describing physical traits that could override the reference, (3) the generator will be forced to reuse the reference identity, (4) the scene can be cleanly cut out. If any is "no", rewrite. The reference photo defines the person. Your job is only to move them.`;
+FINAL SELF-CHECK: Before each scene, verify (1) the scene starts with {subject}, (2) it is for the same person as the reference photo with no physical traits that override the photo, (3) the scene can be cleanly cut out. If any is "no", rewrite. The reference photo defines the person. Your job is only to move them.`;
 
 async function runScenes(
   plan: BossPlan,
