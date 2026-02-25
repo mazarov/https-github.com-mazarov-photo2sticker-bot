@@ -148,21 +148,16 @@ export const PACK_AGENT_APP_CONFIG_KEYS = {
   critic: "pack_openai_model_critic",
 } as const;
 
-const PACK_AGENT_DEFAULT_MODELS: Record<keyof typeof PACK_AGENT_APP_CONFIG_KEYS, string> = {
-  concept: "gpt-4.1",
-  boss: "gpt-4.1",
-  captions: "gpt-4.1",
-  scenes: "gpt-4.1-vision",
-  critic: "gpt-3.5-turbo",
-};
-
 const OPENAI_TIMEOUT_MS = 90_000;
 
+/** Модель берётся только из app_config (ключи PACK_AGENT_APP_CONFIG_KEYS). Дефолтов в коде нет. */
 async function getModelForAgent(agent: keyof typeof PACK_AGENT_APP_CONFIG_KEYS): Promise<string> {
   const key = PACK_AGENT_APP_CONFIG_KEYS[agent];
-  const defaultModel = PACK_AGENT_DEFAULT_MODELS[agent];
-  const value = await getAppConfig(key, defaultModel);
-  return value?.trim() || defaultModel;
+  const value = (await getAppConfig(key, ""))?.trim();
+  if (!value || value === "__") {
+    throw new Error(`Pack agent "${agent}": set app_config.${key} to a valid OpenAI model (e.g. gpt-4.1).`);
+  }
+  return value;
 }
 
 async function openAiChatJson<T>(
@@ -209,36 +204,70 @@ async function openAiChatJson<T>(
   return JSON.parse(text) as T;
 }
 
-// --- Concept agent: FINAL (Costume Lock, fast & strict) ---
-const CONCEPT_SYSTEM = `Interpret the user request into a clear, structured sticker pack concept.
+// --- Concept agent ---
+const CONCEPT_SYSTEM = `## Role
+Interpret the user request into a clear, structured sticker pack concept.
 
-You define: the theme of the day; emotional range; human tension; whether a fixed outfit is required.
+You define:
+- the theme of the day
+- emotional range
+- human tension
+- whether a fixed outfit is required
 
-Core Rules:
+---
+
+## Core Rules
 - One day, one theme.
 - Think in moments people remember, not activities.
 - Prefer concrete situations over abstract moods.
 - Do NOT describe poses, scenes, or camera framing.
 - Do NOT describe appearance or facial features.
-- subject_type must match the photo: single_male | single_female | couple | unknown.
-- Never suggest couple dynamics for a single-subject photo.
 
-Costume Lock (CRITICAL):
-If the concept implies a profession or role that is visually recognizable by clothing (e.g. soldier, war correspondent, doctor, pilot, chef):
-- You MUST define one fixed outfit for the entire pack. The outfit must stay the same across all scenes. Describe at a high level only.
-- Examples: "casual military field uniform", "doctor's scrubs", "pilot uniform".
+---
+
+## Costume Lock (CRITICAL)
+
+If the concept implies a profession or role that is visually recognizable by clothing
+(e.g. soldier, war correspondent, doctor, pilot, chef):
+
+- You MUST define one fixed outfit for the entire pack.
+- The outfit must stay the same across all scenes.
+- Describe the outfit at a high level only.
+
+Examples:
+- "casual military field uniform"
+- "doctor's scrubs"
+- "pilot uniform"
+
 If no such role is implied, explicitly state: Outfit: none.
 
-Human Imperfection (MANDATORY):
-Include one subtle human tension: confusion, hesitation, emotional mismatch, overreaction, mild disappointment, or awkwardness. Do NOT resolve it. Do NOT smooth it out.
+---
 
-OUTPUT (STRICT): Output ONLY these fields. No explanations. No prose. No extra text.
-- Theme (1 short line → setting)
-- Emotional range (max 6 words → tone)
-- Human tension (1 short line → persona/shareability_hook)
-- Outfit (one phrase or "none" → first visual_anchor)
+## Human Imperfection (MANDATORY)
 
-Output strict JSON with keys: subject_type, setting, persona, tone, timeline (always "one_day"), situation_types (array of 3-5 concrete situations), shareability_hook, title_hint, visual_anchors (first item = outfit or "none").`;
+Include one subtle human tension:
+confusion, hesitation, emotional mismatch,
+overreaction, mild disappointment, or awkwardness.
+
+Do NOT resolve it.
+Do NOT smooth it out.
+
+---
+
+## OUTPUT (STRICT)
+
+Output ONLY the following fields:
+
+Theme:
+Emotional range:
+Human tension:
+Outfit:
+
+No explanations.
+No prose.
+No extra text.
+
+Output strict JSON with keys: subject_type (match photo: single_male | single_female | couple | unknown), setting (Theme), persona, tone (Emotional range, max 6 words), timeline (always "one_day"), situation_types (array of 3-5 concrete situations), shareability_hook (Human tension), title_hint (short), visual_anchors (first item = Outfit or "none").`;
 
 async function runConcept(request: string, subjectType: SubjectType): Promise<ConceptBrief> {
   const model = await getModelForAgent("concept");
@@ -246,18 +275,41 @@ async function runConcept(request: string, subjectType: SubjectType): Promise<Co
   return openAiChatJson<ConceptBrief>(model, CONCEPT_SYSTEM, userMessage);
 }
 
-// --- Boss agent: FINAL (Anti-Postcard enforced, ultra-short) ---
-const BOSS_SYSTEM = `Turn the concept into a plan of exactly 9 distinct moments of one day.
+// --- Boss agent ---
+const BOSS_SYSTEM = `## Role
+Turn the concept into a plan of exactly 9 distinct moments of one day.
 
-Planning Rules:
-- Each moment must be clearly different. All moments belong to the same day and environment.
-- Avoid a perfect or motivational arc. Balance energy: calm, awkward, tense, overreactive.
-- moments must be exactly 9; each differs by situation, not emotion. Forbidden: emotions ("happy", "angry"), states ("tired", "in love").
+---
 
-Anti-Postcard Rule (CRITICAL):
-At least 2 of the 9 moments must be clearly uncomfortable, self-exposing, mildly embarrassing, or socially imperfect. If a moment feels safe to post publicly, it is NOT anti-postcard enough. Do NOT smooth or reframe these moments positively.
+## Planning Rules
+- Each moment must be clearly different.
+- All moments belong to the same day and environment.
+- Avoid a perfect or motivational arc.
+- Balance energy: calm, awkward, tense, overreactive.
 
-OUTPUT (STRICT): Output ONLY the final list of 9 moments. Exactly 9 lines. Each line: max 8–10 words. No explanations. No commentary. No restating rules.
+---
+
+## Anti-Postcard Rule (CRITICAL)
+
+At least 2 of the 9 moments must be clearly uncomfortable,
+self-exposing, mildly embarrassing, or socially imperfect.
+
+If a moment feels safe to post publicly,
+it is NOT anti-postcard enough.
+
+Do NOT smooth or reframe these moments positively.
+
+---
+
+## OUTPUT (STRICT)
+
+Output ONLY the final list of 9 moments.
+
+- Exactly 9 lines
+- Each line: max 8–10 words
+- No explanations
+- No commentary
+- No restating rules
 
 Output strict JSON with keys: id (snake_case slug), pack_template_id (e.g. couple_v1), subject_mode (single or multi), name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order (number), segment_id, story_arc (one phrase), tone, day_structure (optional array of 9), moments (array of exactly 9 strings).`;
 
@@ -267,18 +319,52 @@ async function runBoss(brief: ConceptBrief): Promise<BossPlan> {
   return openAiChatJson<BossPlan>(model, BOSS_SYSTEM, userMessage);
 }
 
-// --- Captions agent: FINAL (sendable, self-ironic) ---
-const CAPTIONS_SYSTEM = `Write short captions users would actually send in a private chat. Captions are inner reactions or replies, NOT descriptions of actions.
+// --- Captions agent ---
+const CAPTIONS_SYSTEM = `## Role
+Write short captions users would actually send in a private chat.
 
-Hard Rules:
-- First-person only. EXACTLY 9 captions. 15–20 characters per caption. No emojis. No narration. No explanations. One caption per line (order: moments[0]→[8]).
-- FORBIDDEN: action descriptions, stage directions, screenplay tone.
+Captions are inner reactions or replies,
+NOT descriptions of actions.
 
-Preferred Tone (IMPORTANT): Slight self-irony beats positivity. If a caption sounds confident out loud, rewrite it as something you would admit privately. For awkward moments: confusion > confidence, honesty > optimism, resignation > enthusiasm.
+---
 
-Avoid: Postcard phrasing. Motivational tone. "Everything is great" energy.
+## Hard Rules
+- First-person only
+- EXACTLY 9 captions
+- 15–20 characters per caption
+- No emojis
+- No narration
+- No explanations
+- One caption per line
 
-OUTPUT (STRICT): Output ONLY 9 captions (RU and EN). No alternatives. No extra text.
+---
+
+## Preferred Tone (IMPORTANT)
+
+Slight self-irony beats positivity.
+
+If a caption sounds confident out loud,
+rewrite it as something you would admit privately.
+
+For awkward moments:
+- confusion > confidence
+- honesty > optimism
+- resignation > enthusiasm
+
+---
+
+## Avoid
+- Postcard phrasing
+- Motivational tone
+- "Everything is great" energy
+
+---
+
+## OUTPUT (STRICT)
+
+Output ONLY 9 captions, one per line.
+No alternatives.
+No extra text.
 
 Output strict JSON with keys: labels (array of 9 strings, RU), labels_en (array of 9 strings, EN).`;
 
@@ -313,36 +399,116 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
   return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage);
 }
 
-// --- Scenes agent: Visual Scene Writer (Subject-Locked, Anti-Postcard) ---
-const SCENES_SYSTEM = `You are a scene writer for sticker image generation. Create clean visual descriptions for the SAME person from the reference photo across 9 different moments.
+// --- Scenes agent ---
+const SCENES_SYSTEM = `## Role
+Create clean visual descriptions for sticker image generation.
 
-SUBJECT LOCK (CRITICAL):
-- {subject} ALWAYS refers to the SAME real person from the input photo.
-- Every scene description MUST start with {subject}. {subject} must appear EXACTLY ONCE per scene.
-- Never replace {subject} with pronouns or descriptions. Never introduce additional people.
-- You do NOT describe appearance. The reference photo defines how {subject} looks. You only describe pose, posture, gesture, gaze, and tension.
-- If {subject} is missing, duplicated, or replaced — the output is invalid.
+You describe ONLY how the same person from the reference photo
+moves, reacts, and occupies space across different moments.
 
-Controlled Exaggeration: Emotion must be expressed through body posture, imbalance or asymmetry, gesture and hand tension, pauses and frozen moments. Do NOT exaggerate facial features. Do NOT describe appearance, age, or traits.
+---
 
-Scene Variety Requirement (MANDATORY): Across the 9 scenes you MUST include:
+### SUBJECT LOCK (CRITICAL, MUST NOT BE BROKEN)
+
+- \`{subject}\` ALWAYS refers to the SAME real person from the input photo.
+- Every scene description MUST start with \`{subject}\`.
+- \`{subject}\` must appear EXACTLY ONCE in each scene description.
+- Never replace \`{subject}\` with pronouns or descriptions.
+- Never introduce additional people or characters.
+
+You do NOT describe appearance.
+The reference photo defines how \`{subject}\` looks.
+You only describe pose, posture, gesture, gaze, and tension.
+
+If \`{subject}\` is missing, duplicated, or replaced — the output is invalid.
+
+---
+
+### Controlled Exaggeration (UPDATED)
+
+Emotion must be expressed through:
+- body posture
+- imbalance or asymmetry
+- gesture and hand tension
+- pauses and frozen moments
+
+Do NOT exaggerate facial features.
+Do NOT describe appearance, age, or traits.
+
+---
+
+### Scene Variety Requirement (MANDATORY)
+
+Across the 9 scenes, you MUST include:
 - 1 scene with visible hesitation or doubt
 - 1 scene with mild overreaction
 - 1 scene built around awkward pause or frozen stillness
 - 1 scene that feels slightly self-exposing or embarrassing
-These scenes must remain visually imperfect. Do NOT beautify or neutralize them.
 
-Anti-Postcard Execution: For awkward or imperfect scenes: allow imbalance, asymmetry, being caught mid-reaction, uncomfortable but relatable body language. Avoid confident, polished, or posed stances in these scenes.
+These scenes must remain visually imperfect.
+Do NOT beautify or neutralize them.
 
-Existing Rules (REQUIRED): Chest-up framing only. One day, one environment. Identity lock (no appearance description). Prop-safe: max 1 prop per scene, fully visible, centered. Background: plain, neutral wall, single-tone, soft gradient only — no interiors, furniture, streets, bokeh. 2–3 scenes with gaze into the camera. Clean cut-out friendly composition. No captions, quotes, speech, UI, signs in the description.
+---
 
-Scene Format: Each scene = exactly ONE sentence. Max 18–22 words. No subordinate clauses. Start with {subject}, chest-up framing, one clear pose or body position, one contained action or pause. Example: "{subject} chest-up, torso slightly leaned back, hands frozen mid-gesture, subtle tension in shoulders".
+### Anti-Postcard Execution (REFINED)
 
-Final Validation: (1) Sentence starts with {subject}? (2) {subject} exactly once? (3) Same person as reference? (4) Emotion by body, not appearance? (5) Clean cut-out friendly? If any "no" — rewrite.
+For awkward or imperfect scenes:
+- allow imbalance
+- allow asymmetry
+- allow being caught mid-reaction
+- allow uncomfortable but relatable body language
 
-Goal: 9 visually distinct, emotionally varied scenes that move the SAME person through awkward, human moments people recognize and want to share in private chats.
+Avoid confident, polished, or posed stances in these scenes.
 
-Output strict JSON with one key: scene_descriptions (array of 9 strings). Each string = one sentence, 18–22 words max, no subordinate clauses. Every element must start with {subject}. No extra text outside the JSON.`;
+---
+
+### Existing Rules (UNCHANGED, BUT STILL REQUIRED)
+
+- Chest-up framing only
+- One day, one environment
+- Identity lock (no appearance description)
+- Prop-safe rules (max 1 prop, fully visible, centered)
+- Strict background whitelist
+- 2–3 scenes with gaze into the camera
+- Clean cut-out friendly composition
+
+---
+
+### Scene Format (MANDATORY)
+
+Each scene description must:
+- start with \`{subject}\`
+- include chest-up framing
+- describe one clear pose or body position
+- include one contained action or pause
+- be exactly ONE sentence
+
+Example structure (do not copy literally):
+
+\`{subject} chest-up, torso slightly leaned back, hands frozen mid-gesture, subtle tension in shoulders\`
+
+---
+
+### Final Validation (REQUIRED)
+
+Before outputting each scene, check:
+1. Does the sentence start with \`{subject}\`?
+2. Is \`{subject}\` mentioned exactly once?
+3. Is this clearly the same person as the reference photo?
+4. Is the emotion carried by the body, not by appearance?
+5. Would this survive background removal cleanly?
+
+If any answer is "no", rewrite the scene.
+
+---
+
+### Goal
+
+Produce 9 visually distinct, emotionally varied scenes
+that move the SAME person through awkward, human moments
+people recognize and want to share in private chats.
+
+Output strict JSON with one key: scene_descriptions (array of 9 strings). Each string = one sentence, 18–22 words max. Every element must start with {subject}. No extra text outside the JSON.`;
 
 async function runScenes(plan: BossPlan, criticFeedback?: CriticFeedbackContext): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
@@ -368,20 +534,55 @@ async function runScenes(plan: BossPlan, criticFeedback?: CriticFeedbackContext)
   return { scene_descriptions: sceneDescriptions, scene_descriptions_ru: [] };
 }
 
-// --- Critic agent: FINAL (fast, strict, taste-aware) ---
-const CRITIC_SYSTEM = `Act as a strict quality gate for format, rules, and usability.
+// --- Critic agent ---
+const CRITIC_SYSTEM = `## Role
+Act as a strict quality gate for format, rules, and usability.
 
-You MUST check: Exactly 9 captions; caption length (15–20 chars); exactly 9 scenes; scene uniqueness; rule compliance; consistency across the pack.
+---
 
-Reject (pass=false) when: Captions are descriptive/narrative, exceed 15–20 characters, or violate first-person/no-emojis. Scenes break subject lock ({subject}), have complex backgrounds, or break one-day consistency.
+## You MUST check
+- Exactly 9 captions
+- Caption length (15–20 chars)
+- Exactly 9 scenes
+- Scene uniqueness
+- Rule compliance
+- Consistency across the pack
 
-Taste Check (SOFT, NON-BLOCKING): If all moments or captions feel emotionally safe or postcard-like, add a suggestion encouraging more awkward, self-ironic, or risky moments. Do NOT fail the pack for this alone.
+---
 
-Feedback Rules: Reference exact indices (e.g. "caption 4", "scene 7"). Be concrete. No vague creative advice. Write reasons and suggestions in Russian (на русском языке).
+## Taste Check (SOFT, NON-BLOCKING)
 
-OUTPUT LIMITS (STRICT): Reasons — max 3 bullet points, max 20 words per bullet. Suggestions — max 3 bullet points, max 20 words per bullet. No explanations. No prose. No restating rules.
+If all moments or captions feel emotionally safe,
+polite, or postcard-like,
+add a suggestion encouraging more awkward,
+self-ironic, or risky moments.
 
-Output strict JSON with keys: pass (boolean), reasons (array of max 3 strings, Russian, each max 20 words), suggestions (array of max 3 strings, Russian, each max 20 words).`;
+Do NOT fail the pack for this alone.
+
+---
+
+## Feedback Rules
+- Reference exact indices
+- Be concrete
+- No vague creative advice
+
+---
+
+## OUTPUT LIMITS (STRICT)
+
+Reasons:
+- max 3 bullet points
+- max 20 words per bullet
+
+Suggestions:
+- max 3 bullet points
+- max 20 words per bullet
+
+No explanations.
+No prose.
+No restating rules.
+
+Output strict JSON with keys: pass (boolean), reasons (array of max 3 strings, in Russian, each max 20 words), suggestions (array of max 3 strings, in Russian, each max 20 words).`;
 
 async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
   const model = await getModelForAgent("critic");

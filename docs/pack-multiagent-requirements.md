@@ -48,7 +48,7 @@ Use **Structured Outputs** (OpenAI JSON schema) for each agent so responses are 
 | `pack_openai_model_scenes` | Scenes | План + подписи → 9 scene_descriptions с `{subject}` | `gpt-5.2` |
 | `pack_openai_model_critic` | Critic | Полный спек → pass/fail + reasons + suggestions (строгий gate) | `gpt-5.2` |
 
-В коде константы вынесены в `src/lib/pack-multiagent.ts`: `PACK_AGENT_APP_CONFIG_KEYS` и `PACK_AGENT_DEFAULT_MODELS`. Если в app_config нет строки с данным key — используется default из кода.
+В коде ключи вынесены в `src/lib/pack-multiagent.ts`: `PACK_AGENT_APP_CONFIG_KEYS`. Модели берутся только из app_config; дефолтов в коде нет. Если ключ отсутствует или value пустой/`__` — пайплайн падает с явной ошибкой.
 
 ---
 
