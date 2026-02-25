@@ -1,6 +1,6 @@
 /**
  * Multi-agent pack generation pipeline (OpenAI).
- * Concept → Boss → Captions → Scenes → Assembly → Critic.
+ * Concept → Boss; then Captions and Scenes in parallel; then Assembly → Critic.
  * Used only in test bot; admin-only "Сгенерировать пак" button.
  */
 
@@ -49,12 +49,12 @@ export interface CaptionsOutput {
   labels_en: string[];
 }
 
-// --- Scenes output (EN для БД и генерации, RU для UI) ---
+// --- Scenes output (только EN; RU по локали убрано — не генерируем) ---
 export interface ScenesOutput {
   /** Сцены на английском — сохраняются в БД и используются при генерации. */
   scene_descriptions: string[];
-  /** Сцены на русском — только для показа в UI на языке пользователя. */
-  scene_descriptions_ru: string[];
+  /** Не генерируется; пустой массив для совместимости. */
+  scene_descriptions_ru?: string[];
 }
 
 // --- Critic output ---
@@ -254,7 +254,12 @@ Do NOT: Repeat emotional beats. Turn awkward moments into jokes. Turn the pack i
 
 Goal: Create a structure where at least part of the pack feels private, imperfect, and emotionally real.
 
-Output strict JSON with keys: id (snake_case slug), pack_template_id (e.g. couple_v1), subject_mode (single or multi), name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order (number), segment_id, story_arc (one phrase), tone, day_structure (optional array of 9), moments (array of exactly 9 strings).`;
+Output strict JSON with keys: id (snake_case slug), pack_template_id (e.g. couple_v1), subject_mode (single or multi), name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order (number), segment_id, story_arc (one phrase), tone, day_structure (optional array of 9), moments (array of exactly 9 strings).
+
+Output ONLY the final list of 9 moments.
+Do NOT explain reasoning.
+Do NOT add commentary.
+Do NOT restate rules.`;
 
 async function runBoss(brief: ConceptBrief): Promise<BossPlan> {
   const model = await getModelForAgent("boss");
@@ -342,16 +347,13 @@ Final Validation: Before outputting each scene check: (1) Sentence starts with {
 
 Goal: 9 visually distinct, emotionally varied scenes that move the SAME person through awkward, human moments people recognize and want to share in private chats.
 
-Output strict JSON with two keys: scene_descriptions (array of 9 strings in English), scene_descriptions_ru (array of 9 strings in Russian). Each string = one sentence. Every element must start with {subject}. No extra text outside the JSON.`;
+Output strict JSON with one key: scene_descriptions (array of 9 strings in English). Each string = one sentence. Every element must start with {subject}. No extra text outside the JSON.`;
 
-async function runScenes(
-  plan: BossPlan,
-  captions: CaptionsOutput,
-  criticFeedback?: CriticFeedbackContext
-): Promise<ScenesOutput> {
+async function runScenes(plan: BossPlan, criticFeedback?: CriticFeedbackContext): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
-  let userMessage = `Plan:\n${JSON.stringify(plan, null, 2)}\n\nLabels (RU): ${JSON.stringify(captions.labels)}\nLabels (EN): ${JSON.stringify(captions.labels_en)}\n\nOutput scene_descriptions and scene_descriptions_ru as JSON.`;
-  if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
+  const hasCriticFeedback = criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || !!criticFeedback?.previousSpec;
+  let userMessage = `Plan:\n${JSON.stringify(plan, null, 2)}\n\nOutput scene_descriptions as JSON.`;
+  if (hasCriticFeedback && criticFeedback) {
     const parts: string[] = [];
     if (criticFeedback.reasons?.length) {
       parts.push("Critic reasons (what was wrong):\n" + criticFeedback.reasons.join("\n"));
@@ -366,10 +368,9 @@ async function runScenes(
     }
     userMessage += "\n\n" + parts.join("\n\n");
   }
-  const raw = await openAiChatJson<{ scene_descriptions: string[]; scene_descriptions_ru?: string[] }>(model, SCENES_SYSTEM, userMessage, { maxTokens: 8192 });
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { maxTokens: 8192 });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, 9) : [];
-  const sceneDescriptionsRu = Array.isArray(raw.scene_descriptions_ru) ? raw.scene_descriptions_ru.slice(0, 9) : [];
-  return { scene_descriptions: sceneDescriptions, scene_descriptions_ru: sceneDescriptionsRu };
+  return { scene_descriptions: sceneDescriptions, scene_descriptions_ru: [] };
 }
 
 // --- Critic agent: Quality Gate (SOFT TASTE CHECK) ---
@@ -477,12 +478,14 @@ export async function runPackGenerationPipeline(
     await onProgress?.("boss");
 
     const t2 = Date.now();
-    let captions: CaptionsOutput = await wrapStage("captions", () => runCaptions(plan));
-    console.log(stageLabel("captions"), "done in", Date.now() - t2, "ms");
+    let captions: CaptionsOutput;
+    let scenes: ScenesOutput;
+    [captions, scenes] = await Promise.all([
+      wrapStage("captions", () => runCaptions(plan)),
+      wrapStage("scenes", () => runScenes(plan)),
+    ]);
+    console.log("[pack-multiagent] captions + scenes (parallel) done in", Date.now() - t2, "ms");
     await onProgress?.("captions");
-    const t3 = Date.now();
-    let scenes: ScenesOutput = await wrapStage("scenes", () => runScenes(plan, captions));
-    console.log(stageLabel("scenes"), "done in", Date.now() - t3, "ms");
     await onProgress?.("scenes");
     let spec = assembleSpec(plan, captions, scenes);
 
@@ -519,10 +522,14 @@ export async function runPackGenerationPipeline(
         previousSpec: spec,
       };
       const tRework = Date.now();
-      captions = await wrapStage("captions_rework", () => runCaptions(plan, criticContext));
-      await onProgress?.("captions_rework");
-      scenes = await wrapStage("scenes_rework", () => runScenes(plan, captions, criticContext));
+      const [captionsRework, scenesRework] = await Promise.all([
+        wrapStage("captions_rework", () => runCaptions(plan, criticContext)),
+        wrapStage("scenes_rework", () => runScenes(plan, criticContext)),
+      ]);
+      captions = captionsRework;
+      scenes = scenesRework;
       console.log(stageLabel("captions_rework") + " + scenes_rework done in", Date.now() - tRework, "ms");
+      await onProgress?.("captions_rework");
       await onProgress?.("scenes_rework");
       spec = assembleSpec(plan, captions, scenes);
     }
@@ -555,8 +562,10 @@ export async function reworkOneIteration(
     criticContext.suggestions.length > 0 ||
     (criticContext.reasons?.length ?? 0) > 0 ||
     !!criticContext.previousSpec;
-  const captions = await runCaptions(plan, hasContext ? criticContext : undefined);
-  const scenes = await runScenes(plan, captions, hasContext ? criticContext : undefined);
+  const [captions, scenes] = await Promise.all([
+    runCaptions(plan, hasContext ? criticContext : undefined),
+    runScenes(plan, hasContext ? criticContext : undefined),
+  ]);
   const spec = assembleSpec(plan, captions, scenes);
   const critic = await runCritic(spec);
   console.log("[pack-multiagent] Rework Critic pass:", critic.pass, "reasons:", critic.reasons, "suggestions:", critic.suggestions);
