@@ -5530,12 +5530,13 @@ bot.on("text", async (ctx) => {
   // #endregion
   if (!session?.id) {
     if (config.appEnv === "test" && config.adminIds.includes(telegramId)) {
+      // Include wait_pack_carousel: after "Сгенерировать пак" session is in carousel until user taps "Сгенерировать" (then wait_pack_generate_request). Theme can be sent from carousel in some flows.
       const { data: packSession } = await supabase
         .from("sessions")
         .select("*")
         .eq("user_id", user.id)
         .eq("env", config.appEnv)
-        .in("state", ["wait_pack_generate_request", "wait_pack_rework_feedback"])
+        .in("state", ["wait_pack_generate_request", "wait_pack_rework_feedback", "wait_pack_carousel"])
         .order("updated_at", { ascending: false })
         .limit(1)
         .maybeSingle();
