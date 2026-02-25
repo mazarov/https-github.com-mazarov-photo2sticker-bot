@@ -110,10 +110,10 @@ export const PACK_AGENT_APP_CONFIG_KEYS = {
 
 const PACK_AGENT_DEFAULT_MODELS: Record<keyof typeof PACK_AGENT_APP_CONFIG_KEYS, string> = {
   concept: "gpt-5.2",
-  boss: "gpt-5.2",
-  captions: "gpt-5.2",
+  boss: "gpt-4.1",
+  captions: "gpt-4.1",
   scenes: "gpt-5.2",
-  critic: "gpt-5.2",
+  critic: "gpt-4.1",
 };
 
 const OPENAI_TIMEOUT_MS = 90_000;
@@ -248,22 +248,28 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
   return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage);
 }
 
-// --- Scenes agent (v2 reinforced) ---
-const SCENES_SYSTEM = `You are a scene writer for sticker pack image generation. Create clean visual descriptions for image generation with background removal.
+// --- Scenes agent (v3 Prop-Safe) ---
+const SCENES_SYSTEM = `You are a scene writer for sticker image generation. Describe only the visual scene so the subject is easy to cut out, important props stay fully visible, and the sticker has clean edges.
 
-Output strict JSON with key: scene_descriptions (array of 9 strings).
+Output strict JSON with a single key: scene_descriptions (array of exactly 9 strings). Each string = one sentence. No extra text outside the JSON.
 
-CRITICAL — Visuals only: pose, expression, gaze, action, background. FORBIDDEN: any text, quotes, captions, readable words in the scene.
+ABSOLUTE RULES
 
-BACKGROUND (STRICT). Allowed ONLY: plain background, neutral wall, single-tone background, soft gradient. FORBIDDEN: interiors, furniture, streets, bokeh/blur, lighting effects, signs, screens, text-bearing objects.
+1. Visual only. Describe only: pose, expression, gaze, body position, simple contained action, background. Never: captions, quotes, speech, written words, UI, screens, signs.
 
-COMPOSITION: Framing chest-up. 2–3 scenes must include clear gaze into the camera. Max 1 scene with closed eyes. Expression intensity ~70%. All scenes must vary in pose.
+2. Framing: Chest-up only. Subject fully inside the frame. No object may touch or cross the image edges. Subject centered with clear margins on all sides.
 
-CONSISTENCY: One day, one environment. If costume/profession/theme is specified, it must appear in all 9 scenes.
+3. Background (STRICT WHITELIST). Allowed ONLY: plain background, neutral wall, single-tone background, soft gradient. FORBIDDEN: interiors, furniture, streets, bokeh/blur, light effects, complex shadows, readable objects in background. Backgrounds are removed later — keep them simple.
 
-FORMAT: "{subject} [framing], [pose/body position], [small action] — [moment hint]"
+GAZE & EXPRESSION: 2–3 scenes must have clear gaze into the camera. Max 1 scene with closed eyes. Expression intensity ~70%. No static passport poses. Each scene must differ in pose or action.
 
-FINAL CHECK: If a scene could produce messy edges after background removal — simplify it.`;
+CONSISTENCY: One day, one environment. One outfit per pack if costume/profession required. Visual anchors from the brief must appear in every scene.
+
+PROP-SAFE (CRITICAL). If a prop is used: max one prop per scene; solid, simple, high-contrast; fully visible, well inside the frame, centered near the subject. Preferred: held close to chest, on forearms, against body. FORBIDDEN placement: on tables, near edges, partially cropped, behind subject, overlapping frame. FORBIDDEN prop types: smoke/steam/vapor, crumbs/particles, splashes/liquids in motion, thin cables, transparent/reflective objects, multiple small scattered items. These break segmentation and create dirty edges.
+
+FORMAT (each scene): "{subject} [chest-up framing], [pose/body position], [one simple contained action] — [moment hint]". Keep actions compact; no wide gestures toward frame edges.
+
+FINAL SELF-CHECK: Before each scene, verify (1) subject and any prop can be cut out cleanly, (2) all important objects fully visible, (3) edges thick and well separated from background, (4) scene would survive aggressive background removal. If any is "no", simplify. Simplicity beats beauty. Stability beats style.`;
 
 async function runScenes(
   plan: BossPlan,
