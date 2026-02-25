@@ -5523,9 +5523,9 @@ bot.on("text", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
+  // Контракт: одна активная сессия на пользователя. pack_admin_generate деактивирует остальные и ставит пак в wait_pack_generate_request + is_active=true, поэтому getActiveSession должен вернуть пак. Fallback ниже — только когда getActiveSession вернул null (реплика/race).
   let session = await getActiveSession(user.id);
   if (!session?.id) {
-    // Defensive: pack_admin_generate already deactivates others so this session is the only active one; if getActiveSession still missed it (e.g. race), find by state.
     if (config.appEnv === "test" && config.adminIds.includes(telegramId)) {
       const { data: packSession } = await supabase
         .from("sessions")
@@ -5541,7 +5541,7 @@ bot.on("text", async (ctx) => {
       }
       if (!session?.id) {
         const packFlow = await getPackFlowSession(user.id);
-        if (packFlow?.id && packFlow.state === "wait_pack_carousel") {
+        if (packFlow?.id && (packFlow.state === "wait_pack_carousel" || packFlow.state === "wait_pack_generate_request")) {
           session = packFlow;
         }
       }
