@@ -5523,7 +5523,7 @@ bot.on("text", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  // Контракт: одна активная сессия на пользователя. pack_admin_generate деактивирует остальные и ставит пак в wait_pack_generate_request + is_active=true, поэтому getActiveSession должен вернуть пак. Fallback ниже — только когда getActiveSession вернул null (реплика/race).
+  // Резолв сессии для текста (см. docs/done/02/16-02-session-architecture-requirements): getActiveSession, затем flow-aware fallback при null, затем уточнение для pack-theme.
   let session = await getActiveSession(user.id);
   if (!session?.id) {
     if (config.appEnv === "test" && config.adminIds.includes(telegramId)) {
@@ -5550,6 +5550,23 @@ bot.on("text", async (ctx) => {
   if (!session?.id) {
     await ctx.reply(await getText(lang, "start.need_start"));
     return;
+  }
+
+  // Уточнение резолва (flow-aware): если сессия не в pack-flow, но есть паковая сессия, ожидающая тему — подставляем её (getActiveSession мог вернуть другую по updated_at).
+  if (session?.id && config.appEnv === "test" && config.adminIds.includes(telegramId)) {
+    const packThemeStates = ["wait_pack_generate_request", "wait_pack_carousel", "wait_pack_rework_feedback"];
+    if (!packThemeStates.includes(session.state)) {
+      const { data: packForTheme } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("env", config.appEnv)
+        .in("state", ["wait_pack_generate_request", "wait_pack_carousel"])
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (packForTheme?.id) session = packForTheme;
+    }
   }
 
   // === Admin pack rework: user sent feedback (Critic approved, user tapped Rework and described what to change) ===
