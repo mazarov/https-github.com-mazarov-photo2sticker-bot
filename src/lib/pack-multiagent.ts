@@ -49,9 +49,12 @@ export interface CaptionsOutput {
   labels_en: string[];
 }
 
-// --- Scenes output ---
+// --- Scenes output (EN для БД и генерации, RU для UI) ---
 export interface ScenesOutput {
+  /** Сцены на английском — сохраняются в БД и используются при генерации. */
   scene_descriptions: string[];
+  /** Сцены на русском — только для показа в UI на языке пользователя. */
+  scene_descriptions_ru: string[];
 }
 
 // --- Critic output ---
@@ -71,7 +74,10 @@ export interface PackSpecRow {
   carousel_description_en: string;
   labels: string[];
   labels_en: string[];
+  /** Сцены на английском — сохраняются в БД и в генерации. */
   scene_descriptions: string[];
+  /** Сцены на русском — только для UI (формат превью админу); в БД не сохраняются. */
+  scene_descriptions_ru?: string[];
   sort_order: number;
   is_active: boolean;
   mood: string;
@@ -289,7 +295,7 @@ CRITICAL — USE {subject} IN EVERY SCENE: The placeholder {subject} means "the 
 
 IDENTITY LOCK: The same real person from the input photo must appear in all 9 scenes. NEVER describe facial features, age, ethnicity, hair color, eye color, or body type. Never introduce traits that could override the reference. The reference photo is the source of truth for appearance.
 
-Output strict JSON with one key: scene_descriptions (array of exactly 9 strings). Each string = one sentence. No extra text outside the JSON.
+Output strict JSON with two keys: scene_descriptions (array of 9 strings in English, for DB and generation) and scene_descriptions_ru (array of 9 strings in Russian, for UI). Each string = one sentence. No extra text outside the JSON.
 
 EXAMPLE OUTPUT (how to return the data):
 \`\`\`json
@@ -304,10 +310,21 @@ EXAMPLE OUTPUT (how to return the data):
     "{subject} chest-up, confident smile, gaze at camera, arms crossed loosely — self-assured",
     "{subject} chest-up, soft expression, eyes closed, peaceful pose — relaxed moment",
     "{subject} chest-up, warm smile, direct gaze, thumbs up near chest — approval"
+  ],
+  "scene_descriptions_ru": [
+    "{subject} по пояс, лёгкая улыбка, взгляд в камеру, руки расслаблены — дружеское приветствие",
+    "{subject} по пояс, задумчивое выражение, смотрит чуть влево, рука у подбородка — размышление",
+    "{subject} по пояс, смеётся, глаза в камеру, руки расслаблены — радостный момент",
+    "{subject} по пояс, спокойное нейтральное лицо, прямой взгляд, руки вдоль тела — уверенное присутствие",
+    "{subject} по пояс, мягкая улыбка, смотрит вправо, одна рука в жесте прощания — до свидания",
+    "{subject} по пояс, удивлённое выражение, глаза широко, руки у груди — приятный сюрприз",
+    "{subject} по пояс, уверенная улыбка, взгляд в камеру, руки скрещены свободно — уверенность",
+    "{subject} по пояс, мягкое выражение, глаза закрыты, спокойная поза — расслабленный момент",
+    "{subject} по пояс, тёплая улыбка, прямой взгляд, большой палец вверх у груди — одобрение"
   ]
 }
 \`\`\`
-Every element must start with {subject}. No other keys. Valid JSON only.
+Every element in both arrays must start with {subject}. Valid JSON only.
 
 ABSOLUTE RULES
 
@@ -323,6 +340,13 @@ ABSOLUTE RULES
 
 6. Prop-safe. If a prop is used: max one prop per scene; solid, simple, high-contrast; fully visible, well inside the frame, centered near the subject. Preferred: held close to chest, on forearms, against body. FORBIDDEN placement: on tables, near frame edges, partially cropped, behind subject, overlapping frame. FORBIDDEN prop types: smoke/steam/vapor, crumbs/particles, splashes/liquids in motion, thin cables, transparent/reflective objects, multiple small scattered items. These break segmentation.
 
+CONTROLLED EXAGGERATION RULES:
+- Emotions must be expressed through body posture, gesture, and tension — not facial features.
+- At least 3 scenes must include noticeable body tilt, lean, or asymmetry.
+- Neutral upright posture is allowed in no more than 1 scene.
+- Use "moment pressure" language: frozen mid-reaction, caught in a split-second, holding tension.
+- Allowed intensity range: 70–85% in up to 3 scenes, never cartoonish.
+
 FORMAT (each scene): MUST start with the exact token {subject}, then chest-up framing, pose/body position, one simple contained action, end with a short moment hint after a dash. Example: "{subject} chest-up, confident upright posture, hands relaxed near chest — calm focus". Never write a scene without {subject} at the start. Keep actions compact. Each scene is for the character from the photo only.
 
 FINAL SELF-CHECK: Before each scene, verify (1) the scene starts with {subject}, (2) it is for the same person as the reference photo with no physical traits that override the photo, (3) the scene can be cleanly cut out. If any is "no", rewrite. The reference photo defines the person. Your job is only to move them.`;
@@ -333,7 +357,7 @@ async function runScenes(
   criticFeedback?: CriticFeedbackContext
 ): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
-  let userMessage = `Plan:\n${JSON.stringify(plan, null, 2)}\n\nLabels (RU): ${JSON.stringify(captions.labels)}\nLabels (EN): ${JSON.stringify(captions.labels_en)}\n\nOutput scene_descriptions as JSON.`;
+  let userMessage = `Plan:\n${JSON.stringify(plan, null, 2)}\n\nLabels (RU): ${JSON.stringify(captions.labels)}\nLabels (EN): ${JSON.stringify(captions.labels_en)}\n\nOutput scene_descriptions and scene_descriptions_ru as JSON.`;
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
     if (criticFeedback.reasons?.length) {
@@ -349,7 +373,10 @@ async function runScenes(
     }
     userMessage += "\n\n" + parts.join("\n\n");
   }
-  return openAiChatJson<ScenesOutput>(model, SCENES_SYSTEM, userMessage);
+  const raw = await openAiChatJson<{ scene_descriptions: string[]; scene_descriptions_ru?: string[] }>(model, SCENES_SYSTEM, userMessage);
+  const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, 9) : [];
+  const sceneDescriptionsRu = Array.isArray(raw.scene_descriptions_ru) ? raw.scene_descriptions_ru.slice(0, 9) : [];
+  return { scene_descriptions: sceneDescriptions, scene_descriptions_ru: sceneDescriptionsRu };
 }
 
 // --- Critic agent (v2 reinforced) ---
@@ -383,6 +410,7 @@ function assembleSpec(plan: BossPlan, captions: CaptionsOutput, scenes: ScenesOu
     labels: Array.isArray(captions.labels) ? captions.labels.slice(0, 9) : [],
     labels_en: Array.isArray(captions.labels_en) ? captions.labels_en.slice(0, 9) : [],
     scene_descriptions: Array.isArray(scenes.scene_descriptions) ? scenes.scene_descriptions.slice(0, 9) : [],
+    scene_descriptions_ru: Array.isArray(scenes.scene_descriptions_ru) ? scenes.scene_descriptions_ru.slice(0, 9) : undefined,
     sort_order: Number(plan.sort_order) || 200,
     is_active: true,
     mood: plan.mood || "everyday",

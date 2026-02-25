@@ -233,17 +233,19 @@ function formatCriticBlock(reasons: string[] | undefined, suggestions: string[] 
   return out.length > 3500 ? out.slice(0, 3497) + "…" : out;
 }
 
-/** Форматирует подписи и сцены пака для показа админу на языке пользователя (isRu → только RU подписи, иначе только EN). Лимит ~2500 символов. */
+/** Форматирует подписи и сцены пака для показа админу на языке пользователя (isRu → RU, иначе EN). Сцены: в UI на языке пользователя; в БД сохраняются только scene_descriptions (EN). Лимит ~2500 символов. */
 function formatPackSpecPreview(
-  spec: { labels?: string[]; labels_en?: string[]; scene_descriptions?: string[] },
+  spec: { labels?: string[]; labels_en?: string[]; scene_descriptions?: string[]; scene_descriptions_ru?: string[] },
   isRu: boolean,
   maxLen: number = 2400
 ): string {
   const lines: string[] = [];
   const labels = Array.isArray(spec.labels) ? spec.labels : [];
   const labelsEn = Array.isArray(spec.labels_en) ? spec.labels_en : [];
-  const scenes = Array.isArray(spec.scene_descriptions) ? spec.scene_descriptions : [];
+  const scenesEn = Array.isArray(spec.scene_descriptions) ? spec.scene_descriptions : [];
+  const scenesRu = Array.isArray(spec.scene_descriptions_ru) ? spec.scene_descriptions_ru : [];
   const captions = isRu ? labels : labelsEn;
+  const scenes = isRu && scenesRu.length === scenesEn.length ? scenesRu : scenesEn;
   if (captions.length) {
     lines.push(isRu ? "Подписи:" : "Labels:");
     captions.forEach((l, i) => lines.push(`${i + 1}. ${l}`));
@@ -4291,17 +4293,19 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
     return;
   }
 
+  // Если Critic в прошлый раз одобрил — фидбека нет; не передаём reasons/suggestions/previousSpec в rework.
+  const hasCriticFeedback = (reasons?.length ?? 0) > 0 || (suggestions?.length ?? 0) > 0;
   const statusMsg = await ctx.reply(
     lang === "ru"
-      ? "⏳ Передаю фидбек Critic агентам, до 2 итераций переделки…"
-      : "⏳ Passing Critic feedback to agents, up to 2 rework iterations…"
+      ? (hasCriticFeedback ? "⏳ Передаю фидбек Critic агентам, до 2 итераций переделки…" : "⏳ Переделываю без фидбека (Critic уже одобрил)…")
+      : (hasCriticFeedback ? "⏳ Passing Critic feedback to agents, up to 2 rework iterations…" : "⏳ Reworking without feedback (Critic already approved)…")
   ).catch(() => null);
 
   try {
-    let previousSpec = (session.pending_rejected_pack_spec as PackSpecRow | null) ?? null;
-    let reworkSuggestions = suggestions;
-    let reworkReasons = reasons;
-    let result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons.length ? reworkReasons : undefined);
+    let previousSpec: PackSpecRow | null = hasCriticFeedback ? ((session.pending_rejected_pack_spec as PackSpecRow | null) ?? null) : null;
+    let reworkSuggestions = hasCriticFeedback ? suggestions : [];
+    let reworkReasons = hasCriticFeedback && (reasons?.length ?? 0) > 0 ? reasons : undefined;
+    let result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec ?? undefined, reworkReasons);
     let spec = result.spec;
     let critic = result.critic;
     if (!critic.pass) {
