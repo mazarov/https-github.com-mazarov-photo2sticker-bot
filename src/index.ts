@@ -5524,10 +5524,28 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Генерирую пак (Concept → Boss → Captions → Scenes → Critic)…" : "⏳ Generating pack (Concept → Boss → Captions → Scenes → Critic)…");
-
+    const adminPackStageLabels: Record<string, { ru: string; en: string }> = {
+      concept: { ru: "Concept", en: "Concept" },
+      boss: { ru: "Boss", en: "Boss" },
+      captions: { ru: "Captions", en: "Captions" },
+      scenes: { ru: "Scenes", en: "Scenes" },
+      critic: { ru: "Critic", en: "Critic" },
+      captions_rework: { ru: "Captions (итерация 2)", en: "Captions (iteration 2)" },
+      scenes_rework: { ru: "Scenes (итерация 2)", en: "Scenes (iteration 2)" },
+      critic_2: { ru: "Critic (2)", en: "Critic (2)" },
+    };
+    const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Concept…" : "⏳ Concept…");
+    const chatId = ctx.chat!.id;
+    const progressMsgId = (statusMsg as any).message_id;
+    const onProgress = async (stage: string) => {
+      const labels = adminPackStageLabels[stage];
+      const text = labels ? "⏳ " + (lang === "ru" ? labels.ru : labels.en) + "…" : "⏳ " + stage + "…";
+      try {
+        await ctx.telegram.editMessageText(chatId, progressMsgId, undefined, text);
+      } catch {}
+    };
     const subjectType = subjectTypeFromSession(session);
-    const result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2 });
+    const result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2, onProgress });
 
     await supabase
       .from("sessions")

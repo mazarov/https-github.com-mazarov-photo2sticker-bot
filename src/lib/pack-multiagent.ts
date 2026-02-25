@@ -328,27 +328,45 @@ function normalizeSubjectType(
   return "unknown";
 }
 
+/** Progress stage keys for admin pack loading (passed to onProgress). */
+export type PackPipelineStage =
+  | "concept"
+  | "boss"
+  | "captions"
+  | "scenes"
+  | "critic"
+  | "captions_rework"
+  | "scenes_rework"
+  | "critic_2";
+
 /**
  * Run the full pipeline: Concept → Boss → Captions → Scenes → Assembly → Critic.
  * On Critic fail, re-run Captions and Scenes with suggestions (max iterations).
  * Does NOT insert into DB; caller must ensure unique id and insert.
+ * Optional onProgress(stage) is called after each step for loading UI.
  */
 export async function runPackGenerationPipeline(
   request: string,
   subjectType: SubjectType,
-  options?: { maxCriticIterations?: number }
+  options?: { maxCriticIterations?: number; onProgress?: (stage: PackPipelineStage) => void | Promise<void> }
 ): Promise<PackGenerationResult> {
   const maxIterations = options?.maxCriticIterations ?? 2;
+  const onProgress = options?.onProgress;
 
   try {
     const brief = await runConcept(request, subjectType);
+    await onProgress?.("concept");
     const plan = await runBoss(brief);
+    await onProgress?.("boss");
 
     let captions: CaptionsOutput = await runCaptions(plan);
+    await onProgress?.("captions");
     let scenes: ScenesOutput = await runScenes(plan, captions);
+    await onProgress?.("scenes");
     let spec = assembleSpec(plan, captions, scenes);
 
     for (let iter = 0; iter < maxIterations; iter++) {
+      await onProgress?.(iter === 0 ? "critic" : "critic_2");
       // #region agent log
       const maxLenRu = Math.max(0, ...(spec.labels || []).map((l) => String(l).length));
       const maxLenEn = Math.max(0, ...(spec.labels_en || []).map((l) => String(l).length));
@@ -378,7 +396,9 @@ export async function runPackGenerationPipeline(
         previousSpec: spec,
       };
       captions = await runCaptions(plan, criticContext);
+      await onProgress?.("captions_rework");
       scenes = await runScenes(plan, captions, criticContext);
+      await onProgress?.("scenes_rework");
       spec = assembleSpec(plan, captions, scenes);
     }
 
