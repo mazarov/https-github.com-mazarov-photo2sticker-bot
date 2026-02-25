@@ -197,8 +197,15 @@ async function openAiChatJson<T>(
     }
   );
 
-  const text = response.data?.choices?.[0]?.message?.content;
-  if (!text) throw new Error("OpenAI returned no content");
+  const choice = response.data?.choices?.[0];
+  const text = choice?.message?.content;
+  if (!text) {
+    const finishReason = choice?.finish_reason ?? "unknown";
+    const refusal = (choice?.message as any)?.refusal ?? null;
+    const detail = `finish_reason=${finishReason}${refusal ? ` refusal=${String(refusal).slice(0, 200)}` : ""}`;
+    console.error("[pack-multiagent] OpenAI no content", { finish_reason: finishReason, refusal: refusal != null });
+    throw new Error(`OpenAI returned no content (${detail})`);
+  }
   return JSON.parse(text) as T;
 }
 
@@ -450,15 +457,32 @@ export async function runPackGenerationPipeline(
   const maxIterations = options?.maxCriticIterations ?? 2;
   const onProgress = options?.onProgress;
 
+  const stageLabel = (stage: PackPipelineStage) => `[pack-multiagent] ${stage}`;
+  const wrapStage = async <T>(stage: PackPipelineStage, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      throw new Error(`${stage}: ${msg}`);
+    }
+  };
   try {
-    const brief = await runConcept(request, subjectType);
+    const t0 = Date.now();
+    const brief = await wrapStage("concept", () => runConcept(request, subjectType));
+    console.log(stageLabel("concept"), "done in", Date.now() - t0, "ms");
     await onProgress?.("concept");
-    const plan = await runBoss(brief);
+    const t1 = Date.now();
+    const plan = await wrapStage("boss", () => runBoss(brief));
+    console.log(stageLabel("boss"), "done in", Date.now() - t1, "ms");
     await onProgress?.("boss");
 
-    let captions: CaptionsOutput = await runCaptions(plan);
+    const t2 = Date.now();
+    let captions: CaptionsOutput = await wrapStage("captions", () => runCaptions(plan));
+    console.log(stageLabel("captions"), "done in", Date.now() - t2, "ms");
     await onProgress?.("captions");
-    let scenes: ScenesOutput = await runScenes(plan, captions);
+    const t3 = Date.now();
+    let scenes: ScenesOutput = await wrapStage("scenes", () => runScenes(plan, captions));
+    console.log(stageLabel("scenes"), "done in", Date.now() - t3, "ms");
     await onProgress?.("scenes");
     let spec = assembleSpec(plan, captions, scenes);
 
@@ -469,7 +493,9 @@ export async function runPackGenerationPipeline(
       const maxLenEn = Math.max(0, ...(spec.labels_en || []).map((l) => String(l).length));
       fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'pack-multiagent.ts:beforeCritic',message:'spec before Critic',data:{iter:iter+1,maxLabelLenRu:maxLenRu,maxLabelLenEn:maxLenEn,sampleRu:(spec.labels||[])[0],sampleEn:(spec.labels_en||[])[0]},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
       // #endregion
-      const critic = await runCritic(spec);
+      const tCritic = Date.now();
+      const critic = await wrapStage(iter === 0 ? "critic" : "critic_2", () => runCritic(spec));
+      console.log(stageLabel(iter === 0 ? "critic" : "critic_2"), "done in", Date.now() - tCritic, "ms");
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'pack-multiagent.ts:criticResult',message:'Critic result',data:{pass:critic.pass,reasonsCount:(critic.reasons||[]).length,firstReason:(critic.reasons||[])[0],suggestionsCount:(critic.suggestions||[]).length},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
       // #endregion
@@ -492,9 +518,11 @@ export async function runPackGenerationPipeline(
         reasons: critic.reasons,
         previousSpec: spec,
       };
-      captions = await runCaptions(plan, criticContext);
+      const tRework = Date.now();
+      captions = await wrapStage("captions_rework", () => runCaptions(plan, criticContext));
       await onProgress?.("captions_rework");
-      scenes = await runScenes(plan, captions, criticContext);
+      scenes = await wrapStage("scenes_rework", () => runScenes(plan, captions, criticContext));
+      console.log(stageLabel("captions_rework") + " + scenes_rework done in", Date.now() - tRework, "ms");
       await onProgress?.("scenes_rework");
       spec = assembleSpec(plan, captions, scenes);
     }
