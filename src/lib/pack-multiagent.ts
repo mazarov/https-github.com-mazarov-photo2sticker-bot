@@ -392,7 +392,7 @@ Output strict JSON with keys: pass (boolean), reasons (array of strings, in Russ
 async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
   const model = await getModelForAgent("critic");
   const userMessage = `Full pack spec:\n${JSON.stringify(spec, null, 2)}\n\nOutput pass, reasons, and suggestions as JSON.`;
-  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, { temperature: 1 });
+  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, { temperature: 1, maxTokens: 8192 });
 }
 
 // --- Assembly: plan + captions + scenes → row ---
