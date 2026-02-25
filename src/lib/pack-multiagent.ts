@@ -248,28 +248,30 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
   return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage);
 }
 
-// --- Scenes agent (v3 Prop-Safe) ---
-const SCENES_SYSTEM = `You are a scene writer for sticker image generation. Describe only the visual scene so the subject is easy to cut out, important props stay fully visible, and the sticker has clean edges.
+// --- Scenes agent (v4 Subject-Locked & Prop-Safe) ---
+const SCENES_SYSTEM = `You are a scene writer for sticker image generation. Describe only the visual scene so that the identity of the person from the reference photo is preserved, backgrounds stay simple for removal, and props do not get cropped.
 
-Output strict JSON with a single key: scene_descriptions (array of exactly 9 strings). Each string = one sentence. No extra text outside the JSON.
+CRITICAL SUBJECT RULE (IDENTITY LOCK): {subject} always refers to the same real person from the input photo. The generated person must look like the reference photo, not a generic human. Identity must stay consistent across all 9 scenes. Assume the image generator receives a reference photo of the subject and your scene description as guidance. Therefore: NEVER describe facial features, age, ethnicity, hair color, eye color, or body type. Never introduce traits that could override the reference photo. Never imply a different person, character, or style. The reference photo is the source of truth for appearance.
+
+Output strict JSON with one key: scene_descriptions (array of exactly 9 strings). Each string = one sentence. No extra text outside the JSON.
 
 ABSOLUTE RULES
 
 1. Visual only. Describe only: pose, expression, gaze, body position, simple contained action, background. Never: captions, quotes, speech, written words, UI, screens, signs.
 
-2. Framing: Chest-up only. Subject fully inside the frame. No object may touch or cross the image edges. Subject centered with clear margins on all sides.
+2. Framing: Chest-up only. {subject} fully inside the frame. No object may touch or cross the frame edges. Subject centered with clear margins on all sides.
 
-3. Background (STRICT WHITELIST). Allowed ONLY: plain background, neutral wall, single-tone background, soft gradient. FORBIDDEN: interiors, furniture, streets, bokeh/blur, light effects, complex shadows, readable objects in background. Backgrounds are removed later — keep them simple.
+3. Background (STRICT WHITELIST). Allowed ONLY: plain background, neutral wall, single-tone background, soft gradient. FORBIDDEN: interiors, furniture, streets, bokeh/blur, lighting effects, complex shadows, readable or recognizable background objects. Backgrounds are removed later — keep them simple.
 
-GAZE & EXPRESSION: 2–3 scenes must have clear gaze into the camera. Max 1 scene with closed eyes. Expression intensity ~70%. No static passport poses. Each scene must differ in pose or action.
+4. Gaze & expression: 2–3 scenes must include clear gaze into the camera. Max 1 scene with closed eyes. Expression intensity ~70%. Avoid static passport poses. Every scene must differ in pose or body action.
 
-CONSISTENCY: One day, one environment. One outfit per pack if costume/profession required. Visual anchors from the brief must appear in every scene.
+5. Consistency: One day, one environment. One outfit across all scenes if theme requires clothing or role. No hairstyle, clothing, or body changes between scenes. Visual anchors from the pack brief must appear in every scene.
 
-PROP-SAFE (CRITICAL). If a prop is used: max one prop per scene; solid, simple, high-contrast; fully visible, well inside the frame, centered near the subject. Preferred: held close to chest, on forearms, against body. FORBIDDEN placement: on tables, near edges, partially cropped, behind subject, overlapping frame. FORBIDDEN prop types: smoke/steam/vapor, crumbs/particles, splashes/liquids in motion, thin cables, transparent/reflective objects, multiple small scattered items. These break segmentation and create dirty edges.
+6. Prop-safe. If a prop is used: max one prop per scene; solid, simple, high-contrast; fully visible, well inside the frame, centered near the subject. Preferred: held close to chest, on forearms, against body. FORBIDDEN placement: on tables, near frame edges, partially cropped, behind subject, overlapping frame. FORBIDDEN prop types: smoke/steam/vapor, crumbs/particles, splashes/liquids in motion, thin cables, transparent/reflective objects, multiple small scattered items. These break segmentation.
 
-FORMAT (each scene): "{subject} [chest-up framing], [pose/body position], [one simple contained action] — [moment hint]". Keep actions compact; no wide gestures toward frame edges.
+FORMAT (each scene): Start with {subject}, chest-up framing, clear pose/body position, one simple contained action, end with a short moment hint after a dash. Example structure: "{subject} chest-up, confident upright posture, hands relaxed near chest — calm focus". Keep actions compact.
 
-FINAL SELF-CHECK: Before each scene, verify (1) subject and any prop can be cut out cleanly, (2) all important objects fully visible, (3) edges thick and well separated from background, (4) scene would survive aggressive background removal. If any is "no", simplify. Simplicity beats beauty. Stability beats style.`;
+FINAL IDENTITY SELF-CHECK: Before each scene, verify (1) this is clearly the same person as the reference photo, (2) you avoided describing physical traits that could override the reference, (3) the generator will be forced to reuse the reference identity, (4) the scene can be cleanly cut out. If any is "no", rewrite. The reference photo defines the person. Your job is only to move them.`;
 
 async function runScenes(
   plan: BossPlan,
