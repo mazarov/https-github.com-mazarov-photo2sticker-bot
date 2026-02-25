@@ -5525,6 +5525,9 @@ bot.on("text", async (ctx) => {
   const lang = user.lang || "en";
   // Резолв сессии для текста (см. docs/done/02/16-02-session-architecture-requirements): getActiveSession, затем flow-aware fallback при null, затем уточнение для pack-theme.
   let session = await getActiveSession(user.id);
+  // #region agent log
+  console.log("[pack_text_resolve] after getActiveSession", { userId: user.id, telegramId, sessionId: session?.id ?? null, sessionState: session?.state ?? null, isTest: config.appEnv === "test", isAdmin: config.adminIds.includes(telegramId) });
+  // #endregion
   if (!session?.id) {
     if (config.appEnv === "test" && config.adminIds.includes(telegramId)) {
       const { data: packSession } = await supabase
@@ -5545,29 +5548,40 @@ bot.on("text", async (ctx) => {
           session = packFlow;
         }
       }
+      // #region agent log
+      console.log("[pack_text_resolve] after fallback (session was null)", { sessionId: session?.id ?? null, sessionState: session?.state ?? null, hadPackSession: !!packSession?.id });
+      // #endregion
     }
   }
   if (!session?.id) {
+    // #region agent log
+    console.log("[pack_text_resolve] replying need_start (no session)", { userId: user.id, telegramId });
+    // #endregion
     await ctx.reply(await getText(lang, "start.need_start"));
     return;
   }
 
   // Уточнение резолва (flow-aware): если сессия не в pack-flow, но есть паковая сессия, ожидающая тему — подставляем её (getActiveSession мог вернуть другую по updated_at).
-  if (session?.id && config.appEnv === "test" && config.adminIds.includes(telegramId)) {
-    const packThemeStates = ["wait_pack_generate_request", "wait_pack_carousel", "wait_pack_rework_feedback"];
-    if (!packThemeStates.includes(session.state)) {
-      const { data: packForTheme } = await supabase
-        .from("sessions")
-        .select("*")
-        .eq("user_id", user.id)
-        .eq("env", config.appEnv)
-        .in("state", ["wait_pack_generate_request", "wait_pack_carousel"])
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (packForTheme?.id) session = packForTheme;
-    }
+  const packThemeStates = ["wait_pack_generate_request", "wait_pack_carousel", "wait_pack_rework_feedback"];
+  const needRefinement = session?.id && config.appEnv === "test" && config.adminIds.includes(telegramId) && !packThemeStates.includes(session.state);
+  if (needRefinement) {
+    const { data: packForTheme } = await supabase
+      .from("sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .in("state", ["wait_pack_generate_request", "wait_pack_carousel"])
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (packForTheme?.id) session = packForTheme;
+    // #region agent log
+    console.log("[pack_text_resolve] after refinement", { refined: !!packForTheme?.id, sessionId: session?.id, sessionState: session?.state });
+    // #endregion
   }
+  // #region agent log
+  console.log("[pack_text_resolve] before pack_theme check", { sessionId: session?.id, sessionState: session?.state, wouldBePackTheme: (config.appEnv === "test" && config.adminIds.includes(telegramId) && (session.state === "wait_pack_generate_request" || session.state === "wait_pack_carousel")), textLen: ctx.message?.text?.length ?? 0 });
+  // #endregion
 
   // === Admin pack rework: user sent feedback (Critic approved, user tapped Rework and described what to change) ===
   const isPackReworkFeedback =
