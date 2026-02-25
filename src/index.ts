@@ -4164,6 +4164,10 @@ bot.action(/^(pack_admin_pack_save|pack_admin_save_rejected)(:.+)?$/, async (ctx
   const existingSets = await getActivePackContentSets();
   const carouselTemplateId = existingSets[0]?.pack_template_id ?? "couple_v1";
 
+  // subject_mode из сессии (по фото), иначе из spec: чтобы для 2 человек сохранялся multi, а не single от Boss.
+  const sessionSubjectMode = getEffectiveSubjectMode(session);
+  const subjectModeToSave = sessionSubjectMode !== "unknown" ? sessionSubjectMode : (uniqueSpec.subject_mode ?? "any");
+
   const { error: insertErr } = await supabase.from(config.packContentSetsTable).insert({
     id: uniqueSpec.id,
     pack_template_id: carouselTemplateId,
@@ -4178,7 +4182,7 @@ bot.action(/^(pack_admin_pack_save|pack_admin_save_rejected)(:.+)?$/, async (ctx
     is_active: uniqueSpec.is_active,
     mood: uniqueSpec.mood,
     sticker_count: uniqueSpec.sticker_count,
-    subject_mode: uniqueSpec.subject_mode,
+    subject_mode: subjectModeToSave,
     cluster: uniqueSpec.cluster,
     segment_id: uniqueSpec.segment_id,
   });
@@ -5628,6 +5632,10 @@ bot.on("text", async (ctx) => {
 
     const spec = await ensureUniquePackId(result.spec);
 
+    // subject_mode из сессии (по фото), иначе из spec: чтобы для 2 человек сохранялся multi.
+    const sessionSubjectMode = getEffectiveSubjectMode(session);
+    const subjectModeToSave = sessionSubjectMode !== "unknown" ? sessionSubjectMode : (spec.subject_mode ?? "any");
+
     const { error: insertErr } = await supabase.from(config.packContentSetsTable).insert({
       id: spec.id,
       pack_template_id: spec.pack_template_id,
@@ -5642,7 +5650,7 @@ bot.on("text", async (ctx) => {
       is_active: spec.is_active,
       mood: spec.mood,
       sticker_count: spec.sticker_count,
-      subject_mode: spec.subject_mode,
+      subject_mode: subjectModeToSave,
       cluster: spec.cluster,
       segment_id: spec.segment_id,
     });
