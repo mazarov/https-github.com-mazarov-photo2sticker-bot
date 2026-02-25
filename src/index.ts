@@ -2012,6 +2012,7 @@ const SESSION_FALLBACK_ACTIVE_STATES = [
   "wait_pack_preview_payment",
   "wait_pack_generate_request",
   "wait_pack_approval",
+  "wait_pack_rework_feedback",
   "generating_pack_preview",
   "processing_pack",
   // Generic generation states
@@ -2091,7 +2092,7 @@ async function getActiveSession(userId: string) {
   return fallbackByCreatedAt;
 }
 
-const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "wait_pack_approval", "processing_pack"] as const;
+const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "wait_pack_approval", "wait_pack_rework_feedback", "processing_pack"] as const;
 
 /** Get session that is in pack flow (for pack callbacks when user may have is_active assistant session). */
 async function getPackFlowSession(userId: string) {
@@ -3087,6 +3088,7 @@ bot.on("photo", async (ctx) => {
     "wait_pack_preview_payment",
     "wait_pack_generate_request",
     "wait_pack_approval",
+    "wait_pack_rework_feedback",
     "generating_pack_preview",
     "processing_pack",
   ];
@@ -4293,19 +4295,36 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
     return;
   }
 
-  // Если Critic в прошлый раз одобрил — фидбека нет; не передаём reasons/suggestions/previousSpec в rework.
+  // Если Critic в прошлый раз одобрил — фидбека нет; ждём текст от пользователя (что изменить), не стартуем rework сразу.
   const hasCriticFeedback = (reasons?.length ?? 0) > 0 || (suggestions?.length ?? 0) > 0;
+  if (!hasCriticFeedback) {
+    const { error: updateErr } = await supabase
+      .from("sessions")
+      .update({ state: "wait_pack_rework_feedback", is_active: true })
+      .eq("id", session.id);
+    if (updateErr) {
+      await ctx.reply((lang === "ru" ? "❌ Ошибка: " : "❌ Error: ") + updateErr.message);
+      return;
+    }
+    await ctx.reply(
+      lang === "ru"
+        ? "Опиши текстом, что изменить в паке (подписи или сцены). Отправь одно сообщение — оно уйдёт агентам как фидбек."
+        : "Describe in text what to change in the pack (captions or scenes). Send one message — it will be passed to the agents as feedback."
+    );
+    return;
+  }
+
   const statusMsg = await ctx.reply(
     lang === "ru"
-      ? (hasCriticFeedback ? "⏳ Передаю фидбек Critic агентам, до 2 итераций переделки…" : "⏳ Переделываю без фидбека (Critic уже одобрил)…")
-      : (hasCriticFeedback ? "⏳ Passing Critic feedback to agents, up to 2 rework iterations…" : "⏳ Reworking without feedback (Critic already approved)…")
+      ? "⏳ Передаю фидбек Critic агентам, до 2 итераций переделки…"
+      : "⏳ Passing Critic feedback to agents, up to 2 rework iterations…"
   ).catch(() => null);
 
   try {
-    let previousSpec: PackSpecRow | null = hasCriticFeedback ? ((session.pending_rejected_pack_spec as PackSpecRow | null) ?? null) : null;
-    let reworkSuggestions = hasCriticFeedback ? suggestions : [];
-    let reworkReasons = hasCriticFeedback && (reasons?.length ?? 0) > 0 ? reasons : undefined;
-    let result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec ?? undefined, reworkReasons);
+    let previousSpec: PackSpecRow | null = (session.pending_rejected_pack_spec as PackSpecRow | null) ?? null;
+    let reworkSuggestions = suggestions;
+    let reworkReasons = (reasons?.length ?? 0) > 0 ? reasons : undefined;
+    let result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons);
     let spec = result.spec;
     let critic = result.critic;
     if (!critic.pass) {
@@ -5513,7 +5532,7 @@ bot.on("text", async (ctx) => {
         .select("*")
         .eq("user_id", user.id)
         .eq("env", config.appEnv)
-        .eq("state", "wait_pack_generate_request")
+        .in("state", ["wait_pack_generate_request", "wait_pack_rework_feedback"])
         .order("updated_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -5530,6 +5549,74 @@ bot.on("text", async (ctx) => {
   }
   if (!session?.id) {
     await ctx.reply(await getText(lang, "start.need_start"));
+    return;
+  }
+
+  // === Admin pack rework: user sent feedback (Critic approved, user tapped Rework and described what to change) ===
+  const isPackReworkFeedback =
+    config.appEnv === "test" &&
+    config.adminIds.includes(telegramId) &&
+    session.state === "wait_pack_rework_feedback";
+  if (isPackReworkFeedback) {
+    const userFeedback = ctx.message.text?.trim() || "";
+    if (!userFeedback) {
+      await ctx.reply(lang === "ru" ? "Напиши, что изменить (одним сообщением)." : "Describe what to change (in one message).");
+      return;
+    }
+    const plan = session.pending_pack_plan as BossPlan | null;
+    if (!plan?.id) {
+      await supabase.from("sessions").update({ state: "wait_pack_carousel" }).eq("id", session.id);
+      await ctx.reply(lang === "ru" ? "План не найден. Используй кнопку Переделать снова с последнего результата." : "Plan not found. Use the Rework button again from the latest result.");
+      return;
+    }
+    const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Переделываю по твоему фидбеку…" : "⏳ Reworking with your feedback…").catch(() => null);
+    try {
+      const result = await reworkOneIteration(plan, [userFeedback], undefined, undefined);
+      const spec = result.spec;
+      const critic = result.critic;
+      await supabase
+        .from("sessions")
+        .update({
+          state: "wait_pack_carousel",
+          pending_rejected_pack_spec: spec as any,
+          pending_pack_plan: plan as any,
+          pending_critic_suggestions: (critic.suggestions ?? []) as any,
+          pending_critic_reasons: (critic.reasons ?? []) as any,
+        })
+        .eq("id", session.id);
+      const summaryRaw =
+        (lang === "ru" ? "Пак после переделки по твоему фидбеку.\n\n" : "Pack after rework with your feedback.\n\n") +
+        (critic.pass ? (lang === "ru" ? "✅ Critic одобрил.\n\n" : "✅ Critic approved.\n\n") : (lang === "ru" ? "⚠️ Critic не одобрил.\n\n" : "⚠️ Critic did not approve.\n\n")) +
+        (lang === "ru" ? "ID: " : "ID: ") + spec.id + "\n" + (lang === "ru" ? "Название: " : "Name: ") + (lang === "ru" ? spec.name_ru : spec.name_en) +
+        formatPackSpecPreview(spec, lang === "ru") +
+        (critic.pass ? "" : formatCriticBlock(critic.reasons, critic.suggestions, lang === "ru"));
+      const summary = summaryRaw.length > 4090 ? summaryRaw.slice(0, 4087) + "…" : summaryRaw;
+      const saveBtn = lang === "ru" ? "✅ Сохранить" : "✅ Save";
+      const cancelBtn = lang === "ru" ? "❌ Отменить" : "❌ Cancel";
+      const reworkBtn = lang === "ru" ? "🔄 Переделать" : "🔄 Rework";
+      const sid = session.id;
+      const keyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: saveBtn, callback_data: `pack_admin_pack_save:${sid}` }, { text: cancelBtn, callback_data: `pack_admin_pack_cancel:${sid}` }],
+            [{ text: reworkBtn, callback_data: `pack_admin_pack_rework:${sid}` }],
+          ],
+        },
+      };
+      if (statusMsg?.message_id && ctx.chat?.id) {
+        await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, summary, keyboard).catch(() => ctx.reply(summary, keyboard));
+      } else {
+        await ctx.reply(summary, keyboard);
+      }
+    } catch (err: any) {
+      await supabase.from("sessions").update({ state: "wait_pack_carousel" }).eq("id", session.id);
+      const msg = (lang === "ru" ? "❌ Ошибка переделки: " : "❌ Rework error: ") + (err?.message || String(err));
+      if (statusMsg?.message_id && ctx.chat?.id) {
+        await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, msg).catch(() => ctx.reply(msg));
+      } else {
+        await ctx.reply(msg);
+      }
+    }
     return;
   }
 
