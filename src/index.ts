@@ -3703,16 +3703,19 @@ async function handlePackMenuEntry(
   const lang = user.lang || "en";
   const source = options?.source || "menu";
   const autoPackEntry = Boolean(options?.autoPackEntry);
+  console.log("[pack_flow] handlePackMenuEntry entry", { userId: user.id, source, autoPackEntry });
   let openingMsg: { message_id?: number } | null = null;
   if (source === "menu" || source === "start") {
     const openingText = lang === "ru" ? "⏳ Открываю конструктор пака..." : "⏳ Opening pack builder...";
     openingMsg = await ctx.reply(openingText, getMainMenuKeyboard(lang)).catch(() => null);
   }
   const activeSession = await getActiveSession(user.id);
-  if (
-    activeSession &&
-    (activeSession.state === "generating_pack_preview" || activeSession.state === "processing_pack")
-  ) {
+  console.log("[pack_flow] after getActiveSession in pack_entry", { userId: user.id, sessionId: activeSession?.id ?? null, sessionState: activeSession?.state ?? null });
+  const isProcessingState = activeSession?.state === "generating_pack_preview" || activeSession?.state === "processing_pack";
+  const processingStaleMinutes = 10;
+  const processingUpdatedAt = activeSession?.updated_at ? new Date(activeSession.updated_at).getTime() : 0;
+  const processingIsStale = !activeSession?.updated_at || (Date.now() - processingUpdatedAt > processingStaleMinutes * 60 * 1000);
+  if (activeSession && isProcessingState && !processingIsStale) {
     const processingMsg = lang === "ru"
       ? "Сейчас идет обработка текущего пака. Подожди немного, я сообщу, когда все будет готово."
       : "Your current pack is still processing. Please wait a bit - I will notify you when it's ready.";
@@ -3721,6 +3724,9 @@ async function handlePackMenuEntry(
       `[pack_entry] skipped due to active processing: source=${source} auto_pack_entry=${autoPackEntry} session=${activeSession.id} state=${activeSession.state}`
     );
     return;
+  }
+  if (activeSession && isProcessingState && processingIsStale) {
+    console.log("[pack_flow] pack_entry not skipping: processing session is stale", { sessionId: activeSession.id, state: activeSession.state, updated_at: activeSession.updated_at });
   }
   const existingPhoto = activeSession?.current_photo_file_id || user.last_photo_file_id || null;
   console.log(
@@ -3742,6 +3748,7 @@ async function handlePackMenuEntry(
   const templateId = String(contentSets[0].pack_template_id || "couple_v1");
 
   const existingPackSession = await getPackFlowSession(user.id);
+  console.log("[pack_flow] existingPackSession in pack_entry", { userId: user.id, existingId: existingPackSession?.id ?? null, existingState: existingPackSession?.state ?? null });
   if (
     existingPackSession?.id &&
     existingPackSession.pack_template_id === templateId &&
@@ -3787,9 +3794,11 @@ async function handlePackMenuEntry(
     .select()
     .single();
   if (sessErr || !session) {
+    console.log("[pack_flow] pack_entry session insert failed", { userId: user.id, err: sessErr?.message });
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
     return;
   }
+  console.log("[pack_flow] pack_entry session created", { userId: user.id, sessionId: session.id, state: session.state });
 
   let visibleSets = contentSets;
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
@@ -3858,6 +3867,9 @@ async function handlePackMenuEntry(
 
 // Menu: 📦 Создать пак / 📦 Пак стикеров — show template CTA screen
 bot.hears(["📦 Создать пак", "📦 Create pack", "📦 Пак стикеров", "📦 Sticker pack"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  const text = ctx.message?.text?.trim() ?? "";
+  console.log("[pack_flow] hears menu button", { telegramId, text, source: "menu" });
   await handlePackMenuEntry(ctx, { source: "menu", autoPackEntry: false });
 });
 
@@ -4076,6 +4088,8 @@ bot.action("pack_carousel_next", async (ctx) => {
 bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
+  const callbackData = (ctx.callbackQuery as any)?.data ?? "";
+  console.log("[pack_flow] callback pack_admin_generate", { telegramId, callbackData });
   if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
 
   const user = await getUser(telegramId);
@@ -4092,6 +4106,7 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   let reasonCode: "session_not_found" | "wrong_state" | undefined;
   if (explicitSessionId) {
     const byId = await getSessionByIdForUser(user.id, explicitSessionId);
+    console.log("[pack_flow] pack_admin_generate byId", { userId: user.id, explicitSessionId, byIdId: byId?.id ?? null, byIdState: byId?.state ?? null });
     // #region agent log
     fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'index.ts:pack_admin_generate',message:'after getSessionByIdForUser',data:{hypothesisId:'A_E',byIdFound:!!byId,byIdId:byId?.id,byIdUserId:byId?.user_id,byIdEnv:byId?.env,byIdState:byId?.state,reasonCode},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
@@ -4106,6 +4121,7 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   if (!session) {
     const resolved = await resolvePackSessionForEvent(user.id, ["wait_pack_carousel"], explicitSessionId);
     session = resolved.session;
+    console.log("[pack_flow] pack_admin_generate resolvePackSessionForEvent", { userId: user.id, sessionId: session?.id ?? null, sessionState: session?.state ?? null, reasonCode: resolved.reasonCode });
     if (!session?.id || resolved.reasonCode === "wrong_state") {
       await rejectPackEvent(ctx, lang, "pack_admin_generate", reasonCode || resolved.reasonCode || "session_not_found");
       return;
@@ -4127,6 +4143,7 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
     await ctx.reply(lang === "ru" ? "Не удалось обновить сессию. Нажми «Сгенерировать пак» ещё раз." : "Failed to update session. Tap «Сгенерировать пак» again.");
     return;
   }
+  console.log("[pack_flow] pack_admin_generate set wait_pack_generate_request", { userId: user.id, sessionId: session.id });
 
   await ctx.reply(
     lang === "ru"
@@ -5444,6 +5461,8 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
 // Text handler (style description)
 bot.on("text", async (ctx) => {
   const telegramId = ctx.from?.id;
+  const msgText = ctx.message?.text?.trim() ?? "";
+  console.log("[pack_flow] text handler entered", { telegramId, textLen: msgText.length, textPreview: msgText.slice(0, 60) });
   if (!telegramId) return;
 
   // === Admin reply to outreach: intercept text from admin ===
@@ -5531,7 +5550,7 @@ bot.on("text", async (ctx) => {
   if (!session?.id) {
     if (config.appEnv === "test" && config.adminIds.includes(telegramId)) {
       // Include wait_pack_carousel: after "Сгенерировать пак" session is in carousel until user taps "Сгенерировать" (then wait_pack_generate_request). Theme can be sent from carousel in some flows.
-      const { data: packSession } = await supabase
+      const { data: packSession, error: packSessionErr } = await supabase
         .from("sessions")
         .select("*")
         .eq("user_id", user.id)
@@ -5540,11 +5559,13 @@ bot.on("text", async (ctx) => {
         .order("updated_at", { ascending: false })
         .limit(1)
         .maybeSingle();
+      console.log("[pack_flow] fallback query (theme states)", { userId: user.id, packSessionId: packSession?.id ?? null, packSessionState: packSession?.state ?? null, queryErr: packSessionErr?.message ?? null });
       if (packSession?.id) {
         session = packSession;
       }
       if (!session?.id) {
         const packFlow = await getPackFlowSession(user.id);
+        console.log("[pack_flow] getPackFlowSession after fallback miss", { userId: user.id, packFlowId: packFlow?.id ?? null, packFlowState: packFlow?.state ?? null });
         if (packFlow?.id && (packFlow.state === "wait_pack_carousel" || packFlow.state === "wait_pack_generate_request")) {
           session = packFlow;
         }
