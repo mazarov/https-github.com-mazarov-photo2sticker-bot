@@ -255,6 +255,15 @@ If the concept implies a profession or role visually defined by clothing
 
 If no such role is implied, explicitly state: outfit = "none".
 
+### Holiday Visual Anchors (MANDATORY)
+If the theme is a holiday or celebration (e.g. March 8, Valentine's Day, birthday):
+- Define 2–4 REQUIRED visual anchors (objects, not environments).
+- Examples: flowers, bouquet, gift box, card, ribbon, envelope, candle.
+- These anchors represent the holiday visually.
+- They must be simple, handheld, and easy to isolate.
+- Put outfit (or "none") first in visual_anchors, then these objects.
+At least HALF of the scenes must include one of these visual anchors.
+
 ### Human Imperfection (MANDATORY)
 Include ONE human tension that would feel
 slightly embarrassing, confusing, or socially uncomfortable
@@ -272,6 +281,12 @@ Rules:
 - Same day, same environment.
 - Avoid a perfect or inspirational arc.
 - Balance energy: calm, awkward, tense, overreactive.
+
+### Holiday: Celebratory Moments Quota (MANDATORY)
+If the theme is a holiday:
+- At least 4 of the 9 moments must be explicitly celebratory.
+- Celebratory means: receiving, holding, reacting to, or thinking about a gift or attention.
+- Do NOT replace celebration with neutral daily activities.
 
 ### Anti-Postcard Rule (CRITICAL)
 At least 2 moments MUST be clearly uncomfortable,
@@ -442,13 +457,22 @@ function formatCaptionsUserMessage(plan: BossPlan, criticFeedback?: CriticFeedba
   return msg;
 }
 
-function formatScenesUserMessage(plan: BossPlan, outfit: string, criticFeedback?: CriticFeedbackContext): string {
+function formatScenesUserMessage(
+  plan: BossPlan,
+  outfit: string,
+  criticFeedback?: CriticFeedbackContext,
+  visualAnchors?: string[]
+): string {
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
   const lines: string[] = ["MOMENTS:"];
   moments.forEach((m, i) => {
     lines.push(`${i + 1}. ${m}`);
   });
-  lines.push("", `SUBJECT_MODE: ${plan.subject_mode ?? "single"}`, `OUTFIT: ${outfit}`, "", "Output scene_descriptions as JSON.");
+  lines.push("", `SUBJECT_MODE: ${plan.subject_mode ?? "single"}`, `OUTFIT: ${outfit}`);
+  if (Array.isArray(visualAnchors) && visualAnchors.length > 0) {
+    lines.push("", `VISUAL_ANCHORS: ${visualAnchors.join(", ")}`);
+  }
+  lines.push("", "Output scene_descriptions as JSON.");
   let msg = lines.join("\n");
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
@@ -520,6 +544,17 @@ You describe ONLY how the same person from the reference photo moves and reacts.
 - Max 1 prop, fully visible
 - Simple background only (flat, gradient, wall)
 
+### Holiday theme
+If holiday theme is active:
+- Avoid work-related devices (laptops, work tasks).
+- Phones are allowed only for messages or calls, not work or browsing.
+
+### Holiday visual anchors
+If VISUAL_ANCHORS are given in the user message (holiday objects):
+- Use at least one anchor in at least half of the scenes (5+ scenes).
+- Anchor must be clearly visible and fully inside the frame.
+- Do NOT hide or partially crop the anchor.
+
 ---
 
 ## LENGTH & STYLE (CRITICAL)
@@ -537,14 +572,23 @@ NOTE: Moments already include awkward / anti-postcard beats. Allow imbalance, he
 - Explanations or humor
 Describe only visible body state.
 
+### If holiday theme
+- Avoid scenes that could belong to a normal workday.
+- If the scene feels non-celebratory, rewrite it.
+
 ---
 
 ## OUTPUT (MANDATORY)
 Output ONLY scene_descriptions (EN). Exactly 9 items. No Russian.`;
 
-async function runScenes(plan: BossPlan, outfit: string, criticFeedback?: CriticFeedbackContext): Promise<ScenesOutput> {
+async function runScenes(
+  plan: BossPlan,
+  outfit: string,
+  criticFeedback?: CriticFeedbackContext,
+  visualAnchors?: string[]
+): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
-  const userMessage = formatScenesUserMessage(plan, outfit, criticFeedback);
+  const userMessage = formatScenesUserMessage(plan, outfit, criticFeedback, visualAnchors);
   const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes" });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, 9) : [];
   return { scene_descriptions: sceneDescriptions };
@@ -564,10 +608,16 @@ Act as a strict quality gate for format and usability.
 - Scene uniqueness
 - Rule compliance
 
+### If holiday theme
+- Check that visual anchors appear in at least half of the scenes.
+- If not, suggest adding anchors to specific scene indices (e.g. "Add gift to scene 3, 5, 7").
+
 ---
 
 ## TASTE CHECK (SOFT)
 If everything feels emotionally safe or postcard-like, suggest more awkward or self-ironic moments. Do NOT fail for this alone.
+
+If a holiday pack feels like a normal day with devices or neutral routines, suggest replacing neutral scenes with celebratory ones (by index). Do NOT fail for this alone.
 
 ---
 
@@ -646,19 +696,23 @@ async function runScenesForIndices(
   plan: BossPlan,
   outfit: string,
   criticContext: CriticFeedbackContext,
-  indices: number[]
+  indices: number[],
+  visualAnchors?: string[]
 ): Promise<{ scene_descriptions: string[] }> {
   if (indices.length === 0) return { scene_descriptions: [] };
   const model = await getModelForAgent("scenes");
   const prev = criticContext.previousSpec;
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
-  const flatPlan =
+  let flatPlan =
     "MOMENTS:\n" +
     moments.map((m, i) => `${i + 1}. ${m}`).join("\n") +
     "\n\nSUBJECT_MODE: " +
     (plan.subject_mode ?? "single") +
     "\nOUTFIT: " +
     outfit;
+  if (Array.isArray(visualAnchors) && visualAnchors.length > 0) {
+    flatPlan += "\nVISUAL_ANCHORS: " + visualAnchors.join(", ");
+  }
   const userMessage =
     `The critic rejected specific scenes. Regenerate ONLY the scene_descriptions at 0-based indices: ${JSON.stringify(indices)}.\n\n` +
     `${flatPlan}\n\n` +
@@ -798,7 +852,7 @@ export async function runPackGenerationPipeline(
     let scenes: ScenesOutput;
     [captions, scenes] = await Promise.all([
       wrapStage("captions", () => runCaptions(plan)),
-      wrapStage("scenes", () => runScenes(plan, outfit)),
+      wrapStage("scenes", () => runScenes(plan, outfit, undefined, brief.visual_anchors)),
     ]);
     console.log("[pack-multiagent] captions + scenes (parallel) done in", Date.now() - t2, "ms");
     await onProgress?.("captions");
@@ -858,14 +912,14 @@ export async function runPackGenerationPipeline(
             })
           : wrapStage("captions_rework", () => runCaptions(plan, criticContext)),
         usePartialScenes
-          ? wrapStage("scenes_rework", () => runScenesForIndices(plan, outfit, criticContext, sceneIndices)).then((partial) => {
+          ? wrapStage("scenes_rework", () => runScenesForIndices(plan, outfit, criticContext, sceneIndices, brief.visual_anchors)).then((partial) => {
               const nextScenes = [...(spec.scene_descriptions ?? [])];
               sceneIndices.forEach((idx, j) => {
                 if (partial.scene_descriptions[j] != null) nextScenes[idx] = partial.scene_descriptions[j];
               });
               return { scene_descriptions: nextScenes.slice(0, 9), scene_descriptions_ru: spec.scene_descriptions_ru ? spec.scene_descriptions_ru.slice(0, 9) : [] };
             })
-          : wrapStage("scenes_rework", () => runScenes(plan, outfit, criticContext)),
+          : wrapStage("scenes_rework", () => runScenes(plan, outfit, criticContext, brief.visual_anchors)),
       ]);
       captions = captionsRework as CaptionsOutput;
       scenes = scenesRework as ScenesOutput;

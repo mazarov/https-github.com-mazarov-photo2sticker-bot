@@ -50,13 +50,15 @@ Critic  →  pass/fail → [rework loop]
 ```
 Step 0 — Pack DNA (один раз)
    Brief & Plan [interactive_init]
-   → style_lock, visual_lock, moment_pool (9)
+   → style_lock, visual_lock, moment_pool (9 элементов с полем risk: safe | medium | awkward)
    → сохраняем Pack DNA, пользователю не показываем
 
 Step 1 — Генерация одной сцены
-   Scenes [single]
+   Выбор момента: сцены 1–2 — только safe/medium; awkward позже (см. раздел 7.2).
+   Scenes [single] + Captions [single]
    Input: Pack DNA + 1 момент из pool + использованные body_patterns
-   Output: 1 scene_description (EN + RU при необходимости), 1 caption
+   Output: 1 scene_description (EN, с {subject}), 1 caption (RU + EN)
+   → code-level validators (regex {subject}, длина подписи, RU/EN); при ошибке — regenerate с сигналом «Make it clearly different»
    → показываем пользователю
 
 Step 2 — Реакция пользователя
@@ -64,7 +66,7 @@ Step 2 — Реакция пользователя
    → Taste Delta (структурированно, без LLM): например { awkward_level: "+1", energy: "-1" }
 
 Step 3 — Обновление DNA (при Adjust taste)
-   Brief & Plan [interactive_update]
+   Taste Delta накапливается; вызов Brief & Plan [interactive_update] — debounce (не чаще раз в 2 сцены или по явному подтверждению).
    → обновить только mutable taste-параметры
    → НЕ менять: outfit, environment, subject identity, уже одобренные сцены
 
@@ -117,7 +119,7 @@ flowchart TB
 | MODE | Назначение | Вход | Выход |
 |------|------------|------|--------|
 | `batch` | Текущее поведение | request, subjectType | brief + plan (9 moments) |
-| `interactive_init` | Инициализация Pack DNA | request, subjectType | style_lock, visual_lock, moment_pool (9), без полного plan для Captions/Scenes |
+| `interactive_init` | Инициализация Pack DNA | request, subjectType | style_lock, visual_lock, moment_pool (9 элементов с полем risk: safe / medium / awkward), без полного plan для Captions/Scenes |
 | `interactive_update` | Коррекция вкуса по фидбеку | Pack DNA (текущий), Taste Delta | Обновлённый Pack DNA (только mutable поля) |
 
 **Инвариант:** в `interactive_update` не меняются: outfit, environment, subject identity, уже закоммиченные сцены.
@@ -280,7 +282,7 @@ interface TasteDelta {
 | Действие пользователя | Что делаем |
 |------------------------|------------|
 | **Approve** | Фиксируем сцену и подпись, помечаем момент и body_pattern как использованные, переходим к следующей сцене. |
-| **Regenerate** | Вызываем Scenes [single] и Captions [single] с теми же входными данными (тот же момент, тот же DNA). Опционально: добавить в контекст «предыдущая сцена отклонена, сделай иначе» без смены DNA. |
+| **Regenerate** | Вызываем Scenes [single] и Captions [single] с тем же моментом и DNA, но **обязательно** добавляем в user message одну строку: *«Previous attempt was rejected. Make it clearly different.»* (или эквивалент RU). DNA не меняем; явный сигнал снижает риск зацикливания на почти одинаковом выводе. |
 | **Adjust taste** | Формируем Taste Delta, вызываем Brief & Plan [interactive_update], обновляем DNA. Следующий вызов Scenes [single] уже с новым DNA; момент можно оставить тот же или перейти к следующему — по продуктовому решению. |
 
 **Не делаем:**
@@ -300,12 +302,21 @@ interface TasteDelta {
 
 ---
 
-## 10. Non-Goals
+## 10. Non-Goals и что не меняем
+
+**Non-Goals:**
 
 - Не вводить новых креативных агентов.
 - Не использовать vision / распознавание изображений для фидбека.
 - Не перегенерировать весь пак из-за одной плохой сцены.
 - Не позволять агенту Scenes менять outfit или идентичность субъекта в режиме single.
+
+**Важно — намеренно не делаем (избегаем лишней сложности):**
+
+- ❌ Дробить Pack DNA на несколько сущностей.
+- ❌ Вводить отдельный state-machine агент.
+- ❌ Подмешивать LLM в обработку пользовательского фидбека (Taste Delta — правила/код).
+- ❌ Возвращаться к batch-only мышлению (генерация всех 9 сцен разом в интерактиве).
 
 ---
 
@@ -322,8 +333,10 @@ interface TasteDelta {
 
 1. **Архитектура:** один интерактивный поток с Pack DNA и циклом из 4 шагов (генерация одной сцены → фидбек → опциональное обновление DNA → commit).
 2. **Режимы агентов:** добавить MODE в вызовы Brief & Plan (interactive_init, interactive_update) и Scenes/Captions (single); системные промпты и формат user message различаются по MODE.
-3. **Контракты:** описать и реализовать Pack DNA (slim для передачи), вход/выход single-scene и single-caption, Taste Delta.
-4. **Состояние:** Pack DNA, used_moments, used_body_patterns, накопленные arrays для финального spec — хранить в сессии интерактивного пака.
-5. **Rework:** только Regenerate (одна сцена) или Adjust taste → interactive_update → следующая генерация с обновлённым DNA.
+3. **Контракты:** Pack DNA с `moment_pool: { text, risk }[]`, slim для передачи, вход/выход single-scene и single-caption, Taste Delta.
+4. **Состояние:** Pack DNA, used_moments (с учётом risk при выборе следующего момента), used_body_patterns, накопленные arrays для финального spec — хранить в сессии интерактивного пака.
+5. **Rework:** Regenerate — с явной строкой «Previous attempt was rejected. Make it clearly different.» в input; Adjust taste → debounce interactive_update (накопление delta / не чаще чем раз в 2 сцены или по подтверждению).
+6. **Валидация:** code-level validators после каждой сцены (regex `{subject}`, длина подписи, RU/EN); LLM Critic только опционально в конце.
+7. **Порядок сцен по risk:** сцены 1–2 только safe/medium; awkward не раньше 3-й.
 
 После утверждения доки можно переходить к изменениям в `pack-multiagent.ts` и к месту вызова (интерактивный UI в боте/админке).
