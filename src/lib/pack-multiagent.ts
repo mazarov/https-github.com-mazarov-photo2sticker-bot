@@ -149,7 +149,7 @@ export const PACK_AGENT_APP_CONFIG_KEYS = {
   critic: "pack_openai_model_critic",
 } as const;
 
-const OPENAI_TIMEOUT_MS = 90_000;
+const OPENAI_TIMEOUT_MS = 180_000;
 
 /** Модель берётся только из app_config (ключи PACK_AGENT_APP_CONFIG_KEYS). Дефолтов в коде нет. */
 async function getModelForAgent(agent: keyof typeof PACK_AGENT_APP_CONFIG_KEYS): Promise<string> {
