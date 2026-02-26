@@ -263,6 +263,9 @@ If the theme is a holiday or celebration (e.g. March 8, Valentine's Day, birthda
 - They must be simple, handheld, and easy to isolate.
 - Put outfit (or "none") first in visual_anchors, then these objects.
 At least HALF of the scenes must include one of these visual anchors.
+Distribute anchors across the day, not only in consecutive moments.
+Do NOT replace celebration with neutral daily activities.
+If a moment feels like a normal workday, rewrite it.
 
 ### Human Imperfection (MANDATORY)
 Include ONE human tension that would feel
@@ -303,6 +306,9 @@ Do NOT smooth or justify these moments.
 
 - Output EXACTLY one JSON object.
 - Total JSON length MUST be under 600 characters.
+- If the limit is exceeded:
+  - Prioritize moments and visual_anchors.
+  - Keep names and carousel descriptions minimal.
 - Field values MUST be short phrases, not sentences.
 - Moments: max 8–10 words each.
 - No prose. No explanations. No commentary.
@@ -393,7 +399,9 @@ NOT descriptions of actions.
 ## HARD RULES (STRICT)
 - EXACTLY 9 captions
 - First-person only
-- 15–20 characters per caption (including spaces)
+- Very short captions.
+- Target ~12–16 characters.
+- Shorter is safer than longer.
 - No emojis
 - No narration
 - One caption per line
@@ -410,9 +418,8 @@ NOTE: Moments already include awkward / anti-postcard beats. Do NOT normalize th
 
 ## SELF-CHECK (MANDATORY)
 Before outputting:
-- Count characters for EACH caption.
-- If any caption is outside 15–20 characters, rewrite it.
-- Do NOT mention this check.
+- Ensure captions are very short and chat-like.
+- Do NOT aim for exact character counts.
 
 ---
 
@@ -551,7 +558,7 @@ If holiday theme is active:
 
 ### Holiday visual anchors
 If VISUAL_ANCHORS are given in the user message (holiday objects):
-- Use at least one anchor in at least half of the scenes (5+ scenes).
+- Use at least one anchor in at least half of the scenes.
 - Anchor must be clearly visible and fully inside the frame.
 - Do NOT hide or partially crop the anchor.
 
@@ -602,7 +609,6 @@ Act as a strict quality gate for format and usability.
 
 ## YOU MUST CHECK
 - Exactly 9 captions
-- Caption length (15–20 characters)
 - Exactly 9 scenes (EN)
 - Each scene starts with {subject} and has it exactly once
 - Scene uniqueness
@@ -610,7 +616,7 @@ Act as a strict quality gate for format and usability.
 
 ### If holiday theme
 - Check that visual anchors appear in at least half of the scenes.
-- If not, suggest adding anchors to specific scene indices (e.g. "Add gift to scene 3, 5, 7").
+- Suggest specific scene indices if anchors are missing.
 
 ---
 
