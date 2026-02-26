@@ -413,9 +413,10 @@ export interface CriticFeedbackContext {
   previousSpec?: PackSpecRow;
 }
 
-async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContext): Promise<CaptionsOutput> {
-  const model = await getModelForAgent("captions");
-  let userMessage = `Plan:\n${JSON.stringify(plan, null, 2)}\n\nOutput labels and labels_en as JSON.`;
+// Slim context per agent (see docs/26-02-pack-agents-slim-context-tz.md)
+function formatCaptionsUserMessage(plan: BossPlan, criticFeedback?: CriticFeedbackContext): string {
+  const slim = { moments: plan.moments, tone: plan.tone };
+  let msg = `Plan (moments + tone):\n${JSON.stringify(slim, null, 2)}\n\nOutput labels and labels_en as JSON.`;
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
     parts.push("CRITICAL: Write only what the sender would send in a chat as a sticker. No narration, no description of actions (e.g. no 'докладываю', 'записываю', 'reactions received').");
@@ -433,8 +434,47 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
     if (criticFeedback.suggestions?.length) {
       parts.push("Critic suggestions (apply these fixes):\n" + criticFeedback.suggestions.join("\n"));
     }
-    userMessage += "\n\n" + parts.join("\n\n");
+    msg += "\n\n" + parts.join("\n\n");
   }
+  return msg;
+}
+
+function formatScenesUserMessage(plan: BossPlan, outfit: string, criticFeedback?: CriticFeedbackContext): string {
+  const slim = { moments: plan.moments, subject_mode: plan.subject_mode, outfit };
+  let msg = `Plan (moments + subject_mode + outfit):\n${JSON.stringify(slim, null, 2)}\n\nOutput scene_descriptions as JSON.`;
+  if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
+    const parts: string[] = [];
+    if (criticFeedback.reasons?.length) {
+      parts.push("Critic reasons (what was wrong):\n" + criticFeedback.reasons.join("\n"));
+    }
+    if (criticFeedback.previousSpec?.scene_descriptions?.length) {
+      parts.push(
+        "Previous version (rejected — improve this):\nscene_descriptions: " + JSON.stringify(criticFeedback.previousSpec.scene_descriptions)
+      );
+    }
+    if (criticFeedback.suggestions?.length) {
+      parts.push("Critic suggestions (apply these fixes):\n" + criticFeedback.suggestions.join("\n"));
+    }
+    msg += "\n\n" + parts.join("\n\n");
+  }
+  return msg;
+}
+
+function formatCriticUserMessage(spec: PackSpecRow): string {
+  const slim: Record<string, unknown> = {
+    labels: spec.labels,
+    labels_en: spec.labels_en,
+    scene_descriptions: spec.scene_descriptions,
+  };
+  if (Array.isArray(spec.scene_descriptions_ru) && spec.scene_descriptions_ru.length > 0) {
+    slim.scene_descriptions_ru = spec.scene_descriptions_ru;
+  }
+  return `Pack to check (captions + scenes only):\n${JSON.stringify(slim, null, 2)}\n\nOutput pass, reasons, and suggestions as JSON.`;
+}
+
+async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContext): Promise<CaptionsOutput> {
+  const model = await getModelForAgent("captions");
+  const userMessage = formatCaptionsUserMessage(plan, criticFeedback);
   return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions" });
 }
 
@@ -496,25 +536,9 @@ not a paraphrase.
 
 Each array MUST contain EXACTLY 9 items.`;
 
-async function runScenes(plan: BossPlan, criticFeedback?: CriticFeedbackContext): Promise<ScenesOutput> {
+async function runScenes(plan: BossPlan, outfit: string, criticFeedback?: CriticFeedbackContext): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
-  const hasCriticFeedback = criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || !!criticFeedback?.previousSpec;
-  let userMessage = `Plan:\n${JSON.stringify(plan, null, 2)}\n\nOutput scene_descriptions as JSON.`;
-  if (hasCriticFeedback && criticFeedback) {
-    const parts: string[] = [];
-    if (criticFeedback.reasons?.length) {
-      parts.push("Critic reasons (what was wrong):\n" + criticFeedback.reasons.join("\n"));
-    }
-    if (criticFeedback.previousSpec?.scene_descriptions?.length) {
-      parts.push(
-        "Previous version (rejected — improve this):\nscene_descriptions: " + JSON.stringify(criticFeedback.previousSpec.scene_descriptions)
-      );
-    }
-    if (criticFeedback.suggestions?.length) {
-      parts.push("Critic suggestions (apply these fixes):\n" + criticFeedback.suggestions.join("\n"));
-    }
-    userMessage += "\n\n" + parts.join("\n\n");
-  }
+  const userMessage = formatScenesUserMessage(plan, outfit, criticFeedback);
   const raw = await openAiChatJson<{ scene_descriptions: string[]; scene_descriptions_ru?: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes" });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, 9) : [];
   const sceneDescriptionsRu = Array.isArray(raw.scene_descriptions_ru) ? raw.scene_descriptions_ru.slice(0, 9) : [];
@@ -559,7 +583,7 @@ No explanations.`;
 
 async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
   const model = await getModelForAgent("critic");
-  const userMessage = `Full pack spec:\n${JSON.stringify(spec, null, 2)}\n\nOutput pass, reasons, and suggestions as JSON.`;
+  const userMessage = formatCriticUserMessage(spec);
   return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, { temperature: 1, agentLabel: "critic" });
 }
 
@@ -598,9 +622,10 @@ async function runCaptionsForIndices(
   if (indices.length === 0) return { labels: [], labels_en: [] };
   const model = await getModelForAgent("captions");
   const prev = criticContext.previousSpec;
+  const slim = { moments: plan.moments, tone: plan.tone };
   const userMessage =
     `The critic rejected specific captions. Regenerate ONLY the captions at 0-based indices: ${JSON.stringify(indices)}.\n\n` +
-    `Plan:\n${JSON.stringify(plan, null, 2)}\n\n` +
+    `Plan (moments + tone):\n${JSON.stringify(slim, null, 2)}\n\n` +
     (prev
       ? `Previous labels (RU): ${JSON.stringify(prev.labels)}\nPrevious labels_en (EN): ${JSON.stringify(prev.labels_en)}\n\n`
       : "") +
@@ -615,15 +640,17 @@ async function runCaptionsForIndices(
 /** Regenerate only scene_descriptions at given 0-based indices. Returns array in same order as indices. */
 async function runScenesForIndices(
   plan: BossPlan,
+  outfit: string,
   criticContext: CriticFeedbackContext,
   indices: number[]
 ): Promise<{ scene_descriptions: string[] }> {
   if (indices.length === 0) return { scene_descriptions: [] };
   const model = await getModelForAgent("scenes");
   const prev = criticContext.previousSpec;
+  const slim = { moments: plan.moments, subject_mode: plan.subject_mode, outfit };
   const userMessage =
     `The critic rejected specific scenes. Regenerate ONLY the scene_descriptions at 0-based indices: ${JSON.stringify(indices)}.\n\n` +
-    `Plan:\n${JSON.stringify(plan, null, 2)}\n\n` +
+    `Plan (moments + subject_mode + outfit):\n${JSON.stringify(slim, null, 2)}\n\n` +
     (prev?.scene_descriptions?.length
       ? `Previous scene_descriptions: ${JSON.stringify(prev.scene_descriptions)}\n\n`
       : "") +
@@ -706,16 +733,17 @@ export async function runPackGenerationPipeline(
   };
   try {
     const t0 = Date.now();
-    const { plan } = await wrapStage("brief_and_plan", () => runConceptAndPlan(request, subjectType));
+    const { brief, plan } = await wrapStage("brief_and_plan", () => runConceptAndPlan(request, subjectType));
     console.log(stageLabel("brief_and_plan"), "done in", Date.now() - t0, "ms");
     await onProgress?.("brief_and_plan");
 
+    const outfit = brief?.visual_anchors?.[0] ?? "none";
     const t2 = Date.now();
     let captions: CaptionsOutput;
     let scenes: ScenesOutput;
     [captions, scenes] = await Promise.all([
       wrapStage("captions", () => runCaptions(plan)),
-      wrapStage("scenes", () => runScenes(plan)),
+      wrapStage("scenes", () => runScenes(plan, outfit)),
     ]);
     console.log("[pack-multiagent] captions + scenes (parallel) done in", Date.now() - t2, "ms");
     await onProgress?.("captions");
@@ -771,14 +799,14 @@ export async function runPackGenerationPipeline(
             })
           : wrapStage("captions_rework", () => runCaptions(plan, criticContext)),
         usePartialScenes
-          ? wrapStage("scenes_rework", () => runScenesForIndices(plan, criticContext, sceneIndices)).then((partial) => {
+          ? wrapStage("scenes_rework", () => runScenesForIndices(plan, outfit, criticContext, sceneIndices)).then((partial) => {
               const nextScenes = [...(spec.scene_descriptions ?? [])];
               sceneIndices.forEach((idx, j) => {
                 if (partial.scene_descriptions[j] != null) nextScenes[idx] = partial.scene_descriptions[j];
               });
-              return { scene_descriptions: nextScenes.slice(0, 9), scene_descriptions_ru: [] };
+              return { scene_descriptions: nextScenes.slice(0, 9), scene_descriptions_ru: spec.scene_descriptions_ru ? spec.scene_descriptions_ru.slice(0, 9) : [] };
             })
-          : wrapStage("scenes_rework", () => runScenes(plan, criticContext)),
+          : wrapStage("scenes_rework", () => runScenes(plan, outfit, criticContext)),
       ]);
       captions = captionsRework as CaptionsOutput;
       scenes = scenesRework as ScenesOutput;
@@ -821,9 +849,10 @@ export async function reworkOneIteration(
     criticContext.suggestions.length > 0 ||
     (criticContext.reasons?.length ?? 0) > 0 ||
     !!criticContext.previousSpec;
+  const outfit = "none";
   const [captions, scenes] = await Promise.all([
     runCaptions(plan, hasContext ? criticContext : undefined),
-    runScenes(plan, hasContext ? criticContext : undefined),
+    runScenes(plan, outfit, hasContext ? criticContext : undefined),
   ]);
   const spec = assembleSpec(plan, captions, scenes);
   const critic = await runCritic(spec);
