@@ -5686,8 +5686,7 @@ bot.on("text", async (ctx) => {
     }
 
     const adminPackStageLabels: Record<string, { ru: string; en: string }> = {
-      concept: { ru: "Concept", en: "Concept" },
-      boss: { ru: "Boss", en: "Boss" },
+      brief_and_plan: { ru: "Brief & Plan", en: "Brief & Plan" },
       captions: { ru: "Captions", en: "Captions" },
       scenes: { ru: "Scenes", en: "Scenes" },
       critic: { ru: "Critic", en: "Critic" },
@@ -5695,7 +5694,7 @@ bot.on("text", async (ctx) => {
       scenes_rework: { ru: "Scenes (итерация 2)", en: "Scenes (iteration 2)" },
       critic_2: { ru: "Critic (2)", en: "Critic (2)" },
     };
-    const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Concept…" : "⏳ Concept…");
+    const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Brief & Plan…" : "⏳ Brief & Plan…");
     const chatId = ctx.chat!.id;
     const progressMsgId = (statusMsg as any).message_id;
     const onProgress = async (stage: string) => {

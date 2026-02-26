@@ -43,6 +43,9 @@ export interface BossPlan {
   moments: string[];
 }
 
+/** Плоский вывод объединённого агента Brief & Plan (поля брифa + плана в одном JSON). */
+export type BriefAndPlanRaw = ConceptBrief & BossPlan;
+
 // --- Captions output ---
 export interface CaptionsOutput {
   labels: string[];
@@ -136,26 +139,17 @@ export interface PackGenerationResult {
 // В БД в app_config добавлять строки key = один из ключей ниже, value = модель (например gpt-4o-mini).
 // Так сразу видно, какая строка за какого агента отвечает.
 export const PACK_AGENT_APP_CONFIG_KEYS = {
-  /** Concept — запрос + фото → бриф (setting, persona, tone, situation_types) */
-  concept: "pack_openai_model_concept",
-  /** Boss — бриф → план пака (id, name_ru/en, moments[9], day_structure) */
-  boss: "pack_openai_model_boss",
+  /** Brief & Plan — запрос + фото → бриф и план пака в одном вызове (объединённый Concept + Boss) */
+  brief_and_plan: "pack_openai_model_brief_and_plan",
   /** Captions — план → 9 подписей RU + EN */
   captions: "pack_openai_model_captions",
-  /** Scenes — план + подписи → 9 scene_descriptions с {subject} */
+  /** Scenes — план → 9 scene_descriptions с {subject} */
   scenes: "pack_openai_model_scenes",
   /** Critic — полный спек → pass/fail + reasons + suggestions (строгий gate) */
   critic: "pack_openai_model_critic",
 } as const;
 
 const OPENAI_TIMEOUT_MS = 90_000;
-
-/** Лимиты вывода по агентам (снижение латентности, см. docs/26-02-pack-agents-max-tokens-latency.md). */
-const PACK_AGENT_MAX_TOKENS_CONCEPT = 2048;
-const PACK_AGENT_MAX_TOKENS_BOSS = 1024;
-const PACK_AGENT_MAX_TOKENS_CAPTIONS = 512;
-const PACK_AGENT_MAX_TOKENS_SCENES = 1024;
-const PACK_AGENT_MAX_TOKENS_CRITIC = 512;
 
 /** Модель берётся только из app_config (ключи PACK_AGENT_APP_CONFIG_KEYS). Дефолтов в коде нет. */
 async function getModelForAgent(agent: keyof typeof PACK_AGENT_APP_CONFIG_KEYS): Promise<string> {
@@ -211,150 +205,92 @@ async function openAiChatJson<T>(
   const choice = response.data?.choices?.[0];
   const text = choice?.message?.content;
   const finishReason = choice?.finish_reason ?? "unknown";
+  const usage = response.data?.usage as { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
 
   if (!text) {
     const refusal = (choice?.message as any)?.refusal ?? null;
     const detail = `finish_reason=${finishReason}${refusal ? ` refusal=${String(refusal).slice(0, 200)}` : ""}`;
-    console.error("[pack-multiagent] OpenAI no content", { agent, finish_reason: finishReason, refusal: refusal != null });
+    console.error("[pack-multiagent] OpenAI no content", { agent, finish_reason: finishReason, refusal: refusal != null, usage });
     throw new Error(`OpenAI returned no content (${detail})`);
   }
 
   console.log("[pack-multiagent] OpenAI response", {
     agent,
     finish_reason: finishReason,
+    prompt_tokens: usage?.prompt_tokens,
+    completion_tokens: usage?.completion_tokens,
+    total_tokens: usage?.total_tokens,
     contentLen: text.length,
     contentPreview: text.slice(0, 600),
   });
   return JSON.parse(text) as T;
 }
 
-// --- Concept agent ---
-const CONCEPT_SYSTEM = `## Role
-Interpret the user request into a clear, structured sticker pack concept.
-
-You define:
-- the theme of the day
-- emotional range
-- human tension
-- whether a fixed outfit is required
+// --- Brief & Plan agent (Concept + Boss in one call) ---
+const BRIEF_AND_PLAN_SYSTEM = `## Role
+Interpret the user request into a sticker pack concept and immediately expand it into a plan of exactly 9 distinct moments of one day. Output one JSON with both brief and plan fields.
 
 ---
 
-## Core Rules
-- One day, one theme.
-- Think in moments people remember, not activities.
-- Prefer concrete situations over abstract moods.
-- Do NOT describe poses, scenes, or camera framing.
-- Do NOT describe appearance or facial features.
+## Part 1 — Concept (Brief)
+- One day, one theme. Concrete situations, not abstract moods. Do NOT describe poses, scenes, or appearance.
+- Costume Lock: if the concept implies a profession visible by clothing (soldier, doctor, pilot, chef), define one fixed outfit for the pack (e.g. "doctor's scrubs"). Otherwise: Outfit none.
+- Human Imperfection: include one subtle tension (confusion, hesitation, awkwardness). Do NOT resolve it.
+- Keep brief fields short: setting max 10 words, persona max 8, tone max 6, situation_types 3-5 items each max 6 words, shareability_hook max 8, title_hint max 5, visual_anchors 1-3 items each max 4 words.
 
 ---
 
-## Costume Lock (CRITICAL)
-
-If the concept implies a profession or role that is visually recognizable by clothing
-(e.g. soldier, war correspondent, doctor, pilot, chef):
-
-- You MUST define one fixed outfit for the entire pack.
-- The outfit must stay the same across all scenes.
-- Describe the outfit at a high level only.
-
-Examples:
-- "casual military field uniform"
-- "doctor's scrubs"
-- "pilot uniform"
-
-If no such role is implied, explicitly state: Outfit: none.
-
----
-
-## Human Imperfection (MANDATORY)
-
-Include one subtle human tension:
-confusion, hesitation, emotional mismatch,
-overreaction, mild disappointment, or awkwardness.
-
-Do NOT resolve it.
-Do NOT smooth it out.
-
----
-
-## LENGTH LIMITS (MANDATORY)
-
-Keep the entire JSON short. Hard limits per field:
-- setting: max 10 words.
-- persona: max 8 words.
-- tone: max 6 words.
-- situation_types: 3-5 items, each max 6 words.
-- shareability_hook: max 8 words.
-- title_hint: max 5 words.
-- visual_anchors: 1-3 items, each max 4 words.
-If you exceed these, the response will be cut off and invalid.
+## Part 2 — Plan (9 moments)
+- 9 clearly different moments, same day and environment. Balance: calm, awkward, tense, overreactive.
+- Anti-Postcard (CRITICAL): at least 2 moments must be uncomfortable, self-exposing, or socially imperfect. Do NOT smooth them.
+- Each moment: max 8–10 words. No explanations.
 
 ---
 
 ## OUTPUT (STRICT)
 
-Output ONLY the following fields:
+Output exactly one JSON with all keys below. No prose.
 
-Theme:
-Emotional range:
-Human tension:
-Outfit:
+Brief keys: subject_type (single_male | single_female | couple | unknown), setting, persona, tone, timeline ("one_day"), situation_types (array), shareability_hook, title_hint, visual_anchors (array, first = outfit or "none").
 
-No explanations.
-No prose.
-No extra text.
+Plan keys: id (snake_case slug), pack_template_id (e.g. couple_v1), subject_mode (single or multi), name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order (number), segment_id, story_arc (one phrase), tone, day_structure (optional), moments (array of exactly 9 strings).`;
 
-Output strict JSON with keys: subject_type (match photo: single_male | single_female | couple | unknown), setting (Theme), persona, tone (Emotional range, max 6 words), timeline (always "one_day"), situation_types (array of 3-5 concrete situations), shareability_hook (Human tension), title_hint (short), visual_anchors (first item = Outfit or "none").`;
-
-async function runConcept(request: string, subjectType: SubjectType): Promise<ConceptBrief> {
-  const model = await getModelForAgent("concept");
-  const userMessage = `User request: ${request}\n\nPhoto context (subject_type): ${subjectType}\n\nOutput the brief as JSON.`;
-  return openAiChatJson<ConceptBrief>(model, CONCEPT_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_CONCEPT, agentLabel: "concept" });
+function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan: BossPlan } {
+  const brief: ConceptBrief = {
+    subject_type: raw.subject_type,
+    setting: raw.setting,
+    persona: raw.persona,
+    tone: raw.tone,
+    timeline: raw.timeline ?? "one_day",
+    situation_types: raw.situation_types ?? [],
+    shareability_hook: raw.shareability_hook,
+    title_hint: raw.title_hint,
+    visual_anchors: raw.visual_anchors,
+  };
+  const plan: BossPlan = {
+    id: raw.id,
+    pack_template_id: raw.pack_template_id,
+    subject_mode: raw.subject_mode,
+    name_ru: raw.name_ru,
+    name_en: raw.name_en,
+    carousel_description_ru: raw.carousel_description_ru,
+    carousel_description_en: raw.carousel_description_en,
+    mood: raw.mood,
+    sort_order: raw.sort_order,
+    segment_id: raw.segment_id,
+    story_arc: raw.story_arc,
+    tone: raw.tone,
+    day_structure: raw.day_structure,
+    moments: raw.moments ?? [],
+  };
+  return { brief, plan };
 }
 
-// --- Boss agent ---
-const BOSS_SYSTEM = `## Role
-Turn the concept into a plan of exactly 9 distinct moments of one day.
-
----
-
-## Planning Rules
-- Each moment must be clearly different.
-- All moments belong to the same day and environment.
-- Avoid a perfect or motivational arc.
-- Balance energy: calm, awkward, tense, overreactive.
-
----
-
-## Anti-Postcard Rule (CRITICAL)
-
-At least 2 of the 9 moments must be clearly uncomfortable,
-self-exposing, mildly embarrassing, or socially imperfect.
-
-If a moment feels safe to post publicly,
-it is NOT anti-postcard enough.
-
-Do NOT smooth or reframe these moments positively.
-
----
-
-## OUTPUT (STRICT)
-
-Output ONLY the final list of 9 moments.
-
-- Exactly 9 lines
-- Each line: max 8–10 words
-- No explanations
-- No commentary
-- No restating rules
-
-Output strict JSON with keys: id (snake_case slug), pack_template_id (e.g. couple_v1), subject_mode (single or multi), name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order (number), segment_id, story_arc (one phrase), tone, day_structure (optional array of 9), moments (array of exactly 9 strings).`;
-
-async function runBoss(brief: ConceptBrief): Promise<BossPlan> {
-  const model = await getModelForAgent("boss");
-  const userMessage = `Brief:\n${JSON.stringify(brief, null, 2)}\n\nOutput the pack plan as JSON.`;
-  return openAiChatJson<BossPlan>(model, BOSS_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_BOSS, agentLabel: "boss" });
+async function runConceptAndPlan(request: string, subjectType: SubjectType): Promise<{ brief: ConceptBrief; plan: BossPlan }> {
+  const model = await getModelForAgent("brief_and_plan");
+  const userMessage = `User request: ${request}\n\nPhoto context (subject_type): ${subjectType}\n\nOutput the combined brief and plan as a single JSON.`;
+  const raw = await openAiChatJson<BriefAndPlanRaw>(model, BRIEF_AND_PLAN_SYSTEM, userMessage, { agentLabel: "brief_and_plan" });
+  return mapRawToBriefAndPlan(raw);
 }
 
 // --- Captions agent ---
@@ -434,7 +370,7 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
     }
     userMessage += "\n\n" + parts.join("\n\n");
   }
-  return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_CAPTIONS, agentLabel: "captions" });
+  return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions" });
 }
 
 // --- Scenes agent ---
@@ -567,7 +503,7 @@ async function runScenes(plan: BossPlan, criticFeedback?: CriticFeedbackContext)
     }
     userMessage += "\n\n" + parts.join("\n\n");
   }
-  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_SCENES, agentLabel: "scenes" });
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes" });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, 9) : [];
   return { scene_descriptions: sceneDescriptions, scene_descriptions_ru: [] };
 }
@@ -625,7 +561,7 @@ Output strict JSON with keys: pass (boolean), reasons (array of max 3 strings, i
 async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
   const model = await getModelForAgent("critic");
   const userMessage = `Full pack spec:\n${JSON.stringify(spec, null, 2)}\n\nOutput pass, reasons, and suggestions as JSON.`;
-  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, { temperature: 1, maxTokens: PACK_AGENT_MAX_TOKENS_CRITIC, agentLabel: "critic" });
+  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, { temperature: 1, agentLabel: "critic" });
 }
 
 // --- Partial rework: parse indices from Critic feedback ---
@@ -671,7 +607,7 @@ async function runCaptionsForIndices(
       : "") +
     `Critic reasons: ${(criticContext.reasons ?? []).join(" ")}\nCritic suggestions: ${criticContext.suggestions.join(" ")}\n\n` +
     `Output JSON with keys: labels (array of ${indices.length} strings, RU, in order of indices), labels_en (array of ${indices.length} strings, EN). Each caption 15–20 characters.`;
-  const raw = await openAiChatJson<{ labels: string[]; labels_en: string[] }>(model, CAPTIONS_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_CAPTIONS, agentLabel: "captions_rework" });
+  const raw = await openAiChatJson<{ labels: string[]; labels_en: string[] }>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions_rework" });
   const labels = Array.isArray(raw.labels) ? raw.labels.slice(0, indices.length) : [];
   const labels_en = Array.isArray(raw.labels_en) ? raw.labels_en.slice(0, indices.length) : [];
   return { labels, labels_en };
@@ -694,7 +630,7 @@ async function runScenesForIndices(
       : "") +
     `Critic reasons: ${(criticContext.reasons ?? []).join(" ")}\nCritic suggestions: ${criticContext.suggestions.join(" ")}\n\n` +
     `Output JSON with one key: scene_descriptions (array of ${indices.length} strings, in order of indices). Each sentence 18–22 words, start with {subject}. No subordinate clauses.`;
-  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_SCENES, agentLabel: "scenes_rework" });
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes_rework" });
   const scene_descriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, indices.length) : [];
   return { scene_descriptions };
 }
@@ -738,8 +674,7 @@ function normalizeSubjectType(
 
 /** Progress stage keys for admin pack loading (passed to onProgress). */
 export type PackPipelineStage =
-  | "concept"
-  | "boss"
+  | "brief_and_plan"
   | "captions"
   | "scenes"
   | "critic"
@@ -748,7 +683,7 @@ export type PackPipelineStage =
   | "critic_2";
 
 /**
- * Run the full pipeline: Concept → Boss → Captions → Scenes → Assembly → Critic.
+ * Run the full pipeline: Brief & Plan → Captions ∥ Scenes → Assembly → Critic.
  * On Critic fail, re-run Captions and Scenes with suggestions (max iterations).
  * Does NOT insert into DB; caller must ensure unique id and insert.
  * Optional onProgress(stage) is called after each step for loading UI.
@@ -772,13 +707,9 @@ export async function runPackGenerationPipeline(
   };
   try {
     const t0 = Date.now();
-    const brief = await wrapStage("concept", () => runConcept(request, subjectType));
-    console.log(stageLabel("concept"), "done in", Date.now() - t0, "ms");
-    await onProgress?.("concept");
-    const t1 = Date.now();
-    const plan = await wrapStage("boss", () => runBoss(brief));
-    console.log(stageLabel("boss"), "done in", Date.now() - t1, "ms");
-    await onProgress?.("boss");
+    const { plan } = await wrapStage("brief_and_plan", () => runConceptAndPlan(request, subjectType));
+    console.log(stageLabel("brief_and_plan"), "done in", Date.now() - t0, "ms");
+    await onProgress?.("brief_and_plan");
 
     const t2 = Date.now();
     let captions: CaptionsOutput;
