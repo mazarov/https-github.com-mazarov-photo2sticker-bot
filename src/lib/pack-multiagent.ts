@@ -161,6 +161,10 @@ async function getModelForAgent(agent: keyof typeof PACK_AGENT_APP_CONFIG_KEYS):
   return value;
 }
 
+/**
+ * OpenAI chat with JSON response. System prompt is sent first so it can be cached by the API
+ * (OpenAI prompt caching applies to static prefix; see docs/26-02-pack-agents-slim-context-tz.md Level 3).
+ */
 async function openAiChatJson<T>(
   model: string,
   systemPrompt: string,
@@ -384,14 +388,8 @@ NOT descriptions of actions.
 ---
 
 ## TONE
-Slight self-irony beats positivity.
-
-If a caption sounds confident out loud,
-rewrite it as something you'd admit privately.
-
-For awkward moments:
-confusion > confidence  
-honesty > optimism  
+Slight self-irony beats positivity. If a caption sounds confident out loud, rewrite as something you'd admit privately.
+NOTE: Moments already include awkward / anti-postcard beats. Do NOT normalize them.
 
 ---
 
@@ -413,13 +411,18 @@ export interface CriticFeedbackContext {
   previousSpec?: PackSpecRow;
 }
 
-// Slim context per agent (see docs/26-02-pack-agents-slim-context-tz.md)
+// Slim + flat context per agent (docs/26-02-pack-agents-slim-context-tz.md: Level 1 + Level 2)
 function formatCaptionsUserMessage(plan: BossPlan, criticFeedback?: CriticFeedbackContext): string {
-  const slim = { moments: plan.moments, tone: plan.tone };
-  let msg = `Plan (moments + tone):\n${JSON.stringify(slim, null, 2)}\n\nOutput labels and labels_en as JSON.`;
+  const moments = Array.isArray(plan.moments) ? plan.moments : [];
+  const lines: string[] = ["MOMENTS:"];
+  moments.forEach((m, i) => {
+    lines.push(`${i + 1}. ${m}`);
+  });
+  lines.push("", `TONE: ${plan.tone ?? ""}`, "", "Output labels and labels_en as JSON.");
+  let msg = lines.join("\n");
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
-    parts.push("CRITICAL: Write only what the sender would send in a chat as a sticker. No narration, no description of actions (e.g. no 'докладываю', 'записываю', 'reactions received').");
+    parts.push("CRITICAL: Write only what the sender would send in a chat as a sticker. No narration, no description of actions.");
     if (criticFeedback.reasons?.length) {
       parts.push("Critic reasons (what was wrong):\n" + criticFeedback.reasons.join("\n"));
     }
@@ -440,8 +443,13 @@ function formatCaptionsUserMessage(plan: BossPlan, criticFeedback?: CriticFeedba
 }
 
 function formatScenesUserMessage(plan: BossPlan, outfit: string, criticFeedback?: CriticFeedbackContext): string {
-  const slim = { moments: plan.moments, subject_mode: plan.subject_mode, outfit };
-  let msg = `Plan (moments + subject_mode + outfit):\n${JSON.stringify(slim, null, 2)}\n\nOutput scene_descriptions as JSON.`;
+  const moments = Array.isArray(plan.moments) ? plan.moments : [];
+  const lines: string[] = ["MOMENTS:"];
+  moments.forEach((m, i) => {
+    lines.push(`${i + 1}. ${m}`);
+  });
+  lines.push("", `SUBJECT_MODE: ${plan.subject_mode ?? "single"}`, `OUTFIT: ${outfit}`, "", "Output scene_descriptions as JSON.");
+  let msg = lines.join("\n");
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
     if (criticFeedback.reasons?.length) {
@@ -461,15 +469,26 @@ function formatScenesUserMessage(plan: BossPlan, outfit: string, criticFeedback?
 }
 
 function formatCriticUserMessage(spec: PackSpecRow): string {
-  const slim: Record<string, unknown> = {
-    labels: spec.labels,
-    labels_en: spec.labels_en,
-    scene_descriptions: spec.scene_descriptions,
-  };
+  const lines: string[] = ["CAPTIONS (RU):"];
+  (spec.labels ?? []).forEach((l, i) => {
+    lines.push(`${i + 1}. ${l}`);
+  });
+  lines.push("", "CAPTIONS (EN):");
+  (spec.labels_en ?? []).forEach((l, i) => {
+    lines.push(`${i + 1}. ${l}`);
+  });
+  lines.push("", "SCENES (EN):");
+  (spec.scene_descriptions ?? []).forEach((s, i) => {
+    lines.push(`${i + 1}. ${s}`);
+  });
   if (Array.isArray(spec.scene_descriptions_ru) && spec.scene_descriptions_ru.length > 0) {
-    slim.scene_descriptions_ru = spec.scene_descriptions_ru;
+    lines.push("", "SCENES (RU):");
+    spec.scene_descriptions_ru.forEach((s, i) => {
+      lines.push(`${i + 1}. ${s}`);
+    });
   }
-  return `Pack to check (captions + scenes only):\n${JSON.stringify(slim, null, 2)}\n\nOutput pass, reasons, and suggestions as JSON.`;
+  lines.push("", "Output pass, reasons, and suggestions as JSON.");
+  return lines.join("\n");
 }
 
 async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContext): Promise<CaptionsOutput> {
@@ -505,23 +524,8 @@ moves and reacts.
 ---
 
 ## LENGTH & STYLE (CRITICAL)
-Each scene:
-- EXACTLY one sentence
-- Max 18 words
-- No metaphors
-- No cinematic language
-- Functional visual description only
-
----
-
-## ANTI-POSTCARD EXECUTION
-For awkward moments, allow:
-- imbalance
-- hesitation
-- frozen mid-reaction
-- visible discomfort
-
-Do NOT beautify these scenes.
+Each scene: EXACTLY one sentence, max 18 words. No metaphors, no cinematic language. Functional visual description only.
+NOTE: Moments already include awkward / anti-postcard beats. Allow imbalance, hesitation, frozen mid-reaction; do NOT beautify.
 
 ---
 
@@ -562,9 +566,7 @@ Act as a strict quality gate for format and usability.
 ---
 
 ## TASTE CHECK (SOFT)
-If everything feels emotionally safe or postcard-like,
-suggest adding more awkward or self-ironic moments.
-Do NOT fail for this alone.
+If everything feels emotionally safe or postcard-like, suggest more awkward or self-ironic moments. Do NOT fail for this alone.
 
 ---
 
@@ -622,10 +624,11 @@ async function runCaptionsForIndices(
   if (indices.length === 0) return { labels: [], labels_en: [] };
   const model = await getModelForAgent("captions");
   const prev = criticContext.previousSpec;
-  const slim = { moments: plan.moments, tone: plan.tone };
+  const moments = Array.isArray(plan.moments) ? plan.moments : [];
+  const flatPlan = "MOMENTS:\n" + moments.map((m, i) => `${i + 1}. ${m}`).join("\n") + "\n\nTONE: " + (plan.tone ?? "");
   const userMessage =
     `The critic rejected specific captions. Regenerate ONLY the captions at 0-based indices: ${JSON.stringify(indices)}.\n\n` +
-    `Plan (moments + tone):\n${JSON.stringify(slim, null, 2)}\n\n` +
+    `${flatPlan}\n\n` +
     (prev
       ? `Previous labels (RU): ${JSON.stringify(prev.labels)}\nPrevious labels_en (EN): ${JSON.stringify(prev.labels_en)}\n\n`
       : "") +
@@ -647,10 +650,17 @@ async function runScenesForIndices(
   if (indices.length === 0) return { scene_descriptions: [] };
   const model = await getModelForAgent("scenes");
   const prev = criticContext.previousSpec;
-  const slim = { moments: plan.moments, subject_mode: plan.subject_mode, outfit };
+  const moments = Array.isArray(plan.moments) ? plan.moments : [];
+  const flatPlan =
+    "MOMENTS:\n" +
+    moments.map((m, i) => `${i + 1}. ${m}`).join("\n") +
+    "\n\nSUBJECT_MODE: " +
+    (plan.subject_mode ?? "single") +
+    "\nOUTFIT: " +
+    outfit;
   const userMessage =
     `The critic rejected specific scenes. Regenerate ONLY the scene_descriptions at 0-based indices: ${JSON.stringify(indices)}.\n\n` +
-    `Plan (moments + subject_mode + outfit):\n${JSON.stringify(slim, null, 2)}\n\n` +
+    `${flatPlan}\n\n` +
     (prev?.scene_descriptions?.length
       ? `Previous scene_descriptions: ${JSON.stringify(prev.scene_descriptions)}\n\n`
       : "") +
