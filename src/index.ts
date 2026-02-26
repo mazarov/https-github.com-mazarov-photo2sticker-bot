@@ -1468,14 +1468,22 @@ async function getUser(telegramId: number) {
   return data;
 }
 
-// Helper: get persistent menu keyboard (2 rows)
-function getMainMenuKeyboard(lang: string) {
-  const row1 = lang === "ru"
-    ? ["📦 Создать пак"]
-    : ["📦 Create pack"];
-  const row2 = lang === "ru"
-    ? ["💰 Ваш баланс", "💬 Поддержка"]
-    : ["💰 Your balance", "💬 Support"];
+// Helper: get persistent menu keyboard (2 rows). Admin on test sees "Сгенерировать пак" in row1 (docs/20-02-admin-generate-pack-menu-button.md).
+function getMainMenuKeyboard(lang: string, telegramId?: number) {
+  const showAdminGenerate =
+    config.appEnv === "test" && telegramId != null && config.adminIds.includes(telegramId);
+  const row1 =
+    lang === "ru"
+      ? showAdminGenerate
+        ? ["📦 Создать пак", "🔄 Сгенерировать пак"]
+        : ["📦 Создать пак"]
+      : showAdminGenerate
+        ? ["📦 Create pack", "🔄 Generate pack"]
+        : ["📦 Create pack"];
+  const row2 =
+    lang === "ru"
+      ? ["💰 Ваш баланс", "💬 Поддержка"]
+      : ["💰 Your balance", "💬 Support"];
   return Markup.keyboard([row1, row2]).resize().persistent();
 }
 
@@ -1536,7 +1544,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
 
   if (sessionError || !newSession) {
     console.error("startAssistantDialog: Failed to create session:", sessionError?.message || "no data");
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -1568,7 +1576,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
   const aSession = await createAssistantSession(user.id, newSession.id, initMessages);
   if (!aSession) {
     console.error("startAssistantDialog: Failed to create assistant_session");
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -1603,7 +1611,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
   ];
   await updateAssistantSession(aSession.id, { messages });
 
-  await ctx.reply(greeting, getMainMenuKeyboard(lang));
+  await ctx.reply(greeting, getMainMenuKeyboard(lang, ctx?.from?.id));
 
   // If photo already exists — show sticker ideas immediately
   if (lastPhoto) {
@@ -1679,7 +1687,7 @@ async function handleAssistantConfirm(ctx: any, user: any, sessionId: string, la
   // Get assistant session for params
   const aSession = await getActiveAssistantSession(user.id);
   if (!aSession) {
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -1691,7 +1699,7 @@ async function handleAssistantConfirm(ctx: any, user: any, sessionId: string, la
     .maybeSingle();
 
   if (!session) {
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -2414,7 +2422,7 @@ async function handleTrialCreditAction(
         if (freshUser) await handleAssistantConfirm(ctx, freshUser, session.id, lang);
       } else {
         // Early grant — just credit the user, continue conversation
-        if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+        if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
         // Generation will happen later when user hits [Confirm]
       }
     } else {
@@ -2448,7 +2456,7 @@ async function handleTrialCreditAction(
         }
       } else {
         // Early call, budget exhausted — silently continue conversation
-        if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+        if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
       }
     }
   } else {
@@ -2489,7 +2497,7 @@ async function handleTrialCreditAction(
       }
     } else {
       // Early deny — soft, no paywall, continue conversation
-      if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+      if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
     }
   }
 }
@@ -2729,7 +2737,7 @@ async function handleAvatarAutoGeneration(ctx: any, user: any, lang: string) {
   const greetingText = lang === "ru"
     ? "Привет! Я делаю стикеры из фото 🎨 Смотри — уже готовлю один из твоей аватарки, чтобы ты увидел как это работает!"
     : "Hi! I turn photos into stickers 🎨 Look — I'm already making one from your profile photo so you can see how it works!";
-  await ctx.reply(greetingText, getMainMenuKeyboard(lang));
+  await ctx.reply(greetingText, getMainMenuKeyboard(lang, ctx?.from?.id));
 
   // Get configurable style from app_config (default: cartoon_telegram)
   const defaultStyleId = await getAppConfig("avatar_demo_style", "cartoon_telegram");
@@ -2939,7 +2947,7 @@ bot.start(async (ctx) => {
         const text = lang === "ru"
           ? `💝 Отправь фото — создам стикер в стиле «${styleName}»!\n\n${preset.emoji} Просто отправь фото сюда 👇`
           : `💝 Send a photo — I'll create a sticker in «${styleName}» style!\n\n${preset.emoji} Just send your photo here 👇`;
-        await ctx.reply(text, getMainMenuKeyboard(lang));
+        await ctx.reply(text, getMainMenuKeyboard(lang, ctx?.from?.id));
         return;
       }
     }
@@ -2948,7 +2956,7 @@ bot.start(async (ctx) => {
     await handlePackMenuEntry(ctx, { source: "start", autoPackEntry: true });
   } else {
     const lang = "en";
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
   }
 });
 
@@ -2992,7 +3000,7 @@ bot.action(/^val_(.+)$/, async (ctx) => {
   const text = lang === "ru"
     ? `💝 Отправь фото — создам стикер в стиле «${styleName}»!\n\n${preset.emoji} Просто отправь фото сюда 👇`
     : `💝 Send a photo — I'll create a sticker in «${styleName}» style!\n\n${preset.emoji} Just send your photo here 👇`;
-  await ctx.reply(text, getMainMenuKeyboard(lang));
+  await ctx.reply(text, getMainMenuKeyboard(lang, ctx?.from?.id));
 });
 
 // /balance command - shows balance + tariffs directly (no intermediate "Top up" button)
@@ -3235,7 +3243,7 @@ bot.on("photo", async (ctx) => {
         const replyText = generateFallbackReply("normal", aSession, lang);
         messages.push({ role: "assistant", content: replyText });
         await updateAssistantSession(aSession.id, { messages, pending_photo_file_id: null });
-        await ctx.reply(replyText, getMainMenuKeyboard(lang));
+        await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
         return;
       }
 
@@ -3369,13 +3377,13 @@ bot.on("photo", async (ctx) => {
             messages[messages.length - 1] = { role: "assistant", content: replyText };
           }
           await updateAssistantSession(aSession.id, { messages });
-          if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+          if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
         } catch (err: any) {
           console.error("[AvatarDemo] Assistant AI error:", err.message);
           const fallback = lang === "ru"
             ? "Отличное фото! Опиши стиль стикера (например: аниме, мультяшный, минимализм)"
             : "Great photo! Describe the sticker style (e.g.: anime, cartoon, minimal)";
-          await ctx.reply(fallback, getMainMenuKeyboard(lang));
+          await ctx.reply(fallback, getMainMenuKeyboard(lang, ctx?.from?.id));
         }
       }
     }
@@ -3507,7 +3515,7 @@ bot.hears(["✨ Создать стикер", "✨ Create sticker"], async (ctx)
   const user = await getUser(telegramId);
   if (!user) {
     const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
-    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -3526,7 +3534,7 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) {
     const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
-    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -3548,7 +3556,7 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
   const photoFileId = getUserPhotoFileId(user, session);
 
   if (!session || !photoFileId) {
-    await ctx.reply(await getText(lang, "photo.need_photo"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "photo.need_photo"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -3580,12 +3588,12 @@ bot.hears(["💰 Ваш баланс", "💰 Your balance"], async (ctx) => {
   const userPromise = getUser(telegramId);
   const openingMsg = await ctx.reply(
     isRu ? "💰 Открываю баланс..." : "💰 Opening balance...",
-    getMainMenuKeyboard(fastLang)
+    getMainMenuKeyboard(fastLang, ctx?.from?.id)
   ).catch(() => null);
 
   const user = await userPromise;
   if (!user) {
-    await ctx.reply(await getText(fastLang, "start.need_start"), getMainMenuKeyboard(fastLang));
+    await ctx.reply(await getText(fastLang, "start.need_start"), getMainMenuKeyboard(fastLang, ctx?.from?.id));
     return;
   }
 
@@ -3602,7 +3610,7 @@ bot.hears(["💬 Поддержка", "💬 Support"], async (ctx) => {
   const helpText = isRu
     ? "📷 Отправь фото — получи стикер\n💰 Каждый стикер = 1 кредит\n🎨 Выбирай стили и эмоции\n\nВопросы? @p2s_support_bot"
     : "📷 Send photo — get sticker\n💰 Each sticker = 1 credit\n🎨 Choose styles and emotions\n\nQuestions? @p2s_support_bot";
-  await ctx.reply(helpText, getMainMenuKeyboard(lang));
+  await ctx.reply(helpText, getMainMenuKeyboard(lang, ctx?.from?.id));
 });
 
 // ============================================
@@ -3702,7 +3710,7 @@ async function handlePackMenuEntry(
   const user = await getUser(telegramId);
   if (!user) {
     const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
-    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
   const lang = user.lang || "en";
@@ -3712,7 +3720,7 @@ async function handlePackMenuEntry(
   let openingMsg: { message_id?: number } | null = null;
   if (source === "menu" || source === "start") {
     const openingText = lang === "ru" ? "⏳ Открываю конструктор пака..." : "⏳ Opening pack builder...";
-    openingMsg = await ctx.reply(openingText, getMainMenuKeyboard(lang)).catch(() => null);
+    openingMsg = await ctx.reply(openingText, getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => null);
   }
   try {
     const activeSession = await getActiveSession(user.id);
@@ -3725,7 +3733,7 @@ async function handlePackMenuEntry(
       const processingMsg = lang === "ru"
         ? "Сейчас идет обработка текущего пака. Подожди немного, я сообщу, когда все будет готово."
         : "Your current pack is still processing. Please wait a bit - I will notify you when it's ready.";
-      await ctx.reply(processingMsg, getMainMenuKeyboard(lang));
+      await ctx.reply(processingMsg, getMainMenuKeyboard(lang, ctx?.from?.id));
       console.log(
         `[pack_entry] skipped due to active processing: source=${source} auto_pack_entry=${autoPackEntry} session=${activeSession.id} state=${activeSession.state}`
       );
@@ -3748,7 +3756,7 @@ async function handlePackMenuEntry(
     // Source of truth for pack catalog in current DB: pack_content_sets.
     const contentSets = await getActivePackContentSets();
     if (!contentSets?.length) {
-      await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
+      await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang, ctx?.from?.id));
       return;
     }
     const templateId = String(contentSets[0].pack_template_id || "couple_v1");
@@ -3771,7 +3779,7 @@ async function handlePackMenuEntry(
         });
         return;
       }
-      await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
+      await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang, ctx?.from?.id));
       return;
     }
 
@@ -3801,7 +3809,7 @@ async function handlePackMenuEntry(
       .single();
     if (sessErr || !session) {
       console.log("[pack_flow] pack_entry session insert failed", { userId: user.id, err: sessErr?.message });
-      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
       return;
     }
     console.log("[pack_flow] pack_entry session created", { userId: user.id, sessionId: session.id, state: session.state });
@@ -3821,7 +3829,7 @@ async function handlePackMenuEntry(
     if (!visibleSets.length) {
       await ctx.reply(
         lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-        getMainMenuKeyboard(lang)
+        getMainMenuKeyboard(lang, ctx?.from?.id)
       );
       return;
     }
@@ -3881,7 +3889,7 @@ async function handlePackMenuEntry(
     }
   } catch (err: any) {
     console.error("[pack_entry] handlePackMenuEntry error:", err?.message || err, err?.stack?.split("\n").slice(0, 4));
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang)).catch(() => {});
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
   }
 }
 
@@ -3891,6 +3899,64 @@ bot.hears(["📦 Создать пак", "📦 Create pack", "📦 Пак сти
   const text = ctx.message?.text?.trim() ?? "";
   console.log("[pack_flow] hears menu button", { telegramId, text, source: "menu" });
   await handlePackMenuEntry(ctx, { source: "menu", autoPackEntry: false });
+});
+
+// Menu: 🔄 Сгенерировать пак (admin only, test) — create session wait_pack_generate_request, ask for theme (docs/20-02-admin-generate-pack-menu-button.md)
+bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const contentSets = await getActivePackContentSets();
+  if (!contentSets?.length) {
+    await ctx.reply(
+      lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.",
+      getMainMenuKeyboard(lang, telegramId)
+    );
+    return;
+  }
+  const templateId = String(contentSets[0].pack_template_id || "couple_v1");
+  const contentSetId = contentSets[0].id;
+
+  await supabase
+    .from("sessions")
+    .update({ is_active: false })
+    .eq("user_id", user.id)
+    .eq("is_active", true)
+    .eq("env", config.appEnv);
+
+  const { data: session, error: sessErr } = await supabase
+    .from("sessions")
+    .insert({
+      user_id: user.id,
+      state: "wait_pack_generate_request",
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: 1,
+      pack_template_id: templateId,
+      pack_content_set_id: contentSetId,
+      subject_mode: "single",
+      subject_gender: "female",
+      env: config.appEnv,
+    })
+    .select()
+    .single();
+
+  if (sessErr || !session) {
+    console.error("[pack_admin] generate-from-menu session insert failed:", sessErr?.message);
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, telegramId));
+    return;
+  }
+
+  await ctx.reply(
+    lang === "ru"
+      ? "Введите тему пака одной фразой (например: офисный юмор, 23 февраля Z стиль). Контекст фото берётся из текущей сессии."
+      : "Enter the pack theme in one phrase (e.g. office humor, Feb 23 Z style). Photo context is taken from the current session.",
+    getMainMenuKeyboard(lang, telegramId)
+  );
 });
 
 // Broadcast "Попробовать" — same as tapping "Пак стикеров"
@@ -3923,7 +3989,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
   if (!contentSetsForTemplate?.length) {
     await ctx.reply(
       lang === "ru" ? "Шаблон не найден." : "Template not found.",
-      getMainMenuKeyboard(lang)
+      getMainMenuKeyboard(lang, ctx?.from?.id)
     );
     return;
   }
@@ -3971,7 +4037,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
 
   if (sessErr || !session) {
     console.error("Failed to create pack session:", sessErr?.message);
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -3980,7 +4046,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
     await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
   } else {
     // No photo — ask user to send one
-    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang, ctx?.from?.id));
   }
 });
 
@@ -3998,7 +4064,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const allContentSets = await getActivePackContentSets();
   const contentSets = getPackContentSetsForTemplate(allContentSets, templateId);
   if (!contentSets?.length) {
-    await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
+    await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -4037,7 +4103,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
     .select()
     .single();
   if (sessErr || !session) {
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -4056,7 +4122,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   if (!visibleSets.length) {
     await ctx.reply(
       lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-      getMainMenuKeyboard(lang)
+      getMainMenuKeyboard(lang, ctx?.from?.id)
     );
     return;
   }
@@ -4448,7 +4514,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   if (!visibleSets.length) {
     await ctx.reply(
       lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-      getMainMenuKeyboard(lang)
+      getMainMenuKeyboard(lang, ctx?.from?.id)
     );
     return;
   }
@@ -4499,7 +4565,7 @@ async function renderPackCarouselForSession(
   if (!visibleSets.length) {
     await ctx.reply(
       lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-      getMainMenuKeyboard(lang)
+      getMainMenuKeyboard(lang, ctx?.from?.id)
     );
     return;
   }
@@ -4621,7 +4687,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
     .eq("id", contentSetId)
     .maybeSingle();
   if (!selectedContentSet) {
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
   if (selectedContentSet.pack_template_id !== session.pack_template_id) {
@@ -4670,7 +4736,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
   if (existingPhoto) {
     await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, session.progress_message_id ?? undefined, { useBackButton: true, sessionId: session.id });
   } else {
-    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang, ctx?.from?.id));
   }
 });
 
@@ -4751,7 +4817,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     .eq("id", session.id);
   if (prelockErr) {
     console.error("[pack_preview_pay] prelock session update failed:", prelockErr.message);
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -4851,7 +4917,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
         lang === "ru"
           ? "Выбранный набор не подходит под текущее количество персонажей. Вернись к выбору поз и выбери другой набор."
           : "Selected set is not compatible with current subject count. Go back to poses and choose another set.",
-        getMainMenuKeyboard(lang)
+        getMainMenuKeyboard(lang, ctx?.from?.id)
       );
       return;
     }
@@ -4860,7 +4926,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   // Check credits
   if ((user.credits || 0) < 1) {
     await rollbackPreviewStart(false);
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -4873,7 +4939,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
 
   if (!deducted) {
     await rollbackPreviewStart(false);
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -4899,7 +4965,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
     await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
     await rollbackPreviewStart(true);
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
 
@@ -4922,7 +4988,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
     await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
     await rollbackPreviewStart(true);
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
   console.log("[pack_preview_pay] session.prompt_final saved, length:", (packPromptFinal || "").length, "preview:", (packPromptFinal || "").slice(0, 120));
@@ -5009,7 +5075,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
 
   // Check credits
   if ((user.credits || 0) < remainingCredits) {
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -5021,7 +5087,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
   });
 
   if (!deducted) {
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -5112,7 +5178,7 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
 
   // Check credits
   if ((user.credits || 0) < 1) {
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -5124,7 +5190,7 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
   });
 
   if (!deducted) {
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -5265,7 +5331,7 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
-  await ctx.reply(await getText(lang, "pack.cancelled"), getMainMenuKeyboard(lang));
+  await ctx.reply(await getText(lang, "pack.cancelled"), getMainMenuKeyboard(lang, ctx?.from?.id));
 });
 
 // Callback: pack_new_photo — user chose to continue pack with newly sent photo
@@ -5570,6 +5636,7 @@ bot.on("text", async (ctx) => {
     "✨ Создать стикер", "✨ Create sticker",
     "🎨 Стили", "🎨 Styles", // legacy, button hidden
     "📦 Создать пак", "📦 Create pack",
+    "🔄 Сгенерировать пак", "🔄 Generate pack",
     "💰 Ваш баланс", "💰 Your balance",
     "💬 Поддержка", "💬 Support",
   ];
@@ -6012,7 +6079,7 @@ bot.on("text", async (ctx) => {
       if (toolAction === "show_examples") {
         const styleId = result.toolCall?.args?.style_id;
         await handleShowStyleExamples(ctx, styleId, lang);
-        if (result.text) await ctx.reply(result.text, getMainMenuKeyboard(lang));
+        if (result.text) await ctx.reply(result.text, getMainMenuKeyboard(lang, ctx?.from?.id));
       } else if (toolAction === "grant_credit" || toolAction === "deny_credit") {
         const freshUserWP = await getUser(user.telegram_id);
         const mergedSession = { ...aSession, ...toolUpdates, ...goalUpdate } as AssistantSessionRow;
@@ -6026,7 +6093,7 @@ bot.on("text", async (ctx) => {
             const paramsPrompt = generateFallbackReply("normal", mergedSession, lang);
             messages[messages.length - 1] = { role: "assistant", content: paramsPrompt };
             await updateAssistantSession(aSession.id, { messages });
-            await ctx.reply(paramsPrompt, getMainMenuKeyboard(lang));
+            await ctx.reply(paramsPrompt, getMainMenuKeyboard(lang, ctx?.from?.id));
           }
         } else {
           await handleTrialCreditAction(ctx, toolAction as "grant_credit" | "deny_credit", result, freshUserWP || user, session, result.text, lang);
@@ -6045,12 +6112,12 @@ bot.on("text", async (ctx) => {
         const r3 = await callAIChat(messages, sp3);
         messages.push({ role: "assistant", content: r3.text || "" });
         await updateAssistantSession(aSession.id, { messages });
-        if (r3.text) await ctx.reply(r3.text, getMainMenuKeyboard(lang));
+        if (r3.text) await ctx.reply(r3.text, getMainMenuKeyboard(lang, ctx?.from?.id));
       } else {
         const replyText = result.text || (lang === "ru"
           ? "Понял! Пришли фото для стикера 📸"
           : "Got it! Send me a photo for the sticker 📸");
-        await ctx.reply(replyText, getMainMenuKeyboard(lang));
+        await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
       }
     } catch (err: any) {
       console.error("Assistant wait_photo text AI error:", err.message);
@@ -6061,7 +6128,7 @@ bot.on("text", async (ctx) => {
 
       await updateAssistantSession(aSession.id, { messages });
 
-      await ctx.reply(reminder, getMainMenuKeyboard(lang));
+      await ctx.reply(reminder, getMainMenuKeyboard(lang, ctx?.from?.id));
     }
     return;
   }
@@ -6148,21 +6215,21 @@ bot.on("text", async (ctx) => {
             const guardReply = generateFallbackReply("normal", updatedSession, lang);
             messages[messages.length - 1] = { role: "assistant", content: guardReply };
             await updateAssistantSession(aSession.id, { messages });
-            await ctx.reply(guardReply, getMainMenuKeyboard(lang));
+            await ctx.reply(guardReply, getMainMenuKeyboard(lang, ctx?.from?.id));
           } else {
             // LLM wants a photo — switch state
             await supabase
               .from("sessions")
               .update({ state: "assistant_wait_photo", is_active: true })
               .eq("id", session.id);
-            if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+            if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
           }
         } else if (action === "show_examples") {
           // Show style examples to help user choose
           const styleId = result.toolCall?.args?.style_id;
           await handleShowStyleExamples(ctx, styleId, lang);
           // Send LLM reply text after examples (if any)
-          if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+          if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
         } else if (action === "grant_credit" || action === "deny_credit") {
           // Re-fetch user to get fresh credits (user may have purchased during conversation)
           const freshUser = await getUser(user.telegram_id);
@@ -6176,7 +6243,7 @@ bot.on("text", async (ctx) => {
               const paramsPrompt = generateFallbackReply("normal", updatedSession, lang);
               messages[messages.length - 1] = { role: "assistant", content: paramsPrompt };
               await updateAssistantSession(aSession.id, { messages });
-              await ctx.reply(paramsPrompt, getMainMenuKeyboard(lang));
+              await ctx.reply(paramsPrompt, getMainMenuKeyboard(lang, ctx?.from?.id));
             }
           } else {
             await handleTrialCreditAction(ctx, action, result, freshUser || user, session, replyText, lang);
@@ -6209,11 +6276,11 @@ bot.on("text", async (ctx) => {
             if (reply2) await ctx.reply(reply2);
             await handleAssistantConfirm(ctx, u, session.id, lang);
           } else {
-            if (reply2) await ctx.reply(reply2, getMainMenuKeyboard(lang));
+            if (reply2) await ctx.reply(reply2, getMainMenuKeyboard(lang, ctx?.from?.id));
           }
         } else {
           // Normal dialog step
-          if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+          if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
         }
         console.log("Assistant chat: reply sent to user, action:", action);
       } catch (replyErr: any) {
@@ -6238,13 +6305,13 @@ bot.on("text", async (ctx) => {
         const escapeMsg = lang === "ru"
           ? "К сожалению, помощник временно недоступен 😔\nПопробуй отправить фото ещё раз или позже."
           : "Unfortunately, the assistant is temporarily unavailable 😔\nTry sending a photo again or later.";
-        await ctx.reply(escapeMsg, getMainMenuKeyboard(lang));
+        await ctx.reply(escapeMsg, getMainMenuKeyboard(lang, ctx?.from?.id));
       } else {
         // Level 2: soft fallback
         const retryMsg = lang === "ru"
           ? "Произошла ошибка, попробуй написать ещё раз."
           : "Something went wrong, please try again.";
-        await ctx.reply(retryMsg, getMainMenuKeyboard(lang));
+        await ctx.reply(retryMsg, getMainMenuKeyboard(lang, ctx?.from?.id));
       }
 
       sendAlert({
@@ -6445,7 +6512,7 @@ bot.on("text", async (ctx) => {
       const msg = lang === "ru"
         ? "Нажми «Создать стикер», чтобы создать новый стикер."
         : "Tap «Create sticker» to create a new sticker.";
-      await ctx.reply(msg, getMainMenuKeyboard(lang));
+      await ctx.reply(msg, getMainMenuKeyboard(lang, ctx?.from?.id));
     }
     return;
   }
@@ -8171,7 +8238,7 @@ bot.action(/^assistant_style_preview_ok:([^:]+):(\d+)(?::(.+))?$/, async (ctx) =
       const replyText = result.text || (lang === "ru"
         ? `Отлично, стиль: ${styleName}! Какую эмоцию хочешь передать?`
         : `Great, style: ${styleName}! What emotion should the sticker express?`);
-      await ctx.reply(replyText, getMainMenuKeyboard(lang));
+      await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
     } else {
       await ctx.reply(lang === "ru"
         ? `Стиль: ${styleName}. Нажми «Создать стикер», чтобы начать.`
@@ -8240,7 +8307,7 @@ bot.action(/^assistant_pick_style:([^:]+)(?::(.+))?$/, async (ctx) => {
       const replyText = result.text || (lang === "ru"
         ? `Отлично, стиль: ${styleName}! Какую эмоцию хочешь передать?`
         : `Great, style: ${styleName}! What emotion should the sticker express?`);
-      await ctx.reply(replyText, getMainMenuKeyboard(lang));
+      await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
     } else {
       // No active assistant session — just acknowledge
       await ctx.reply(lang === "ru"
@@ -8372,7 +8439,7 @@ bot.action(/^assistant_confirm(?::(.+))?$/, async (ctx) => {
         }
       } else {
         // AI returned something else — show text + paywall as fallback
-        if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang));
+        if (replyText) await ctx.reply(replyText, getMainMenuKeyboard(lang, ctx?.from?.id));
       }
     } catch (err: any) {
       console.error("[assistant_confirm] AI error for trial user:", err.message);
@@ -8971,7 +9038,7 @@ bot.action(/^asst_idea_custom(?::(.+))?$/, async (ctx) => {
     lang === "ru"
       ? "✏️ Опиши свою идею для стикера — стиль, эмоцию, позу:"
       : "✏️ Describe your sticker idea — style, emotion, pose:",
-    getMainMenuKeyboard(lang)
+    getMainMenuKeyboard(lang, ctx?.from?.id)
   );
 });
 
@@ -9010,7 +9077,7 @@ bot.action(/^asst_idea_skip(?::(.+))?$/, async (ctx) => {
     lang === "ru"
       ? "👋 Хорошо! Опиши какой стикер хочешь — стиль, эмоцию, позу:"
       : "👋 OK! Describe what sticker you want — style, emotion, pose:",
-    getMainMenuKeyboard(lang)
+    getMainMenuKeyboard(lang, ctx?.from?.id)
   );
 });
 
@@ -9081,7 +9148,7 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
     const pickedStyle = (ideasState?.styleId && await getStylePresetV2ById(ideasState.styleId))
       || await pickStyleForIdeas(user);
     if (!pickedStyle) {
-      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
       return;
     }
 
@@ -9166,7 +9233,7 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
       lang === "ru"
         ? "Фото обновлено! Продолжаем — что будем делать со стикером?"
         : "Photo updated! Let's continue — what shall we do with the sticker?",
-      getMainMenuKeyboard(lang)
+      getMainMenuKeyboard(lang, ctx?.from?.id)
     );
     return;
   }
@@ -9217,9 +9284,9 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
     if (toolAction === "show_examples") {
       const styleId = result.toolCall?.args?.style_id;
       await handleShowStyleExamples(ctx, styleId, lang);
-      if (result.text) await ctx.reply(result.text, getMainMenuKeyboard(lang));
+      if (result.text) await ctx.reply(result.text, getMainMenuKeyboard(lang, ctx?.from?.id));
     } else {
-      await ctx.reply(result.text, getMainMenuKeyboard(lang));
+      await ctx.reply(result.text, getMainMenuKeyboard(lang, ctx?.from?.id));
     }
   } catch (err: any) {
     console.error("Assistant new photo error:", err.message);
@@ -9236,7 +9303,7 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
     const msg = lang === "ru"
       ? "Фото обновлено! Продолжаем — опиши стиль стикера."
       : "Photo updated! Let's continue — describe the sticker style.";
-    await ctx.reply(msg, getMainMenuKeyboard(lang));
+    await ctx.reply(msg, getMainMenuKeyboard(lang, ctx?.from?.id));
   }
 });
 
