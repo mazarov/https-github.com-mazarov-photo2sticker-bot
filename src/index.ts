@@ -3714,159 +3714,174 @@ async function handlePackMenuEntry(
     const openingText = lang === "ru" ? "⏳ Открываю конструктор пака..." : "⏳ Opening pack builder...";
     openingMsg = await ctx.reply(openingText, getMainMenuKeyboard(lang)).catch(() => null);
   }
-  const activeSession = await getActiveSession(user.id);
-  console.log("[pack_flow] after getActiveSession in pack_entry", { userId: user.id, sessionId: activeSession?.id ?? null, sessionState: activeSession?.state ?? null });
-  const isProcessingState = activeSession?.state === "generating_pack_preview" || activeSession?.state === "processing_pack";
-  const processingStaleMinutes = 10;
-  const processingUpdatedAt = activeSession?.updated_at ? new Date(activeSession.updated_at).getTime() : 0;
-  const processingIsStale = !activeSession?.updated_at || (Date.now() - processingUpdatedAt > processingStaleMinutes * 60 * 1000);
-  if (activeSession && isProcessingState && !processingIsStale) {
-    const processingMsg = lang === "ru"
-      ? "Сейчас идет обработка текущего пака. Подожди немного, я сообщу, когда все будет готово."
-      : "Your current pack is still processing. Please wait a bit - I will notify you when it's ready.";
-    await ctx.reply(processingMsg, getMainMenuKeyboard(lang));
-    console.log(
-      `[pack_entry] skipped due to active processing: source=${source} auto_pack_entry=${autoPackEntry} session=${activeSession.id} state=${activeSession.state}`
-    );
-    return;
-  }
-  if (activeSession && isProcessingState && processingIsStale) {
-    console.log("[pack_flow] pack_entry not skipping: processing session is stale", { sessionId: activeSession.id, state: activeSession.state, updated_at: activeSession.updated_at });
-  }
-  const existingPhoto = activeSession?.current_photo_file_id || user.last_photo_file_id || null;
-  console.log(
-    `[pack_entry] start: source=${source} auto_pack_entry=${autoPackEntry} user=${user.id} has_photo=${Boolean(existingPhoto)}`
-  );
-
-  // Close any active assistant session to prevent ideas from showing
-  const activeAssistant = await getActiveAssistantSession(user.id);
-  if (activeAssistant) {
-    await updateAssistantSession(activeAssistant.id, { status: "completed" });
-  }
-
-  // Source of truth for pack catalog in current DB: pack_content_sets.
-  const contentSets = await getActivePackContentSets();
-  if (!contentSets?.length) {
-    await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
-    return;
-  }
-  const templateId = String(contentSets[0].pack_template_id || "couple_v1");
-
-  const existingPackSession = await getPackFlowSession(user.id);
-  console.log("[pack_flow] existingPackSession in pack_entry", { userId: user.id, existingId: existingPackSession?.id ?? null, existingState: existingPackSession?.state ?? null });
-  if (
-    existingPackSession?.id &&
-    existingPackSession.pack_template_id === templateId &&
-    isResumablePackSessionState(existingPackSession.state)
-  ) {
-    if (existingPackSession.state === "wait_pack_carousel") {
-      await renderPackCarouselForSession(ctx, existingPackSession, lang);
-      return;
-    }
-    if (existingPackSession.state === "wait_pack_preview_payment") {
-      await sendPackStyleSelectionStep(ctx, lang, existingPackSession.selected_style_id, undefined, {
-        useBackButton: true,
-        sessionId: existingPackSession.id,
-      });
-      return;
-    }
-    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
-    return;
-  }
-
-  await supabase.from("sessions").update({ is_active: false }).eq("user_id", user.id).eq("is_active", true).eq("env", config.appEnv);
-  let selectedPackStyleId: string | null = null;
   try {
-    const defaultPackStyle = await pickStyleForIdeas(user);
-    selectedPackStyleId = defaultPackStyle?.id || null;
-  } catch (_) {}
-
-  const { data: session, error: sessErr } = await supabase
-    .from("sessions")
-    .insert({
-      user_id: user.id,
-      state: "wait_pack_carousel",
-      is_active: true,
-      flow_kind: "pack",
-      session_rev: 1,
-      pack_template_id: templateId,
-      pack_carousel_index: 0,
-      selected_style_id: selectedPackStyleId,
-      current_photo_file_id: existingPhoto,
-      photos: existingPhoto ? [existingPhoto] : [],
-      env: config.appEnv,
-    })
-    .select()
-    .single();
-  if (sessErr || !session) {
-    console.log("[pack_flow] pack_entry session insert failed", { userId: user.id, err: sessErr?.message });
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
-    return;
-  }
-  console.log("[pack_flow] pack_entry session created", { userId: user.id, sessionId: session.id, state: session.state });
-
-  let visibleSets = contentSets;
-  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
-  if (existingPhoto && subjectFilterEnabled) {
-    // Do not block initial pack entry on detector call.
-    void ensureSubjectProfileForGeneration(session, "style").catch((err) =>
-      console.warn("[pack_entry] subject profile warmup failed:", err?.message || err)
-    );
-  }
-  if (subjectFilterEnabled) {
-    const subjectMode = getEffectiveSubjectMode(session);
-    visibleSets = filterPackContentSetsBySubjectMode(contentSets, subjectMode);
-  }
-  if (!visibleSets.length) {
-    await ctx.reply(
-      lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-      getMainMenuKeyboard(lang)
-    );
-    return;
-  }
-
-  const set = visibleSets[0];
-  const setName = lang === "ru" ? set.name_ru : set.name_en;
-  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-  const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
-  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow(telegramId, session.id);
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: "◀️", callback_data: "pack_carousel_prev" },
-        { text: `1/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
-        { text: "▶️", callback_data: "pack_carousel_next" },
-      ],
-      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
-      ...(adminRow.length ? [adminRow] : []),
-    ],
-  };
-  let msg: any = null;
-  if (openingMsg?.message_id && ctx.chat?.id) {
-    try {
-      await ctx.telegram.editMessageText(ctx.chat.id, openingMsg.message_id, undefined, carouselCaption, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard,
-      });
-      msg = { message_id: openingMsg.message_id };
-    } catch {
-      msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+    const activeSession = await getActiveSession(user.id);
+    console.log("[pack_flow] after getActiveSession in pack_entry", { userId: user.id, sessionId: activeSession?.id ?? null, sessionState: activeSession?.state ?? null });
+    const isProcessingState = activeSession?.state === "generating_pack_preview" || activeSession?.state === "processing_pack";
+    const processingStaleMinutes = 10;
+    const processingUpdatedAt = activeSession?.updated_at ? new Date(activeSession.updated_at).getTime() : 0;
+    const processingIsStale = !activeSession?.updated_at || (Date.now() - processingUpdatedAt > processingStaleMinutes * 60 * 1000);
+    if (activeSession && isProcessingState && !processingIsStale) {
+      const processingMsg = lang === "ru"
+        ? "Сейчас идет обработка текущего пака. Подожди немного, я сообщу, когда все будет готово."
+        : "Your current pack is still processing. Please wait a bit - I will notify you when it's ready.";
+      await ctx.reply(processingMsg, getMainMenuKeyboard(lang));
+      console.log(
+        `[pack_entry] skipped due to active processing: source=${source} auto_pack_entry=${autoPackEntry} session=${activeSession.id} state=${activeSession.state}`
+      );
+      return;
     }
-  } else {
-    msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-  }
-  if (msg?.message_id && ctx.chat?.id) {
-    await supabase
+    if (activeSession && isProcessingState && processingIsStale) {
+      console.log("[pack_flow] pack_entry not skipping: processing session is stale", { sessionId: activeSession.id, state: activeSession.state, updated_at: activeSession.updated_at });
+    }
+    const existingPhoto = activeSession?.current_photo_file_id || user.last_photo_file_id || null;
+    console.log(
+      `[pack_entry] start: source=${source} auto_pack_entry=${autoPackEntry} user=${user.id} has_photo=${Boolean(existingPhoto)}`
+    );
+
+    // Close any active assistant session to prevent ideas from showing
+    const activeAssistant = await getActiveAssistantSession(user.id);
+    if (activeAssistant) {
+      await updateAssistantSession(activeAssistant.id, { status: "completed" });
+    }
+
+    // Source of truth for pack catalog in current DB: pack_content_sets.
+    const contentSets = await getActivePackContentSets();
+    if (!contentSets?.length) {
+      await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang));
+      return;
+    }
+    const templateId = String(contentSets[0].pack_template_id || "couple_v1");
+
+    const existingPackSession = await getPackFlowSession(user.id);
+    console.log("[pack_flow] existingPackSession in pack_entry", { userId: user.id, existingId: existingPackSession?.id ?? null, existingState: existingPackSession?.state ?? null });
+    if (
+      existingPackSession?.id &&
+      existingPackSession.pack_template_id === templateId &&
+      isResumablePackSessionState(existingPackSession.state)
+    ) {
+      if (existingPackSession.state === "wait_pack_carousel") {
+        await renderPackCarouselForSession(ctx, existingPackSession, lang);
+        return;
+      }
+      if (existingPackSession.state === "wait_pack_preview_payment") {
+        await sendPackStyleSelectionStep(ctx, lang, existingPackSession.selected_style_id, undefined, {
+          useBackButton: true,
+          sessionId: existingPackSession.id,
+        });
+        return;
+      }
+      await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang));
+      return;
+    }
+
+    await supabase.from("sessions").update({ is_active: false }).eq("user_id", user.id).eq("is_active", true).eq("env", config.appEnv);
+    let selectedPackStyleId: string | null = null;
+    try {
+      const defaultPackStyle = await pickStyleForIdeas(user);
+      selectedPackStyleId = defaultPackStyle?.id || null;
+    } catch (_) {}
+
+    const { data: session, error: sessErr } = await supabase
       .from("sessions")
-      .update({
-        progress_message_id: msg.message_id,
-        progress_chat_id: ctx.chat.id,
-        ui_message_id: msg.message_id,
-        ui_chat_id: ctx.chat.id,
+      .insert({
+        user_id: user.id,
+        state: "wait_pack_carousel",
+        is_active: true,
+        flow_kind: "pack",
+        session_rev: 1,
+        pack_template_id: templateId,
+        pack_carousel_index: 0,
+        selected_style_id: selectedPackStyleId,
+        current_photo_file_id: existingPhoto,
+        photos: existingPhoto ? [existingPhoto] : [],
+        env: config.appEnv,
       })
-      .eq("id", session.id);
+      .select()
+      .single();
+    if (sessErr || !session) {
+      console.log("[pack_flow] pack_entry session insert failed", { userId: user.id, err: sessErr?.message });
+      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang));
+      return;
+    }
+    console.log("[pack_flow] pack_entry session created", { userId: user.id, sessionId: session.id, state: session.state });
+
+    let visibleSets = contentSets;
+    const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+    if (existingPhoto && subjectFilterEnabled) {
+      // Do not block initial pack entry on detector call.
+      void ensureSubjectProfileForGeneration(session, "style").catch((err) =>
+        console.warn("[pack_entry] subject profile warmup failed:", err?.message || err)
+      );
+    }
+    if (subjectFilterEnabled) {
+      const subjectMode = getEffectiveSubjectMode(session);
+      visibleSets = filterPackContentSetsBySubjectMode(contentSets, subjectMode);
+    }
+    if (!visibleSets.length) {
+      await ctx.reply(
+        lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
+        getMainMenuKeyboard(lang)
+      );
+      return;
+    }
+
+    const set = visibleSets[0];
+    const setName = lang === "ru" ? set.name_ru : set.name_en;
+    const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+    const intro = await getText(lang, "pack.carousel_intro");
+    const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
+    const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+    const adminRow = getPackCarouselAdminRow(telegramId, session.id);
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: "◀️", callback_data: "pack_carousel_prev" },
+          { text: `1/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
+          { text: "▶️", callback_data: "pack_carousel_next" },
+        ],
+        [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+        ...(adminRow.length ? [adminRow] : []),
+      ],
+    };
+    let msg: any = null;
+    if (openingMsg?.message_id && ctx.chat?.id) {
+      try {
+        await ctx.telegram.editMessageText(ctx.chat.id, openingMsg.message_id, undefined, carouselCaption, {
+          parse_mode: "Markdown",
+          reply_markup: keyboard,
+        });
+        msg = { message_id: openingMsg.message_id };
+      } catch (editErr) {
+        try {
+          msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+        } catch (replyErr) {
+          const fallbackText = `${intro}\n\n${setName}\n${setDesc}`;
+          msg = await ctx.reply(fallbackText, { reply_markup: keyboard });
+        }
+      }
+    } else {
+      try {
+        msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+      } catch (replyErr) {
+        const fallbackText = `${intro}\n\n${setName}\n${setDesc}`;
+        msg = await ctx.reply(fallbackText, { reply_markup: keyboard });
+      }
+    }
+    if (msg?.message_id && ctx.chat?.id) {
+      await supabase
+        .from("sessions")
+        .update({
+          progress_message_id: msg.message_id,
+          progress_chat_id: ctx.chat.id,
+          ui_message_id: msg.message_id,
+          ui_chat_id: ctx.chat.id,
+        })
+        .eq("id", session.id);
+    }
+  } catch (err: any) {
+    console.error("[pack_entry] handlePackMenuEntry error:", err?.message || err, err?.stack?.split("\n").slice(0, 4));
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang)).catch(() => {});
   }
 }
 
@@ -4556,17 +4571,34 @@ async function renderPackCarouselForSession(
     } catch (_) {}
   }
 
-  const sent = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-  if (sent?.message_id && ctx.chat?.id) {
-    await supabase
-      .from("sessions")
-      .update({
-        progress_message_id: sent.message_id,
-        progress_chat_id: ctx.chat.id,
-        ui_message_id: sent.message_id,
-        ui_chat_id: ctx.chat.id,
-      })
-      .eq("id", session.id);
+  // No callback context (e.g. user tapped menu "Создать пак") or edit failed — send new message. Fallback without Markdown if reply fails.
+  try {
+    const sent = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+    if (sent?.message_id && ctx.chat?.id) {
+      await supabase
+        .from("sessions")
+        .update({
+          progress_message_id: sent.message_id,
+          progress_chat_id: ctx.chat.id,
+          ui_message_id: sent.message_id,
+          ui_chat_id: ctx.chat.id,
+        })
+        .eq("id", session.id);
+    }
+  } catch (replyErr) {
+    const fallbackCaption = `${intro}\n\n${setName}\n${setDesc}`;
+    const sent = await ctx.reply(fallbackCaption, { reply_markup: keyboard });
+    if (sent?.message_id && ctx.chat?.id) {
+      await supabase
+        .from("sessions")
+        .update({
+          progress_message_id: sent.message_id,
+          progress_chat_id: ctx.chat.id,
+          ui_message_id: sent.message_id,
+          ui_chat_id: ctx.chat.id,
+        })
+        .eq("id", session.id);
+    }
   }
 }
 
