@@ -165,7 +165,7 @@ async function openAiChatJson<T>(
   model: string,
   systemPrompt: string,
   userMessage: string,
-  options?: { temperature?: number; maxTokens?: number; agentLabel?: string }
+  options?: { temperature?: number; agentLabel?: string }
 ): Promise<T> {
   if (!config.openaiApiKey) {
     throw new Error("OPENAI_API_KEY is not set; pack pipeline requires OpenAI.");
@@ -180,19 +180,18 @@ async function openAiChatJson<T>(
     userPreview: userMessage.slice(0, 500),
   });
 
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ],
+    response_format: { type: "json_object" },
+    temperature: options?.temperature ?? 1,
+  };
   const response = await axios.post(
     "https://api.openai.com/v1/chat/completions",
-    {
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
-      ],
-      response_format: { type: "json_object" },
-      max_completion_tokens: options?.maxTokens ?? 4096,
-      // Use 1: some models (e.g. gpt-4.1, o1) only support default temperature 1
-      temperature: options?.temperature ?? 1,
-    },
+    body,
     {
       headers: {
         Authorization: `Bearer ${config.openaiApiKey}`,
@@ -289,8 +288,14 @@ function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan
 async function runConceptAndPlan(request: string, subjectType: SubjectType): Promise<{ brief: ConceptBrief; plan: BossPlan }> {
   const model = await getModelForAgent("brief_and_plan");
   const userMessage = `User request: ${request}\n\nPhoto context (subject_type): ${subjectType}\n\nOutput the combined brief and plan as a single JSON.`;
-  const raw = await openAiChatJson<BriefAndPlanRaw>(model, BRIEF_AND_PLAN_SYSTEM, userMessage, { agentLabel: "brief_and_plan" });
-  return mapRawToBriefAndPlan(raw);
+  const raw = await openAiChatJson<BriefAndPlanRaw | { brief: ConceptBrief; plan: BossPlan }>(model, BRIEF_AND_PLAN_SYSTEM, userMessage, { agentLabel: "brief_and_plan" });
+  // Модель может вернуть вложенный { brief, plan } или плоский объект со всеми полями
+  if (raw && typeof raw === "object" && "plan" in raw && raw.plan && typeof raw.plan === "object" && "moments" in raw.plan) {
+    const plan = raw.plan as BossPlan;
+    const brief = "brief" in raw && raw.brief && typeof raw.brief === "object" ? (raw.brief as ConceptBrief) : mapRawToBriefAndPlan(raw as unknown as BriefAndPlanRaw).brief;
+    return { brief, plan };
+  }
+  return mapRawToBriefAndPlan(raw as unknown as BriefAndPlanRaw);
 }
 
 // --- Captions agent ---
