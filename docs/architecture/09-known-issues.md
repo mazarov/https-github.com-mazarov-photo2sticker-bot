@@ -1,6 +1,27 @@
 # Известные проблемы и workaround'ы
 
-## 1. `is_active` всегда false на сессиях
+## 1. 409: Conflict — terminated by other getUpdates request
+
+**Проблема**: В алерты падает ошибка:
+```
+409: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+```
+Telegram API разрешает **только один** активный long polling (getUpdates) на один токен бота. Если два процесса с одним токеном одновременно вызывают getUpdates, один получает 409.
+
+**Типичные причины:**
+- Два контейнера/реплики API запущены с одним токеном в режиме long polling (без webhook).
+- Редеплой: новый контейнер стартовал до завершения старого — оба кратко поллили.
+- Локальный запуск бота при уже работающем инстансе на сервере (тот же токен, например test).
+
+**Что сделать:**
+1. **Long polling (режим по умолчанию при отсутствии `PUBLIC_BASE_URL`):** убедиться, что **ровно один** процесс API работает с данным токеном (одна реплика, без дублей). При редеплое — дождаться остановки старого контейнера перед стартом нового (или использовать rolling update с одной репликой).
+2. **Webhook:** задать `PUBLIC_BASE_URL` в env (публичный URL до сервера, например `https://your-bot.example.com`). Тогда бот не использует getUpdates, конфликт невозможен. Нужен HTTPS и путь `WEBHOOK_PATH` (по умолчанию `/telegram/webhook`), доступный снаружи.
+
+После 409 достаточно перезапустить API (один инстанс); Telegram «забудет» предыдущий getUpdates через несколько секунд.
+
+---
+
+## 2. `is_active` всегда false на сессиях
 
 **Проблема**: при любом `UPDATE` на таблице `sessions`, поле `is_active` сбрасывается в `false`.
 Основной запрос `getActiveSession` (`WHERE is_active = true`) никогда не находит сессию.
@@ -41,7 +62,7 @@ WHERE table_name = 'sessions' AND column_name = 'is_active';
 
 ---
 
-## 2. `telegram_file_id` привязан к боту
+## 3. `telegram_file_id` привязан к боту
 
 **Проблема**: `telegram_file_id` стикера уникален для каждого бота.
 Стикер, сохранённый через test-бота, не может быть отправлен prod-ботом.
@@ -55,7 +76,7 @@ WHERE table_name = 'sessions' AND column_name = 'is_active';
 
 ---
 
-## 3. Supabase Storage бакет может не существовать
+## 4. Supabase Storage бакет может не существовать
 
 **Проблема**: `createSignedUrl` зависает на 2 минуты, если бакет не создан.
 Это блокирует бота и вызывает backlog сообщений.
@@ -68,7 +89,7 @@ Storage используется только для бэкапа.
 
 ---
 
-## 4. Race condition: Стили + Ассистент
+## 5. Race condition: Стили + Ассистент
 
 **Проблема**: пользователь может нажать "Стили" пока ассистент обрабатывает запрос.
 Оба хендлера работают параллельно, ассистент может ответить после переключения в ручной режим.
@@ -86,7 +107,7 @@ if (freshSession && freshSession.state !== "assistant_chat") {
 
 ---
 
-## 5. Фото теряется при переключении режимов
+## 6. Фото теряется при переключении режимов
 
 **Проблема**: при переключении между Помощником и Стилями бот мог просить
 загрузить фото заново, хотя пользователь уже загружал.
@@ -98,7 +119,7 @@ if (freshSession && freshSession.state !== "assistant_chat") {
 
 ---
 
-## 6. `wait_first_purchase` / `wait_buy_credit` не в DB enum
+## 7. `wait_first_purchase` / `wait_buy_credit` не в DB enum
 
 **Проблема**: код использует состояния `wait_first_purchase` и `wait_buy_credit`,
 но они не были добавлены в enum `session_state` в БД.
@@ -115,7 +136,7 @@ ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'wait_buy_credit';
 
 ---
 
-## 7. LLM вызывает `confirm_and_generate` при неполных параметрах
+## 8. LLM вызывает `confirm_and_generate` при неполных параметрах
 
 **Проблема**: AI иногда вызывает `confirm_and_generate` хотя emotion или pose
 ещё не собраны. Код это ловит и делает fallback, но это лишний round-trip.
@@ -127,7 +148,7 @@ ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'wait_buy_credit';
 
 ---
 
-## 8. AI таймауты на длинных диалогах
+## 9. AI таймауты на длинных диалогах
 
 **Проблема**: при 7-9 сообщениях в контексте, gpt-4o-mini может не успеть
 ответить за 15 секунд. Таймаут → retry → ещё таймаут → задержка 30+ сек.
@@ -136,7 +157,7 @@ ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'wait_buy_credit';
 
 ---
 
-## 9. `drop_pending_updates` при рестарте
+## 10. `drop_pending_updates` при рестарте
 
 **Проблема**: при рестарте бота Telegram отправляет все накопившиеся сообщения.
 Если бот был в даун 5 минут — получает все сообщения за это время разом,
@@ -151,7 +172,7 @@ bot.launch({ dropPendingUpdates: true });
 
 ---
 
-## 10. `assistant_wait_photo` без `assistant_session`
+## 11. `assistant_wait_photo` без `assistant_session`
 
 **Проблема**: если пользователь нажал "Стили" (закрыл assistant session),
 а потом отправил фото — session state остался `assistant_wait_photo`,
@@ -164,7 +185,7 @@ bot.launch({ dropPendingUpdates: true });
 
 ---
 
-## 11. Stale inline callbacks в pack flow
+## 12. Stale inline callbacks в pack flow
 
 **Проблема**: старые inline-кнопки из предыдущих сообщений могут попадать в новую
 сессию и вызывать гонки по состояниям.
@@ -180,7 +201,7 @@ bot.launch({ dropPendingUpdates: true });
 
 ---
 
-## 12. Subject-profile: ETIMEDOUT к Gemini
+## 13. Subject-profile: ETIMEDOUT к Gemini
 
 **Проблема**: детектор субъекта (single/multi/unknown по фото) вызывает Gemini с большим телом (фото в base64). При сетевых задержках или нагрузке на `generativelanguage.googleapis.com` запрос может завершиться с **ETIMEDOUT**. Пользователь при этом не видит ошибку — ставится fallback `subjectMode: 'unknown'`, генерация идёт дальше; если у пользователя 0 кредитов, он попадает на paywall (wait_first_purchase).
 

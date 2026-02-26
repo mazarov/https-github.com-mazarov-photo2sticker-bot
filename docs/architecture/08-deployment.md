@@ -10,6 +10,8 @@
 | Worker | `Dockerfile.worker` | `node dist/worker.js` | — |
 | rembg | (внешний образ) | — | 5000 |
 
+**Режим бота:** если не задан `PUBLIC_BASE_URL`, бот работает в **long polling** (getUpdates). В этом случае с одним токеном может работать **только один** инстанс API; иначе Telegram вернёт 409 Conflict. Либо одна реплика, либо задать `PUBLIC_BASE_URL` для режима webhook. Подробнее: `09-known-issues.md` → «409: Conflict».
+
 ### Dockerfile.api / Dockerfile.worker
 
 ```dockerfile
@@ -91,6 +93,8 @@ git checkout feature/xxx
 | `AI_CHAT_MODEL` | (auto) | Модель AI чата |
 | `OPENAI_API_KEY` | — | API ключ OpenAI (если provider=openai) |
 | `PORT` | `3001` | Порт API |
+| `PUBLIC_BASE_URL` | — | Публичный URL сервера (например `https://bot.example.com`). Если задан — бот в режиме **webhook** (нет конфликта 409 при нескольких репликах). Без него — long polling, допустима только одна реплика на токен. |
+| `WEBHOOK_PATH` | `/telegram/webhook` | Путь для webhook (используется при заданном `PUBLIC_BASE_URL`). |
 | `JOB_POLL_INTERVAL_MS` | `2000` | Интервал поллинга заданий |
 | `ALERT_CHANNEL_ID` | — | Telegram ID канала алертов |
 | `PROD_ALERT_CHANNEL_ID` | — | Только для **test**: если задан, алерты с теста уходят в этот канал (обычно продовый). Иначе используется `ALERT_CHANNEL_ID`. |
