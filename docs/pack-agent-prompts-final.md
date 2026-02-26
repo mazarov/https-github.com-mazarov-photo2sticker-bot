@@ -16,6 +16,18 @@
 | Scenes  | Каждая сцена: **ровно одно предложение, 18–22 слова, без придаточных**. |
 | Critic  | Reasons: max 3 пункта. Suggestions: max 3 пункта. Каждый пункт: **max 20 слов**. |
 
+### max_tokens (API, снижение латентности)
+
+В коде для каждого агента задан жёсткий `max_completion_tokens`, чтобы сократить время ответа OpenAI. См. `docs/26-02-pack-agents-max-tokens-latency.md`.
+
+| Агент   | max_tokens |
+|---------|------------|
+| Concept | 512  |
+| Boss    | 1024 |
+| Captions| 512  |
+| Scenes  | 1024 |
+| Critic  | 512  |
+
 ---
 
 ## 1. Concept — FINAL (Costume Lock, fast & strict)
