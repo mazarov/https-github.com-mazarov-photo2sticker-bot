@@ -497,12 +497,11 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
   return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions" });
 }
 
-// --- Scenes agent ---
+// --- Scenes agent (docs/pack-batch-flow-9-scenes-rules.md) ---
 const SCENES_SYSTEM = `## Role
-Write visual scene descriptions for image generation.
+Write visual scene descriptions for image generation. ENGLISH ONLY. Scenes are for image generation only.
 
-You describe ONLY how the same person from the reference photo
-moves and reacts.
+You describe ONLY how the same person from the reference photo moves and reacts.
 
 ---
 
@@ -517,36 +516,38 @@ moves and reacts.
 ## SCENE RULES
 - Chest-up framing only
 - One clear pose or body state
-- Emotion expressed through posture or tension, not facial traits
+- Emotion through posture or tension, not facial traits
 - Max 1 prop, fully visible
 - Simple background only (flat, gradient, wall)
 
 ---
 
 ## LENGTH & STYLE (CRITICAL)
-Each scene: EXACTLY one sentence, max 18 words. No metaphors, no cinematic language. Functional visual description only.
+Each scene: EXACTLY one sentence. 12–18 words. One body action, one posture.
+No metaphors. No cinematic language. Functional visual description only.
 NOTE: Moments already include awkward / anti-postcard beats. Allow imbalance, hesitation, frozen mid-reaction; do NOT beautify.
 
 ---
 
+## FORBIDDEN
+- Emotions as words
+- Metaphors
+- Cinematic language
+- Adverbs: suddenly, awkwardly, nervously
+- Explanations or humor
+Describe only visible body state.
+
+---
+
 ## OUTPUT (MANDATORY)
-Output BOTH arrays:
-
-- scene_descriptions (EN)
-- scene_descriptions_ru (RU)
-
-RU must be a direct, natural translation,
-not a paraphrase.
-
-Each array MUST contain EXACTLY 9 items.`;
+Output ONLY scene_descriptions (EN). Exactly 9 items. No Russian.`;
 
 async function runScenes(plan: BossPlan, outfit: string, criticFeedback?: CriticFeedbackContext): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
   const userMessage = formatScenesUserMessage(plan, outfit, criticFeedback);
-  const raw = await openAiChatJson<{ scene_descriptions: string[]; scene_descriptions_ru?: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes" });
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes" });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, 9) : [];
-  const sceneDescriptionsRu = Array.isArray(raw.scene_descriptions_ru) ? raw.scene_descriptions_ru.slice(0, 9) : [];
-  return { scene_descriptions: sceneDescriptions, scene_descriptions_ru: sceneDescriptionsRu.length > 0 ? sceneDescriptionsRu : undefined };
+  return { scene_descriptions: sceneDescriptions };
 }
 
 // --- Critic agent ---
@@ -558,8 +559,8 @@ Act as a strict quality gate for format and usability.
 ## YOU MUST CHECK
 - Exactly 9 captions
 - Caption length (15–20 characters)
-- Exactly 9 scenes
-- Presence of BOTH EN and RU scenes
+- Exactly 9 scenes (EN)
+- Each scene starts with {subject} and has it exactly once
 - Scene uniqueness
 - Rule compliance
 
@@ -665,10 +666,54 @@ async function runScenesForIndices(
       ? `Previous scene_descriptions: ${JSON.stringify(prev.scene_descriptions)}\n\n`
       : "") +
     `Critic reasons: ${(criticContext.reasons ?? []).join(" ")}\nCritic suggestions: ${criticContext.suggestions.join(" ")}\n\n` +
-    `Output JSON with one key: scene_descriptions (array of ${indices.length} strings, in order of indices). Each sentence 18–22 words, start with {subject}. No subordinate clauses.`;
+    `Output JSON with one key: scene_descriptions (array of ${indices.length} strings, in order of indices). Each sentence 12–18 words, start with {subject}. No subordinate clauses.`;
   const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes_rework" });
   const scene_descriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, indices.length) : [];
   return { scene_descriptions };
+}
+
+// --- Validation (docs/pack-batch-flow-9-scenes-rules.md) ---
+const CAPTION_MIN_CHARS = 15;
+const CAPTION_MAX_CHARS = 20;
+const SCENE_MIN_WORDS = 12;
+const SCENE_MAX_WORDS = 18;
+
+function countWords(s: string): number {
+  return s.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function countSubjectOccurrences(s: string): number {
+  return (s.match(/\{subject\}/g) ?? []).length;
+}
+
+export function validateBatchSpec(spec: PackSpecRow): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const labels = spec.labels ?? [];
+  const labelsEn = spec.labels_en ?? [];
+  const scenes = spec.scene_descriptions ?? [];
+  labels.forEach((l, i) => {
+    const len = String(l).length;
+    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS) {
+      errors.push(`Caption[${i}] RU length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS})`);
+    }
+  });
+  labelsEn.forEach((l, i) => {
+    const len = String(l).length;
+    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS) {
+      errors.push(`Caption[${i}] EN length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS})`);
+    }
+  });
+  scenes.forEach((s, i) => {
+    const n = countSubjectOccurrences(s);
+    if (n !== 1) {
+      errors.push(`Scene[${i}] {subject} count ${n} (expected 1)`);
+    }
+    const w = countWords(s);
+    if (w < SCENE_MIN_WORDS || w > SCENE_MAX_WORDS) {
+      errors.push(`Scene[${i}] word count ${w} (expected ${SCENE_MIN_WORDS}-${SCENE_MAX_WORDS})`);
+    }
+  });
+  return { ok: errors.length === 0, errors };
 }
 
 // --- Assembly: plan + captions + scenes → row ---
@@ -759,6 +804,10 @@ export async function runPackGenerationPipeline(
     await onProgress?.("captions");
     await onProgress?.("scenes");
     let spec = assembleSpec(plan, captions, scenes);
+    const validation = validateBatchSpec(spec);
+    if (!validation.ok) {
+      console.warn("[pack-multiagent] batch spec validation:", validation.errors);
+    }
 
     for (let iter = 0; iter < maxIterations; iter++) {
       await onProgress?.(iter === 0 ? "critic" : "critic_2");
@@ -829,6 +878,10 @@ export async function runPackGenerationPipeline(
       await onProgress?.("captions_rework");
       await onProgress?.("scenes_rework");
       spec = assembleSpec(plan, captions, scenes);
+      const reworkValidation = validateBatchSpec(spec);
+      if (!reworkValidation.ok) {
+        console.warn("[pack-multiagent] batch spec validation (after rework):", reworkValidation.errors);
+      }
     }
 
     return { ok: false, error: "Critic did not pass after max iterations" };
