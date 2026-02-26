@@ -151,7 +151,7 @@ export const PACK_AGENT_APP_CONFIG_KEYS = {
 const OPENAI_TIMEOUT_MS = 90_000;
 
 /** Лимиты вывода по агентам (снижение латентности, см. docs/26-02-pack-agents-max-tokens-latency.md). */
-const PACK_AGENT_MAX_TOKENS_CONCEPT = 512;
+const PACK_AGENT_MAX_TOKENS_CONCEPT = 1024;
 const PACK_AGENT_MAX_TOKENS_BOSS = 1024;
 const PACK_AGENT_MAX_TOKENS_CAPTIONS = 512;
 const PACK_AGENT_MAX_TOKENS_SCENES = 1024;
@@ -171,11 +171,20 @@ async function openAiChatJson<T>(
   model: string,
   systemPrompt: string,
   userMessage: string,
-  options?: { temperature?: number; maxTokens?: number }
+  options?: { temperature?: number; maxTokens?: number; agentLabel?: string }
 ): Promise<T> {
   if (!config.openaiApiKey) {
     throw new Error("OPENAI_API_KEY is not set; pack pipeline requires OpenAI.");
   }
+
+  const agent = options?.agentLabel ?? "unknown";
+  console.log("[pack-multiagent] OpenAI request", {
+    agent,
+    model,
+    systemLen: systemPrompt.length,
+    userLen: userMessage.length,
+    userPreview: userMessage.slice(0, 500),
+  });
 
   const response = await axios.post(
     "https://api.openai.com/v1/chat/completions",
@@ -201,13 +210,21 @@ async function openAiChatJson<T>(
 
   const choice = response.data?.choices?.[0];
   const text = choice?.message?.content;
+  const finishReason = choice?.finish_reason ?? "unknown";
+
   if (!text) {
-    const finishReason = choice?.finish_reason ?? "unknown";
     const refusal = (choice?.message as any)?.refusal ?? null;
     const detail = `finish_reason=${finishReason}${refusal ? ` refusal=${String(refusal).slice(0, 200)}` : ""}`;
-    console.error("[pack-multiagent] OpenAI no content", { finish_reason: finishReason, refusal: refusal != null });
+    console.error("[pack-multiagent] OpenAI no content", { agent, finish_reason: finishReason, refusal: refusal != null });
     throw new Error(`OpenAI returned no content (${detail})`);
   }
+
+  console.log("[pack-multiagent] OpenAI response", {
+    agent,
+    finish_reason: finishReason,
+    contentLen: text.length,
+    contentPreview: text.slice(0, 600),
+  });
   return JSON.parse(text) as T;
 }
 
@@ -279,7 +296,7 @@ Output strict JSON with keys: subject_type (match photo: single_male | single_fe
 async function runConcept(request: string, subjectType: SubjectType): Promise<ConceptBrief> {
   const model = await getModelForAgent("concept");
   const userMessage = `User request: ${request}\n\nPhoto context (subject_type): ${subjectType}\n\nOutput the brief as JSON.`;
-  return openAiChatJson<ConceptBrief>(model, CONCEPT_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_CONCEPT });
+  return openAiChatJson<ConceptBrief>(model, CONCEPT_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_CONCEPT, agentLabel: "concept" });
 }
 
 // --- Boss agent ---
@@ -323,7 +340,7 @@ Output strict JSON with keys: id (snake_case slug), pack_template_id (e.g. coupl
 async function runBoss(brief: ConceptBrief): Promise<BossPlan> {
   const model = await getModelForAgent("boss");
   const userMessage = `Brief:\n${JSON.stringify(brief, null, 2)}\n\nOutput the pack plan as JSON.`;
-  return openAiChatJson<BossPlan>(model, BOSS_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_BOSS });
+  return openAiChatJson<BossPlan>(model, BOSS_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_BOSS, agentLabel: "boss" });
 }
 
 // --- Captions agent ---
@@ -403,7 +420,7 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
     }
     userMessage += "\n\n" + parts.join("\n\n");
   }
-  return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_CAPTIONS });
+  return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_CAPTIONS, agentLabel: "captions" });
 }
 
 // --- Scenes agent ---
@@ -536,7 +553,7 @@ async function runScenes(plan: BossPlan, criticFeedback?: CriticFeedbackContext)
     }
     userMessage += "\n\n" + parts.join("\n\n");
   }
-  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_SCENES });
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_SCENES, agentLabel: "scenes" });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, 9) : [];
   return { scene_descriptions: sceneDescriptions, scene_descriptions_ru: [] };
 }
@@ -594,7 +611,7 @@ Output strict JSON with keys: pass (boolean), reasons (array of max 3 strings, i
 async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
   const model = await getModelForAgent("critic");
   const userMessage = `Full pack spec:\n${JSON.stringify(spec, null, 2)}\n\nOutput pass, reasons, and suggestions as JSON.`;
-  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, { temperature: 1, maxTokens: PACK_AGENT_MAX_TOKENS_CRITIC });
+  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, { temperature: 1, maxTokens: PACK_AGENT_MAX_TOKENS_CRITIC, agentLabel: "critic" });
 }
 
 // --- Partial rework: parse indices from Critic feedback ---
@@ -640,7 +657,7 @@ async function runCaptionsForIndices(
       : "") +
     `Critic reasons: ${(criticContext.reasons ?? []).join(" ")}\nCritic suggestions: ${criticContext.suggestions.join(" ")}\n\n` +
     `Output JSON with keys: labels (array of ${indices.length} strings, RU, in order of indices), labels_en (array of ${indices.length} strings, EN). Each caption 15–20 characters.`;
-  const raw = await openAiChatJson<{ labels: string[]; labels_en: string[] }>(model, CAPTIONS_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_CAPTIONS });
+  const raw = await openAiChatJson<{ labels: string[]; labels_en: string[] }>(model, CAPTIONS_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_CAPTIONS, agentLabel: "captions_rework" });
   const labels = Array.isArray(raw.labels) ? raw.labels.slice(0, indices.length) : [];
   const labels_en = Array.isArray(raw.labels_en) ? raw.labels_en.slice(0, indices.length) : [];
   return { labels, labels_en };
@@ -663,7 +680,7 @@ async function runScenesForIndices(
       : "") +
     `Critic reasons: ${(criticContext.reasons ?? []).join(" ")}\nCritic suggestions: ${criticContext.suggestions.join(" ")}\n\n` +
     `Output JSON with one key: scene_descriptions (array of ${indices.length} strings, in order of indices). Each sentence 18–22 words, start with {subject}. No subordinate clauses.`;
-  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_SCENES });
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { maxTokens: PACK_AGENT_MAX_TOKENS_SCENES, agentLabel: "scenes_rework" });
   const scene_descriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, indices.length) : [];
   return { scene_descriptions };
 }

@@ -22,7 +22,7 @@
 
 | Агент   | max_tokens |
 |---------|------------|
-| Concept | 512  |
+| Concept | 1024 |
 | Boss    | 1024 |
 | Captions| 512  |
 | Scenes  | 1024 |
