@@ -43,7 +43,7 @@
 
 | Агент    | max_tokens | Обоснование |
 |----------|------------|-------------|
-| Concept  | 1024       | Бриф: subject_type, setting, persona, tone, timeline, situation_types (3–5), shareability_hook, title_hint, visual_anchors. (512 было мало — finish_reason=length.) |
+| Concept  | 2048       | Бриф: subject_type, setting, persona, tone, timeline, situation_types (3–5), shareability_hook, title_hint, visual_anchors. (1024 иногда мало — finish_reason=length.) |
 | Boss     | 1024       | План: id, name_ru/en, carousel_*, mood, segment_id, story_arc, tone, moments[9] (каждый 8–10 слов). |
 | Captions | 512        | labels[9] + labels_en[9], по 15–20 символов — суммарно мало токенов. |
 | Scenes   | 1024       | scene_descriptions[9], по 18–22 слова — ~250–400 токенов; запас на вариативность. |

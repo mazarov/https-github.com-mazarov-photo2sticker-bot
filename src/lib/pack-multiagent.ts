@@ -151,7 +151,7 @@ export const PACK_AGENT_APP_CONFIG_KEYS = {
 const OPENAI_TIMEOUT_MS = 90_000;
 
 /** Лимиты вывода по агентам (снижение латентности, см. docs/26-02-pack-agents-max-tokens-latency.md). */
-const PACK_AGENT_MAX_TOKENS_CONCEPT = 1024;
+const PACK_AGENT_MAX_TOKENS_CONCEPT = 2048;
 const PACK_AGENT_MAX_TOKENS_BOSS = 1024;
 const PACK_AGENT_MAX_TOKENS_CAPTIONS = 512;
 const PACK_AGENT_MAX_TOKENS_SCENES = 1024;
@@ -275,6 +275,20 @@ overreaction, mild disappointment, or awkwardness.
 
 Do NOT resolve it.
 Do NOT smooth it out.
+
+---
+
+## LENGTH LIMITS (MANDATORY)
+
+Keep the entire JSON short. Hard limits per field:
+- setting: max 10 words.
+- persona: max 8 words.
+- tone: max 6 words.
+- situation_types: 3-5 items, each max 6 words.
+- shareability_hook: max 8 words.
+- title_hint: max 5 words.
+- visual_anchors: 1-3 items, each max 4 words.
+If you exceed these, the response will be cut off and invalid.
 
 ---
 
