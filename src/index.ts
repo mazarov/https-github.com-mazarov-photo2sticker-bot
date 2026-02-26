@@ -207,6 +207,11 @@ function getPackContentSetsForTemplate(contentSets: any[], templateId: string): 
 }
 
 /** Admin-only row for "Сгенерировать пак" (test bot only). Pass sessionId so the handler loads session by id. */
+/** Escape Telegram Markdown special chars so DB content (name_ru/en, carousel_description_*) does not break parse_mode: "Markdown". */
+function escapeMarkdownForTelegram(text: string): string {
+  return String(text ?? "").replace(/\\/g, "\\\\").replace(/[_*`\[\]]/g, "\\$&");
+}
+
 function getPackCarouselAdminRow(telegramId: number, sessionId?: string): { text: string; callback_data: string }[] {
   const isTest = config.appEnv === "test";
   const isAdmin = config.adminIds.includes(telegramId);
@@ -3824,7 +3829,7 @@ async function handlePackMenuEntry(
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
+  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const keyboard = {
@@ -4045,7 +4050,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
+  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const keyboard = {
@@ -4442,7 +4447,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
+  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const keyboard = {
@@ -4493,7 +4498,7 @@ async function renderPackCarouselForSession(
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${setName}*\n${setDesc}`;
+  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow((ctx.from as any)?.id ?? 0, session.id);
   const keyboard = {
