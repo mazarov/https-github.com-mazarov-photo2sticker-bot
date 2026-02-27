@@ -76,7 +76,7 @@ const pendingAdminReplies = new Map<number, {
   username: string;
 }>();
 
-// Admin flow: «Сделать примером» — выбор набора из pack_content_sets, затем ссылка на стикерпак → pack/content/{id}/1..9.webp (docs/27-02-admin-make-emotion-example-from-pack-link.md)
+// Admin flow: «Сделать примером» — выбор набора из pack_content_sets, затем ссылка на стикерпак → sticker_pack_example/{id}/1..9.webp (не pack/content — тот для лендинга)
 const adminPackContentExampleFlow = new Map<number, { step: 2; contentSetId: string }>();
 
 const app = express();
@@ -559,6 +559,20 @@ async function getPackStyleExampleFileId(styleId: string): Promise<string | null
     .not("pack_example_file_id", "is", null)
     .maybeSingle();
   return data?.pack_example_file_id || null;
+}
+
+/** Папка в Storage для примеров наборов (карусель бота). Отдельно от pack/content/ (лендинг). */
+const PACK_EXAMPLE_STORAGE_PREFIX = "sticker_pack_example/";
+
+/** Имя файла примера набора: одна сетка 1024×1024 из стикеров пака. */
+const PACK_EXAMPLE_FILENAME = "example.webp";
+
+/** Public URL для примера набора (sticker_pack_example/{id}/example.webp — сетка из стикеров). Используется в карусели паков в боте. */
+function getPackContentSetExamplePublicUrl(contentSetId: string): string {
+  const bucket = config.supabaseStorageBucketExamples || "stickers-examples";
+  const path = `${PACK_EXAMPLE_STORAGE_PREFIX}${contentSetId}/${PACK_EXAMPLE_FILENAME}`;
+  const base = (config.supabaseUrl || "").replace(/\/$/, "");
+  return `${base}/storage/v1/object/public/${bucket}/${path}`;
 }
 
 /**
@@ -3894,8 +3908,20 @@ async function handlePackMenuEntry(
         ...(adminRow.length ? [adminRow] : []),
       ],
     };
+    const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
     let msg: any = null;
-    if (openingMsg?.message_id && ctx.chat?.id) {
+    if (exampleUrl && ctx.chat?.id) {
+      try {
+        if (openingMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat.id, openingMsg.message_id).catch(() => {});
+        const sent = await ctx.telegram.sendPhoto(ctx.chat.id, exampleUrl, {
+          caption: carouselCaption,
+          parse_mode: "Markdown",
+          reply_markup: keyboard,
+        });
+        msg = { message_id: sent.message_id };
+      } catch (_) {}
+    }
+    if (!msg && openingMsg?.message_id && ctx.chat?.id) {
       try {
         await ctx.telegram.editMessageText(ctx.chat.id, openingMsg.message_id, undefined, carouselCaption, {
           parse_mode: "Markdown",
@@ -3910,7 +3936,7 @@ async function handlePackMenuEntry(
           msg = await ctx.reply(fallbackText, { reply_markup: keyboard });
         }
       }
-    } else {
+    } else if (!msg) {
       try {
         msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
       } catch (replyErr) {
@@ -4001,7 +4027,7 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
   );
 });
 
-// Menu: ⭐ Сделать примером (admin only) — выбор набора из pack_content_sets, затем ссылка на стикерпак → pack/content/{id}/1..9.webp
+// Menu: ⭐ Сделать примером (admin only) — выбор набора, ссылка на стикерпак → sticker_pack_example/{id}/1..9.webp (карусель бота; pack/content — для лендинга)
 bot.hears(["⭐ Сделать примером", "⭐ Make as example"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId || !config.adminIds.includes(telegramId)) return;
@@ -4730,8 +4756,39 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
       ...(adminRow.length ? [adminRow] : []),
     ],
   };
+  const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
+  const chatId = ctx.callbackQuery?.message?.chat?.id;
+  const msgId = ctx.callbackQuery?.message?.message_id;
+  const hasPhoto = !!(ctx.callbackQuery?.message?.photo?.length);
   try {
-    await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+    if (exampleUrl && chatId && msgId) {
+      if (hasPhoto) {
+        await ctx.telegram.editMessageMedia(chatId, msgId, undefined, {
+          type: "photo",
+          media: exampleUrl,
+          caption: carouselCaption,
+          parse_mode: "Markdown",
+        }, { reply_markup: keyboard });
+      } else {
+        await ctx.telegram.deleteMessage(chatId, msgId);
+        const sent = await ctx.telegram.sendPhoto(chatId, exampleUrl, {
+          caption: carouselCaption,
+          parse_mode: "Markdown",
+          reply_markup: keyboard,
+        });
+        await supabase
+          .from("sessions")
+          .update({
+            progress_message_id: sent.message_id,
+            progress_chat_id: sent.chat.id,
+            ui_message_id: sent.message_id,
+            ui_chat_id: sent.chat.id,
+          })
+          .eq("id", session.id);
+      }
+    } else {
+      await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
+    }
   } catch (_) {}
 }
 
@@ -4818,14 +4875,46 @@ async function renderPackCarouselForSession(
   }
   await supabase.from("sessions").update(baseSessionPatch).eq("id", session.id);
 
-  const callbackMsgId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
-  const callbackChatId = (ctx.callbackQuery as any)?.message?.chat?.id as number | undefined;
+  const callbackMsg = (ctx.callbackQuery as any)?.message;
+  const callbackMsgId = callbackMsg?.message_id as number | undefined;
+  const callbackChatId = callbackMsg?.chat?.id as number | undefined;
+  const hasPhoto = !!(callbackMsg?.photo?.length);
+  const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
+
   if (callbackMsgId && callbackChatId) {
     try {
-      await ctx.telegram.editMessageText(callbackChatId, callbackMsgId, undefined, carouselCaption, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard,
-      });
+      if (exampleUrl) {
+        if (hasPhoto) {
+          await ctx.telegram.editMessageMedia(callbackChatId, callbackMsgId, undefined, {
+            type: "photo",
+            media: exampleUrl,
+            caption: carouselCaption,
+            parse_mode: "Markdown",
+          }, { reply_markup: keyboard });
+        } else {
+          await ctx.telegram.deleteMessage(callbackChatId, callbackMsgId);
+          const sent = await ctx.telegram.sendPhoto(callbackChatId, exampleUrl, {
+            caption: carouselCaption,
+            parse_mode: "Markdown",
+            reply_markup: keyboard,
+          });
+          await supabase
+            .from("sessions")
+            .update({
+              progress_message_id: sent.message_id,
+              progress_chat_id: sent.chat.id,
+              ui_message_id: sent.message_id,
+              ui_chat_id: sent.chat.id,
+            })
+            .eq("id", session.id);
+          return;
+        }
+      } else {
+        await ctx.telegram.editMessageText(callbackChatId, callbackMsgId, undefined, carouselCaption, {
+          parse_mode: "Markdown",
+          reply_markup: keyboard,
+        });
+      }
       await supabase
         .from("sessions")
         .update({
@@ -5776,7 +5865,7 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
   await ctx.reply(lang === "ru" ? "Оставляем текущее фото." : "Keeping current photo.");
 });
 
-/** Admin flow «Сделать примером»: набор из pack_content_sets выбран кнопкой (step 2), обрабатываем ссылку на стикерпак → pack/content/{id}/1..9.webp */
+/** Admin flow «Сделать примером»: набор выбран кнопкой (step 2), обрабатываем ссылку → sticker_pack_example/{id}/1..9.webp */
 async function handleAdminPackContentExampleText(ctx: any, telegramId: number, text: string): Promise<void> {
   const flow = adminPackContentExampleFlow.get(telegramId)!;
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
@@ -5788,9 +5877,16 @@ async function handleAdminPackContentExampleText(ctx: any, telegramId: number, t
     return;
   }
   const shortName = match[1];
+  console.log("[admin_pack_content_example] start", { contentSetId, shortName, telegramId });
 
-  const statusMsg = await ctx.reply(isRu ? "⏳ Скачиваю стикеры и загружаю в pack/content/..." : "⏳ Downloading stickers and uploading to pack/content/...").catch(() => null);
+  const statusMsg = await ctx.reply(isRu ? "⏳ Скачиваю стикеры и загружаю в sticker_pack_example/..." : "⏳ Downloading stickers and uploading to sticker_pack_example/...").catch(() => null);
   try {
+    const bucket = config.supabaseStorageBucketExamples;
+    if (!bucket) {
+      console.error("[admin_pack_content_example] SUPABASE_STORAGE_BUCKET_EXAMPLES not set");
+      await ctx.reply("❌ Не настроен бакет примеров (SUPABASE_STORAGE_BUCKET_EXAMPLES).");
+      return;
+    }
     const set = await getStickerSet(shortName);
     const stickersRaw = (set as { stickers: { file_id: string; is_animated?: boolean; is_video?: boolean }[] }).stickers;
     const stickers = stickersRaw.filter((s: any) => !s.is_animated && !s.is_video).slice(0, 9);
@@ -5799,23 +5895,27 @@ async function handleAdminPackContentExampleText(ctx: any, telegramId: number, t
       adminPackContentExampleFlow.delete(telegramId);
       return;
     }
-    const bucket = config.supabaseStorageBucketExamples;
-    let uploaded = 0;
-    for (let i = 0; i < stickers.length; i++) {
-      const s = stickers[i];
-      const path = await getFilePath(s.file_id);
-      const buf = await downloadFile(path);
-      const pos = i + 1;
-      const storagePath = `pack/content/${contentSetId}/${pos}.webp`;
-      const { error: uploadErr } = await supabase.storage.from(bucket).upload(storagePath, buf, { contentType: "image/webp", upsert: true });
-      if (!uploadErr) uploaded++;
+    const buffers: Buffer[] = [];
+    for (const s of stickers) {
+      const filePath = await getFilePath(s.file_id);
+      const buf = await downloadFile(filePath);
+      buffers.push(buf);
+    }
+    const grid = await assembleGridTo1024(buffers, 3, 3);
+    const storagePath = `${PACK_EXAMPLE_STORAGE_PREFIX}${contentSetId}/${PACK_EXAMPLE_FILENAME}`;
+    const { error: uploadErr } = await supabase.storage.from(bucket).upload(storagePath, grid, { contentType: "image/webp", upsert: true });
+    if (uploadErr) {
+      console.error("[admin_pack_content_example] upload failed", storagePath, uploadErr.message);
+      if (statusMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
+      await ctx.reply(`❌ Ошибка загрузки в Storage: ${uploadErr.message}`);
+      return;
     }
     clearPackContentSetsCache();
     adminPackContentExampleFlow.delete(telegramId);
     if (statusMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
-    await ctx.reply(isRu ? `✅ Примеры для набора «${contentSetId}» сохранены (${uploaded} файлов в pack/content/).` : `✅ Examples for set «${contentSetId}» saved (${uploaded} files in pack/content/).`);
+    await ctx.reply(isRu ? `✅ Пример для набора «${contentSetId}» сохранён (сетка 1024×1024 в sticker_pack_example/).` : `✅ Example for set «${contentSetId}» saved (1024×1024 grid in sticker_pack_example/).`);
   } catch (err: any) {
-    console.error("[admin_pack_content_example] Error:", err?.message || err);
+    console.error("[admin_pack_content_example] Error:", err?.message || err, err);
     if (statusMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
     await ctx.reply(`❌ ${err?.message || "Error"}`);
   }
@@ -5889,9 +5989,10 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // === Admin: «Сделать примером» flow (pack_content_sets → pack link → pack/content/{id}/1..9.webp) ===
+  // === Admin: «Сделать примером» flow (pack_content_sets → pack link → sticker_pack_example/{id}/1..9.webp) ===
   if (config.adminIds.includes(telegramId) && adminPackContentExampleFlow.has(telegramId)) {
     const text = ctx.message?.text?.trim() ?? "";
+    console.log("[admin_pack_content_example] text in flow", { telegramId, textPreview: text.slice(0, 50) });
     if (text === "/cancel") {
       adminPackContentExampleFlow.delete(telegramId);
       await ctx.reply("❌ Отменено.");
