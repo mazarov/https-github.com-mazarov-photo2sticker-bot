@@ -2064,6 +2064,7 @@ const SESSION_FALLBACK_ACTIVE_STATES = [
   "wait_pack_approval",
   "wait_pack_rework_feedback",
   "generating_pack_preview",
+  "generating_pack_theme",
   "processing_pack",
   // Generic generation states
   "processing",
@@ -2142,7 +2143,7 @@ async function getActiveSession(userId: string) {
   return fallbackByCreatedAt;
 }
 
-const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "wait_pack_approval", "wait_pack_rework_feedback", "processing_pack"] as const;
+const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "generating_pack_theme", "wait_pack_approval", "wait_pack_rework_feedback", "processing_pack"] as const;
 
 /** Get session that is in pack flow (for pack callbacks when user may have is_active assistant session). */
 async function getPackFlowSession(userId: string) {
@@ -3140,6 +3141,7 @@ bot.on("photo", async (ctx) => {
     "wait_pack_approval",
     "wait_pack_rework_feedback",
     "generating_pack_preview",
+    "generating_pack_theme",
     "processing_pack",
   ];
   if (packStatesForReactivation.includes(String(session.state || "")) && !session.is_active) {
@@ -3161,7 +3163,7 @@ bot.on("photo", async (ctx) => {
 
   // === AI Assistant: re-route to assistant_wait_photo if assistant is active after generation ===
   // Skip re-route for pack flow states — pack handles photos independently
-  if (!session.state?.startsWith("assistant_") && !session.state?.startsWith("wait_pack_") && !["processing", "processing_emotion", "processing_motion", "processing_text", "generating_pack_preview", "processing_pack"].includes(session.state)) {
+  if (!session.state?.startsWith("assistant_") && !session.state?.startsWith("wait_pack_") && !["processing", "processing_emotion", "processing_motion", "processing_text", "generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(session.state)) {
     const activeAssistant = await getActiveAssistantSession(user.id);
     if (activeAssistant && activeAssistant.status === "active") {
       console.log("Assistant photo re-route: state was", session.state, "→ switching to assistant_wait_photo");
@@ -3191,7 +3193,7 @@ bot.on("photo", async (ctx) => {
         ? "assistant"
         : (
             session.state?.startsWith("wait_pack_")
-            || ["generating_pack_preview", "processing_pack"].includes(String(session.state || ""))
+            || ["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(String(session.state || ""))
           )
           ? "pack"
           : "single";
@@ -3762,7 +3764,7 @@ async function handlePackMenuEntry(
   try {
     const activeSession = await getActiveSession(user.id);
     console.log("[pack_flow] after getActiveSession in pack_entry", { userId: user.id, sessionId: activeSession?.id ?? null, sessionState: activeSession?.state ?? null });
-    const isProcessingState = activeSession?.state === "generating_pack_preview" || activeSession?.state === "processing_pack";
+    const isProcessingState = activeSession?.state === "generating_pack_preview" || activeSession?.state === "generating_pack_theme" || activeSession?.state === "processing_pack";
     const processingStaleMinutes = 10;
     const processingUpdatedAt = activeSession?.updated_at ? new Date(activeSession.updated_at).getTime() : 0;
     const processingIsStale = !activeSession?.updated_at || (Date.now() - processingUpdatedAt > processingStaleMinutes * 60 * 1000);
@@ -5614,7 +5616,7 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
     await rejectSessionEvent(ctx, lang, "single_new_photo", "session_not_found");
     return;
   }
-  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "processing_pack"].includes(session.state)) {
+  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(session.state)) {
     await rejectSessionEvent(ctx, lang, "single_new_photo", "wrong_state");
     return;
   }
@@ -5669,7 +5671,7 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
     await rejectSessionEvent(ctx, lang, "single_keep_photo", "session_not_found");
     return;
   }
-  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "processing_pack"].includes(session.state)) {
+  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(session.state)) {
     await rejectSessionEvent(ctx, lang, "single_keep_photo", "wrong_state");
     return;
   }
@@ -5837,7 +5839,7 @@ bot.on("text", async (ctx) => {
     // #endregion
   }
   // #region agent log
-  console.log("[pack_text_resolve] before pack_theme check", { sessionId: session?.id, sessionState: session?.state, wouldBePackTheme: (config.appEnv === "test" && config.adminIds.includes(telegramId) && (session.state === "wait_pack_generate_request" || session.state === "wait_pack_carousel")), textLen: ctx.message?.text?.length ?? 0 });
+  console.log("[pack_text_resolve] before pack_theme check", { sessionId: session?.id, sessionState: session?.state, wouldBePackTheme: (config.adminIds.includes(telegramId) && (session.state === "wait_pack_generate_request" || session.state === "wait_pack_carousel")), textLen: ctx.message?.text?.length ?? 0 });
   // #endregion
 
   // === Admin pack rework: user sent feedback (Critic approved, user tapped Rework and described what to change) ===
@@ -5907,7 +5909,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // === Admin pack generation: theme text → run pipeline → insert (test bot only) ===
+  // === Admin pack generation: theme text → run pipeline → insert ===
   const isAdminPackThemeRequest =
     config.adminIds.includes(telegramId) &&
     (session.state === "wait_pack_generate_request" || session.state === "wait_pack_carousel");
@@ -5917,6 +5919,18 @@ bot.on("text", async (ctx) => {
       await ctx.reply(lang === "ru" ? "Введите тему одной фразой." : "Enter the theme in one phrase.");
       return;
     }
+
+    // Prevent duplicate runs: set state before any await so re-delivered updates don't start a second pipeline.
+    const { error: lockErr } = await supabase
+      .from("sessions")
+      .update({ state: "generating_pack_theme", is_active: true })
+      .eq("id", session.id);
+    if (lockErr) {
+      console.warn("[pack_admin] Failed to set generating_pack_theme:", lockErr.message, "sessionId:", session.id);
+      await ctx.reply(lang === "ru" ? "Не удалось заблокировать сессию. Попробуй ещё раз." : "Failed to lock session. Try again.");
+      return;
+    }
+    session.state = "generating_pack_theme";
 
     const adminPackStageLabels: Record<string, { ru: string; en: string }> = {
       brief_and_plan: { ru: "Brief & Plan", en: "Brief & Plan" },
@@ -5937,13 +5951,16 @@ bot.on("text", async (ctx) => {
         await ctx.telegram.editMessageText(chatId, progressMsgId, undefined, text);
       } catch {}
     };
-    const subjectType = subjectTypeFromSession(session);
-    const result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2, onProgress });
-
-    await supabase
-      .from("sessions")
-      .update({ state: "wait_pack_carousel", is_active: true })
-      .eq("id", session.id);
+    let result: Awaited<ReturnType<typeof runPackGenerationPipeline>>;
+    try {
+      const subjectType = subjectTypeFromSession(session);
+      result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2, onProgress });
+    } finally {
+      await supabase
+        .from("sessions")
+        .update({ state: "wait_pack_carousel", is_active: true })
+        .eq("id", session.id);
+    }
 
     if (!result.ok && !result.spec) {
       const errText = result.error || "Unknown error";
@@ -6052,7 +6069,7 @@ bot.on("text", async (ctx) => {
   }
 
   // === Pack states: ignore text input during pack flow ===
-  if (session.state?.startsWith("wait_pack_") || session.state === "generating_pack_preview" || session.state === "processing_pack") {
+  if (session.state?.startsWith("wait_pack_") || session.state === "generating_pack_preview" || session.state === "generating_pack_theme" || session.state === "processing_pack") {
     return;
   }
 
