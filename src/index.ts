@@ -3763,11 +3763,12 @@ async function handlePackMenuEntry(
 
     const existingPackSession = await getPackFlowSession(user.id);
     console.log("[pack_flow] existingPackSession in pack_entry", { userId: user.id, existingId: existingPackSession?.id ?? null, existingState: existingPackSession?.state ?? null });
-    if (
+    const canResumeCarousel =
       existingPackSession?.id &&
       existingPackSession.pack_template_id === templateId &&
-      isResumablePackSessionState(existingPackSession.state)
-    ) {
+      isResumablePackSessionState(existingPackSession.state) &&
+      getPackContentSetsForTemplate(contentSets, existingPackSession.pack_template_id).length > 0;
+    if (canResumeCarousel) {
       if (existingPackSession.state === "wait_pack_carousel") {
         await renderPackCarouselForSession(ctx, existingPackSession, lang);
         return;
@@ -4555,7 +4556,13 @@ async function renderPackCarouselForSession(
 ) {
   const allContentSets = await getActivePackContentSets();
   const contentSets = getPackContentSetsForTemplate(allContentSets, session.pack_template_id);
-  if (!contentSets?.length) return;
+  if (!contentSets?.length) {
+    await ctx.reply(
+      lang === "ru" ? "Список наборов обновился. Нажмите «Создать пак» ещё раз." : "Pack list was updated. Tap «Create pack» again.",
+      getMainMenuKeyboard(lang, ctx?.from?.id)
+    ).catch(() => {});
+    return;
+  }
 
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
   const subjectMode = getEffectiveSubjectMode(session);
