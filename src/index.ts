@@ -3883,77 +3883,36 @@ async function handlePackMenuEntry(
     }
 
     const set = visibleSets[0];
-    const setName = lang === "ru" ? set.name_ru : set.name_en;
-    const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-    const intro = await getText(lang, "pack.carousel_intro");
-    const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
-    const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-    const adminRow = getPackCarouselAdminRow(telegramId, session.id);
-    const packHolidayEntry = await getPackHolidayTheme();
-    const holidayRowEntry: { text: string; callback_data: string }[] = [];
-    if (packHolidayEntry) {
-      const isOn = false;
-      const holidayLabel = (lang === "ru" ? `${packHolidayEntry.emoji} ${packHolidayEntry.name_ru}` : `${packHolidayEntry.emoji} ${packHolidayEntry.name_en}`) + (isOn ? ": on" : ": off");
-      holidayRowEntry.push({ text: holidayLabel, callback_data: `pack_holiday:${packHolidayEntry.id}` });
+    if (openingMsg?.message_id && ctx.chat?.id) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, openingMsg.message_id).catch(() => {});
     }
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: "◀️", callback_data: "pack_carousel_prev" },
-          { text: `1/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
-          { text: "▶️", callback_data: "pack_carousel_next" },
-        ],
-        [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
-        ...(holidayRowEntry.length ? [holidayRowEntry] : []),
-        ...(adminRow.length ? [adminRow] : []),
-      ],
-    };
+    const { carouselCaption, keyboard } = await buildPackCarouselCard(set, session, lang, {
+      visibleSetsLength: visibleSets.length,
+      currentIndex: 0,
+      telegramId,
+    });
     const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
-    let msg: any = null;
-    if (exampleUrl && ctx.chat?.id) {
+    if (ctx.chat?.id) {
       try {
-        if (openingMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat.id, openingMsg.message_id).catch(() => {});
-        const sent = await ctx.telegram.sendPhoto(ctx.chat.id, exampleUrl, {
-          caption: carouselCaption,
-          parse_mode: "Markdown",
-          reply_markup: keyboard,
+        await showPackCarouselCard(ctx.telegram, supabase, {
+          chatId: ctx.chat.id,
+          carouselCaption,
+          keyboard,
+          exampleUrl,
+          existingHasPhoto: false,
+          sessionId: session.id,
         });
-        msg = { message_id: sent.message_id };
-      } catch (_) {}
-    }
-    if (!msg && openingMsg?.message_id && ctx.chat?.id) {
-      try {
-        await ctx.telegram.editMessageText(ctx.chat.id, openingMsg.message_id, undefined, carouselCaption, {
-          parse_mode: "Markdown",
-          reply_markup: keyboard,
-        });
-        msg = { message_id: openingMsg.message_id };
-      } catch (editErr) {
-        try {
-          msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-        } catch (replyErr) {
-          const fallbackText = `${intro}\n\n${setName}\n${setDesc}`;
-          msg = await ctx.reply(fallbackText, { reply_markup: keyboard });
-        }
-      }
-    } else if (!msg) {
-      try {
-        msg = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-      } catch (replyErr) {
-        const fallbackText = `${intro}\n\n${setName}\n${setDesc}`;
-        msg = await ctx.reply(fallbackText, { reply_markup: keyboard });
-      }
-    }
-    if (msg?.message_id && ctx.chat?.id) {
-      await supabase
-        .from("sessions")
-        .update({
-          progress_message_id: msg.message_id,
+      } catch (_) {
+        const intro = await getText(lang, "pack.carousel_intro");
+        const fallbackCaption = `${intro}\n\n${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
+        const sent = await ctx.telegram.sendMessage(ctx.chat.id, fallbackCaption, { reply_markup: keyboard });
+        await supabase.from("sessions").update({
+          progress_message_id: sent.message_id,
           progress_chat_id: ctx.chat.id,
-          ui_message_id: msg.message_id,
+          ui_message_id: sent.message_id,
           ui_chat_id: ctx.chat.id,
-        })
-        .eq("id", session.id);
+        }).eq("id", session.id);
+      }
     }
   } catch (err: any) {
     console.error("[pack_entry] handlePackMenuEntry error:", err?.message || err, err?.stack?.split("\n").slice(0, 4));
@@ -4697,6 +4656,113 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
   }
 });
 
+/** Единая точка: контент одной карточки карусели паков (подпись + клавиатура). */
+async function buildPackCarouselCard(
+  set: { id: string; name_ru: string; name_en: string; carousel_description_ru?: string; carousel_description_en?: string },
+  session: any,
+  lang: string,
+  opts: { visibleSetsLength: number; currentIndex: number; telegramId?: number }
+): Promise<{ carouselCaption: string; keyboard: TelegramBot.InlineKeyboardMarkup }> {
+  const setName = lang === "ru" ? set.name_ru : set.name_en;
+  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
+  const intro = await getText(lang, "pack.carousel_intro");
+  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
+  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const adminRow = getPackCarouselAdminRow(opts.telegramId ?? 0, session.id);
+  const packHoliday = await getPackHolidayTheme();
+  const holidayRow: { text: string; callback_data: string }[] = [];
+  if (packHoliday) {
+    const isOn = session.pack_holiday_id === packHoliday.id;
+    const holidayLabel = (lang === "ru" ? `${packHoliday.emoji} ${packHoliday.name_ru}` : `${packHoliday.emoji} ${packHoliday.name_en}`) + (isOn ? ": on" : ": off");
+    holidayRow.push({ text: holidayLabel, callback_data: isOn ? "pack_holiday_off" : `pack_holiday:${packHoliday.id}` });
+  }
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "◀️", callback_data: "pack_carousel_prev" },
+        { text: `${opts.currentIndex + 1}/${opts.visibleSetsLength}`, callback_data: "pack_carousel_noop" },
+        { text: "▶️", callback_data: "pack_carousel_next" },
+      ],
+      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+      ...(holidayRow.length ? [holidayRow] : []),
+      ...(adminRow.length ? [adminRow] : []),
+    ],
+  };
+  return { carouselCaption, keyboard };
+}
+
+/** Единая точка: отобразить карточку карусели (редактирование существующего сообщения или отправка нового). При ошибке показа фото — fallback на текст. */
+async function showPackCarouselCard(
+  telegram: TelegramBot,
+  supabaseClient: any,
+  params: {
+    chatId: number;
+    messageId?: number;
+    carouselCaption: string;
+    keyboard: TelegramBot.InlineKeyboardMarkup;
+    exampleUrl: string | null;
+    existingHasPhoto: boolean;
+    sessionId: string;
+  }
+): Promise<void> {
+  const { chatId, messageId, carouselCaption, keyboard, exampleUrl, existingHasPhoto, sessionId } = params;
+  const markdownOpts = { parse_mode: "Markdown" as const, reply_markup: keyboard };
+
+  const updateSessionProgress = (msgId: number) => {
+    void supabaseClient
+      .from("sessions")
+      .update({
+        progress_message_id: msgId,
+        progress_chat_id: chatId,
+        ui_message_id: msgId,
+        ui_chat_id: chatId,
+      })
+      .eq("id", sessionId);
+  };
+
+  if (messageId != null) {
+    if (exampleUrl) {
+      if (existingHasPhoto) {
+        try {
+          await telegram.editMessageMedia(chatId, messageId, undefined, {
+            type: "photo",
+            media: exampleUrl,
+            caption: carouselCaption,
+            parse_mode: "Markdown",
+          }, { reply_markup: keyboard });
+        } catch {
+          await telegram.editMessageCaption(chatId, messageId, undefined, carouselCaption, markdownOpts);
+        }
+      } else {
+        try {
+          await telegram.deleteMessage(chatId, messageId);
+          const sent = await telegram.sendPhoto(chatId, exampleUrl, { caption: carouselCaption, ...markdownOpts });
+          updateSessionProgress(sent.message_id);
+          return;
+        } catch {
+          const sent = await telegram.sendMessage(chatId, carouselCaption, markdownOpts);
+          updateSessionProgress(sent.message_id);
+          return;
+        }
+      }
+    } else {
+      await telegram.editMessageText(chatId, messageId, undefined, carouselCaption, markdownOpts);
+    }
+    updateSessionProgress(messageId);
+    return;
+  }
+
+  if (exampleUrl) {
+    try {
+      const sent = await telegram.sendPhoto(chatId, exampleUrl, { caption: carouselCaption, ...markdownOpts });
+      updateSessionProgress(sent.message_id);
+      return;
+    } catch (_) {}
+  }
+  const sent = await telegram.sendMessage(chatId, carouselCaption, markdownOpts);
+  updateSessionProgress(sent.message_id);
+}
+
 async function updatePackCarouselCard(ctx: any, delta: number) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -4728,67 +4794,29 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const currentIndex = (session.pack_carousel_index ?? 0) + delta;
   const idx = ((currentIndex % visibleSets.length) + visibleSets.length) % visibleSets.length;
   const set = visibleSets[idx];
-
   await supabase.from("sessions").update({ pack_carousel_index: idx }).eq("id", session.id);
 
-  const setName = lang === "ru" ? set.name_ru : set.name_en;
-  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-  const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
-  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow(telegramId, session.id);
-  const packHoliday = await getPackHolidayTheme();
-  const holidayRow: { text: string; callback_data: string }[] = [];
-  if (packHoliday) {
-    const isOn = session.pack_holiday_id === packHoliday.id;
-    const holidayLabel = (lang === "ru" ? `${packHoliday.emoji} ${packHoliday.name_ru}` : `${packHoliday.emoji} ${packHoliday.name_en}`) + (isOn ? ": on" : ": off");
-    holidayRow.push({ text: holidayLabel, callback_data: isOn ? "pack_holiday_off" : `pack_holiday:${packHoliday.id}` });
-  }
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: "◀️", callback_data: "pack_carousel_prev" },
-        { text: `${idx + 1}/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
-        { text: "▶️", callback_data: "pack_carousel_next" },
-      ],
-      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
-      ...(holidayRow.length ? [holidayRow] : []),
-      ...(adminRow.length ? [adminRow] : []),
-    ],
-  };
+  const { carouselCaption, keyboard } = await buildPackCarouselCard(set, session, lang, {
+    visibleSetsLength: visibleSets.length,
+    currentIndex: idx,
+    telegramId,
+  });
   const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
-  const chatId = ctx.callbackQuery?.message?.chat?.id;
-  const msgId = ctx.callbackQuery?.message?.message_id;
+  const chatId = ctx.callbackQuery?.message?.chat?.id as number | undefined;
+  const msgId = ctx.callbackQuery?.message?.message_id as number | undefined;
   const hasPhoto = !!(ctx.callbackQuery?.message?.photo?.length);
+  if (!chatId) return;
+
   try {
-    if (exampleUrl && chatId && msgId) {
-      if (hasPhoto) {
-        await ctx.telegram.editMessageMedia(chatId, msgId, undefined, {
-          type: "photo",
-          media: exampleUrl,
-          caption: carouselCaption,
-          parse_mode: "Markdown",
-        }, { reply_markup: keyboard });
-      } else {
-        await ctx.telegram.deleteMessage(chatId, msgId);
-        const sent = await ctx.telegram.sendPhoto(chatId, exampleUrl, {
-          caption: carouselCaption,
-          parse_mode: "Markdown",
-          reply_markup: keyboard,
-        });
-        await supabase
-          .from("sessions")
-          .update({
-            progress_message_id: sent.message_id,
-            progress_chat_id: sent.chat.id,
-            ui_message_id: sent.message_id,
-            ui_chat_id: sent.chat.id,
-          })
-          .eq("id", session.id);
-      }
-    } else {
-      await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-    }
+    await showPackCarouselCard(ctx.telegram, supabase, {
+      chatId,
+      messageId: msgId,
+      carouselCaption,
+      keyboard,
+      exampleUrl,
+      existingHasPhoto: hasPhoto,
+      sessionId: session.id,
+    });
   } catch (_) {}
 }
 
@@ -4837,32 +4865,6 @@ async function renderPackCarouselForSession(
     ? ((rawIndex % visibleSets.length) + visibleSets.length) % visibleSets.length
     : 0;
   const set = visibleSets[safeIndex];
-  const setName = lang === "ru" ? set.name_ru : set.name_en;
-  const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-  const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
-  const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow((ctx.from as any)?.id ?? 0, session.id);
-  const packHoliday = await getPackHolidayTheme();
-  const holidayRow: { text: string; callback_data: string }[] = [];
-  if (packHoliday) {
-    const isOn = session.pack_holiday_id === packHoliday.id;
-    const holidayLabel = (lang === "ru" ? `${packHoliday.emoji} ${packHoliday.name_ru}` : `${packHoliday.emoji} ${packHoliday.name_en}`) + (isOn ? ": on" : ": off");
-    holidayRow.push({ text: holidayLabel, callback_data: isOn ? "pack_holiday_off" : `pack_holiday:${packHoliday.id}` });
-  }
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: "◀️", callback_data: "pack_carousel_prev" },
-        { text: `${safeIndex + 1}/${visibleSets.length}`, callback_data: "pack_carousel_noop" },
-        { text: "▶️", callback_data: "pack_carousel_next" },
-      ],
-      [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
-      ...(holidayRow.length ? [holidayRow] : []),
-      ...(adminRow.length ? [adminRow] : []),
-    ],
-  };
-
   const nextRev = options?.bumpSessionRev === true ? (session.session_rev || 1) + 1 : (session.session_rev || 1);
   const baseSessionPatch: any = {
     state: "wait_pack_carousel",
@@ -4870,67 +4872,36 @@ async function renderPackCarouselForSession(
     is_active: true,
     flow_kind: "pack",
   };
-  if (options?.bumpSessionRev === true) {
-    baseSessionPatch.session_rev = nextRev;
-  }
+  if (options?.bumpSessionRev === true) baseSessionPatch.session_rev = nextRev;
   await supabase.from("sessions").update(baseSessionPatch).eq("id", session.id);
 
+  const { carouselCaption, keyboard } = await buildPackCarouselCard(set, session, lang, {
+    visibleSetsLength: visibleSets.length,
+    currentIndex: safeIndex,
+    telegramId: (ctx.from as any)?.id,
+  });
+  const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
   const callbackMsg = (ctx.callbackQuery as any)?.message;
   const callbackMsgId = callbackMsg?.message_id as number | undefined;
   const callbackChatId = callbackMsg?.chat?.id as number | undefined;
   const hasPhoto = !!(callbackMsg?.photo?.length);
-  const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
 
-  if (callbackMsgId && callbackChatId) {
+  if (callbackChatId && callbackMsgId) {
     try {
-      if (exampleUrl) {
-        if (hasPhoto) {
-          await ctx.telegram.editMessageMedia(callbackChatId, callbackMsgId, undefined, {
-            type: "photo",
-            media: exampleUrl,
-            caption: carouselCaption,
-            parse_mode: "Markdown",
-          }, { reply_markup: keyboard });
-        } else {
-          await ctx.telegram.deleteMessage(callbackChatId, callbackMsgId);
-          const sent = await ctx.telegram.sendPhoto(callbackChatId, exampleUrl, {
-            caption: carouselCaption,
-            parse_mode: "Markdown",
-            reply_markup: keyboard,
-          });
-          await supabase
-            .from("sessions")
-            .update({
-              progress_message_id: sent.message_id,
-              progress_chat_id: sent.chat.id,
-              ui_message_id: sent.message_id,
-              ui_chat_id: sent.chat.id,
-            })
-            .eq("id", session.id);
-          return;
-        }
-      } else {
-        await ctx.telegram.editMessageText(callbackChatId, callbackMsgId, undefined, carouselCaption, {
-          parse_mode: "Markdown",
-          reply_markup: keyboard,
-        });
-      }
-      await supabase
-        .from("sessions")
-        .update({
-          progress_message_id: callbackMsgId,
-          progress_chat_id: callbackChatId,
-          ui_message_id: callbackMsgId,
-          ui_chat_id: callbackChatId,
-        })
-        .eq("id", session.id);
+      await showPackCarouselCard(ctx.telegram, supabase, {
+        chatId: callbackChatId,
+        messageId: callbackMsgId,
+        carouselCaption,
+        keyboard,
+        exampleUrl,
+        existingHasPhoto: hasPhoto,
+        sessionId: session.id,
+      });
       return;
     } catch (_) {}
   }
 
-  // Only edit existing carousel message when user tapped a button (callback). When user sent /start or menu text, send new message so carousel is visible.
-  const fromCallback = !!(ctx.callbackQuery as any)?.message?.message_id;
-  if (fromCallback && session.progress_message_id && session.progress_chat_id) {
+  if (session.progress_message_id && session.progress_chat_id && (ctx.callbackQuery as any)?.message?.message_id) {
     try {
       await ctx.telegram.editMessageText(session.progress_chat_id, session.progress_message_id, undefined, carouselCaption, {
         parse_mode: "Markdown",
@@ -4940,33 +4911,25 @@ async function renderPackCarouselForSession(
     } catch (_) {}
   }
 
-  // No callback context (e.g. /start or "Создать пак") or edit failed — send new message. Fallback without Markdown if reply fails.
-  try {
-    const sent = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
-    if (sent?.message_id && ctx.chat?.id) {
-      await supabase
-        .from("sessions")
-        .update({
-          progress_message_id: sent.message_id,
-          progress_chat_id: ctx.chat.id,
-          ui_message_id: sent.message_id,
-          ui_chat_id: ctx.chat.id,
-        })
-        .eq("id", session.id);
-    }
-  } catch (replyErr) {
-    const fallbackCaption = `${intro}\n\n${setName}\n${setDesc}`;
-    const sent = await ctx.reply(fallbackCaption, { reply_markup: keyboard });
-    if (sent?.message_id && ctx.chat?.id) {
-      await supabase
-        .from("sessions")
-        .update({
-          progress_message_id: sent.message_id,
-          progress_chat_id: ctx.chat.id,
-          ui_message_id: sent.message_id,
-          ui_chat_id: ctx.chat.id,
-        })
-        .eq("id", session.id);
+  if (ctx.chat?.id) {
+    try {
+      await showPackCarouselCard(ctx.telegram, supabase, {
+        chatId: ctx.chat.id,
+        carouselCaption,
+        keyboard,
+        exampleUrl,
+        existingHasPhoto: false,
+        sessionId: session.id,
+      });
+    } catch (_) {
+      const fallbackCaption = `${await getText(lang, "pack.carousel_intro")}\n\n${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
+      const sent = await ctx.telegram.sendMessage(ctx.chat.id, fallbackCaption, { reply_markup: keyboard });
+      void supabase.from("sessions").update({
+        progress_message_id: sent.message_id,
+        progress_chat_id: ctx.chat.id,
+        ui_message_id: sent.message_id,
+        ui_chat_id: ctx.chat.id,
+      }).eq("id", session.id);
     }
   }
 }
