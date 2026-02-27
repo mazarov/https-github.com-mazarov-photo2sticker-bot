@@ -211,16 +211,9 @@ function getEffectivePackTemplateId(session: { pack_holiday_id?: string | null; 
   return String(session.pack_holiday_id || session.pack_template_id || "couple_v1");
 }
 
-/** Admin-only row for "Сгенерировать пак" (test bot only). Pass sessionId so the handler loads session by id. */
 /** Escape Telegram Markdown special chars so DB content (name_ru/en, carousel_description_*) does not break parse_mode: "Markdown". */
 function escapeMarkdownForTelegram(text: string): string {
   return String(text ?? "").replace(/\\/g, "\\\\").replace(/[_*`\[\]]/g, "\\$&");
-}
-
-function getPackCarouselAdminRow(telegramId: number, sessionId?: string): { text: string; callback_data: string }[] {
-  if (!config.adminIds.includes(telegramId)) return [];
-  const callbackData = sessionId ? `pack_admin_generate:${sessionId}` : "pack_admin_generate";
-  return [{ text: "🛠 Сгенерировать пак", callback_data: callbackData }];
 }
 
 /** Форматирует причины и предложения Critic для показа админу (при отклонении). */
@@ -3851,7 +3844,6 @@ async function handlePackMenuEntry(
     const intro = await getText(lang, "pack.carousel_intro");
     const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
     const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-    const adminRow = getPackCarouselAdminRow(telegramId, session.id);
     const packHolidayEntry = await getPackHolidayTheme();
     const holidayRowEntry: { text: string; callback_data: string }[] = [];
     if (packHolidayEntry) {
@@ -3868,7 +3860,6 @@ async function handlePackMenuEntry(
         ],
         [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
         ...(holidayRowEntry.length ? [holidayRowEntry] : []),
-        ...(adminRow.length ? [adminRow] : []),
       ],
     };
     let msg: any = null;
@@ -4153,7 +4144,6 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const packHolidayEntry = await getPackHolidayTheme();
   const holidayRowEntry: { text: string; callback_data: string }[] = [];
   if (packHolidayEntry) {
@@ -4169,7 +4159,6 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
       ...(holidayRowEntry.length ? [holidayRowEntry] : []),
-      ...(adminRow.length ? [adminRow] : []),
     ],
   };
   await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
@@ -4599,7 +4588,6 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const packHoliday = await getPackHolidayTheme();
   const holidayRow: { text: string; callback_data: string }[] = [];
   if (packHoliday) {
@@ -4616,7 +4604,6 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
       ...(holidayRow.length ? [holidayRow] : []),
-      ...(adminRow.length ? [adminRow] : []),
     ],
   };
   try {
@@ -4674,7 +4661,6 @@ async function renderPackCarouselForSession(
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
-  const adminRow = getPackCarouselAdminRow((ctx.from as any)?.id ?? 0, session.id);
   const packHoliday = await getPackHolidayTheme();
   const holidayRow: { text: string; callback_data: string }[] = [];
   if (packHoliday) {
@@ -4691,7 +4677,6 @@ async function renderPackCarouselForSession(
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
       ...(holidayRow.length ? [holidayRow] : []),
-      ...(adminRow.length ? [adminRow] : []),
     ],
   };
 
