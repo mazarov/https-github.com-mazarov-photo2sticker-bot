@@ -213,14 +213,7 @@ function escapeMarkdownForTelegram(text: string): string {
 }
 
 function getPackCarouselAdminRow(telegramId: number, sessionId?: string): { text: string; callback_data: string }[] {
-  const isTest = config.appEnv === "test";
-  const isAdmin = config.adminIds.includes(telegramId);
-  if (!isTest || !isAdmin) {
-    if (isTest) {
-      console.log("[pack_carousel] Admin button hidden: telegramId=" + telegramId + " not in adminIds (length=" + config.adminIds.length + ")");
-    }
-    return [];
-  }
+  if (!config.adminIds.includes(telegramId)) return [];
   const callbackData = sessionId ? `pack_admin_generate:${sessionId}` : "pack_admin_generate";
   return [{ text: "🛠 Сгенерировать пак", callback_data: callbackData }];
 }
@@ -1471,7 +1464,7 @@ async function getUser(telegramId: number) {
 // Helper: get persistent menu keyboard (2 rows). Admin on test sees "Сгенерировать пак" in row1 (docs/20-02-admin-generate-pack-menu-button.md).
 function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const showAdminGenerate =
-    config.appEnv === "test" && telegramId != null && config.adminIds.includes(telegramId);
+    telegramId != null && config.adminIds.includes(telegramId);
   const row1 =
     lang === "ru"
       ? showAdminGenerate
@@ -3905,7 +3898,7 @@ bot.hears(["📦 Создать пак", "📦 Create pack", "📦 Пак сти
 // Menu: 🔄 Сгенерировать пак (admin only, test) — create session wait_pack_generate_request, ask for theme (docs/20-02-admin-generate-pack-menu-button.md)
 bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], async (ctx) => {
   const telegramId = ctx.from?.id;
-  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
 
   const user = await getUser(telegramId);
   if (!user?.id) return;
@@ -4177,7 +4170,7 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
   const telegramId = ctx.from?.id;
   const callbackData = (ctx.callbackQuery as any)?.data ?? "";
   console.log("[pack_flow] callback pack_admin_generate", { telegramId, callbackData });
-  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
 
   const user = await getUser(telegramId);
   if (!user?.id) return;
@@ -4243,7 +4236,7 @@ bot.action(/^pack_admin_generate(?::(.+))?$/, async (ctx) => {
 bot.action(/^(pack_admin_pack_save|pack_admin_save_rejected)(:.+)?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
-  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
 
   const user = await getUser(telegramId);
   if (!user?.id) return;
@@ -4315,7 +4308,7 @@ bot.action(/^(pack_admin_pack_save|pack_admin_save_rejected)(:.+)?$/, async (ctx
 bot.action(/^pack_admin_pack_cancel(:.+)?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
-  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
 
   const user = await getUser(telegramId);
   if (!user?.id) return;
@@ -4345,7 +4338,7 @@ bot.action(/^pack_admin_pack_cancel(:.+)?$/, async (ctx) => {
 bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
-  if (!telegramId || config.appEnv !== "test" || !config.adminIds.includes(telegramId)) return;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
 
   const user = await getUser(telegramId);
   if (!user?.id) return;
@@ -5659,7 +5652,7 @@ bot.on("text", async (ctx) => {
   console.log("[pack_text_resolve] after getActiveSession", { userId: user.id, telegramId, sessionId: session?.id ?? null, sessionState: session?.state ?? null, isTest: config.appEnv === "test", isAdmin: config.adminIds.includes(telegramId) });
   // #endregion
   if (!session?.id) {
-    if (config.appEnv === "test" && config.adminIds.includes(telegramId)) {
+    if (config.adminIds.includes(telegramId)) {
       // Include wait_pack_carousel: after "Сгенерировать пак" session is in carousel until user taps "Сгенерировать" (then wait_pack_generate_request). Theme can be sent from carousel in some flows.
       const { data: packSession, error: packSessionErr } = await supabase
         .from("sessions")
@@ -5696,7 +5689,7 @@ bot.on("text", async (ctx) => {
 
   // Уточнение резолва (flow-aware): если сессия не в pack-flow, но есть паковая сессия, ожидающая тему — подставляем её (getActiveSession мог вернуть другую по updated_at).
   const packThemeStates = ["wait_pack_generate_request", "wait_pack_carousel", "wait_pack_rework_feedback"];
-  const needRefinement = session?.id && config.appEnv === "test" && config.adminIds.includes(telegramId) && !packThemeStates.includes(session.state);
+  const needRefinement = session?.id && config.adminIds.includes(telegramId) && !packThemeStates.includes(session.state);
   if (needRefinement) {
     const { data: packForTheme } = await supabase
       .from("sessions")
@@ -5718,7 +5711,6 @@ bot.on("text", async (ctx) => {
 
   // === Admin pack rework: user sent feedback (Critic approved, user tapped Rework and described what to change) ===
   const isPackReworkFeedback =
-    config.appEnv === "test" &&
     config.adminIds.includes(telegramId) &&
     session.state === "wait_pack_rework_feedback";
   if (isPackReworkFeedback) {
@@ -5786,7 +5778,6 @@ bot.on("text", async (ctx) => {
 
   // === Admin pack generation: theme text → run pipeline → insert (test bot only) ===
   const isAdminPackThemeRequest =
-    config.appEnv === "test" &&
     config.adminIds.includes(telegramId) &&
     (session.state === "wait_pack_generate_request" || session.state === "wait_pack_carousel");
   if (isAdminPackThemeRequest) {
@@ -5834,7 +5825,7 @@ bot.on("text", async (ctx) => {
     }
 
     // После пайплайна всегда показываем результат админу и три кнопки: Сохранить, Отменить, Переделать.
-    if (result.spec && config.appEnv === "test" && config.adminIds.includes(telegramId)) {
+    if (result.spec && config.adminIds.includes(telegramId)) {
       const { error: updateErr } = await supabase
         .from("sessions")
         .update({
@@ -12222,7 +12213,7 @@ const server = app.listen(config.port, () => {
   } else {
     console.log("[Config] Alert channel: configured");
   }
-  console.log("[Config] APP_ENV=" + config.appEnv + " pack_admin_button=" + (config.appEnv === "test" && config.adminIds.length > 0 ? "available (adminIds=" + config.adminIds.length + ")" : "hidden"));
+  console.log("[Config] APP_ENV=" + config.appEnv + " pack_admin_button=" + (config.adminIds.length > 0 ? "available for admin (adminIds=" + config.adminIds.length + ")" : "hidden"));
 });
 
 // ============================================
