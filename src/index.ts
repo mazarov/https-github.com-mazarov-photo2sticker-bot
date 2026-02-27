@@ -5923,14 +5923,36 @@ bot.on("text", async (ctx) => {
       return;
     }
 
-    // Prevent duplicate runs: set state before any await so re-delivered updates don't start a second pipeline.
-    const { error: lockErr } = await supabase
+    // Layer 1 — one run per user: if this user already has a session in generating_pack_theme, do not start another.
+    // (Requires migration 121; if enum missing, this query may error — we still proceed and Layer 2 lock will fail.)
+    const { data: alreadyGenerating, error: alreadyErr } = await supabase
+      .from("sessions")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .eq("state", "generating_pack_theme")
+      .limit(1)
+      .maybeSingle();
+    if (alreadyErr) {
+      console.warn("[pack_admin] Layer 1 check failed (apply migration 121 if missing enum):", alreadyErr.message);
+    }
+    if (alreadyGenerating?.id) {
+      console.log("[pack_admin] Skip: user already has session in generating_pack_theme", { userId: user.id, sessionId: alreadyGenerating.id });
+      await ctx.reply(lang === "ru" ? "⏳ Генерация пака уже идёт. Дождись окончания." : "⏳ Pack generation already in progress. Wait for it to finish.");
+      return;
+    }
+
+    // Layer 2 — conditional lock: only update if session is still in theme state (prevents double-run on same session from Telegram retries).
+    const { data: locked, error: lockErr } = await supabase
       .from("sessions")
       .update({ state: "generating_pack_theme", is_active: true })
-      .eq("id", session.id);
-    if (lockErr) {
-      console.warn("[pack_admin] Failed to set generating_pack_theme:", lockErr.message, "sessionId:", session.id);
-      await ctx.reply(lang === "ru" ? "Не удалось заблокировать сессию. Попробуй ещё раз." : "Failed to lock session. Try again.");
+      .eq("id", session.id)
+      .in("state", ["wait_pack_generate_request", "wait_pack_carousel"])
+      .select("id")
+      .maybeSingle();
+    if (lockErr || !locked?.id) {
+      console.warn("[pack_admin] Lock failed or no row updated (state already changed or race):", { sessionId: session.id, lockErr: lockErr?.message });
+      await ctx.reply(lang === "ru" ? "Не удалось заблокировать сессию. Подожди минуту и попробуй снова." : "Could not lock session. Wait a minute and try again.");
       return;
     }
     session.state = "generating_pack_theme";
