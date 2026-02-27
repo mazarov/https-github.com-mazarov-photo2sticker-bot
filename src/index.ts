@@ -206,6 +206,11 @@ function getPackContentSetsForTemplate(contentSets: any[], templateId: string): 
   return contentSets.filter((set) => String(set?.pack_template_id || "") === String(templateId));
 }
 
+/** Effective pack template for carousel: holiday overrides default. */
+function getEffectivePackTemplateId(session: { pack_holiday_id?: string | null; pack_template_id?: string | null }): string {
+  return String(session.pack_holiday_id || session.pack_template_id || "couple_v1");
+}
+
 /** Admin-only row for "Сгенерировать пак" (test bot only). Pass sessionId so the handler loads session by id. */
 /** Escape Telegram Markdown special chars so DB content (name_ru/en, carousel_description_*) does not break parse_mode: "Markdown". */
 function escapeMarkdownForTelegram(text: string): string {
@@ -436,6 +441,18 @@ async function getActiveHoliday(): Promise<HolidayTheme | null> {
     .maybeSingle();
   if (error) console.error("[getActiveHoliday] error:", error.message);
   console.log("[getActiveHoliday] result:", data?.id || "none", "is_active:", data?.is_active);
+  return data;
+}
+
+/** Pack carousel: holiday theme for packs (e.g. march_8). Shown only if id exists and is_active. */
+async function getPackHolidayTheme(): Promise<HolidayTheme | null> {
+  const { data, error } = await supabase
+    .from("holiday_themes")
+    .select("*")
+    .eq("id", "march_8")
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) console.error("[getPackHolidayTheme] error:", error.message);
   return data;
 }
 
@@ -3758,9 +3775,8 @@ async function handlePackMenuEntry(
     console.log("[pack_flow] existingPackSession in pack_entry", { userId: user.id, existingId: existingPackSession?.id ?? null, existingState: existingPackSession?.state ?? null });
     const canResumeCarousel =
       existingPackSession?.id &&
-      existingPackSession.pack_template_id === templateId &&
       isResumablePackSessionState(existingPackSession.state) &&
-      getPackContentSetsForTemplate(contentSets, existingPackSession.pack_template_id).length > 0;
+      getPackContentSetsForTemplate(contentSets, getEffectivePackTemplateId(existingPackSession)).length > 0;
     if (canResumeCarousel) {
       if (existingPackSession.state === "wait_pack_carousel") {
         await renderPackCarouselForSession(ctx, existingPackSession, lang);
@@ -3793,6 +3809,7 @@ async function handlePackMenuEntry(
         flow_kind: "pack",
         session_rev: 1,
         pack_template_id: templateId,
+        pack_holiday_id: null,
         pack_carousel_index: 0,
         selected_style_id: selectedPackStyleId,
         current_photo_file_id: existingPhoto,
@@ -3835,6 +3852,13 @@ async function handlePackMenuEntry(
     const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
     const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
     const adminRow = getPackCarouselAdminRow(telegramId, session.id);
+    const packHolidayEntry = await getPackHolidayTheme();
+    const holidayRowEntry: { text: string; callback_data: string }[] = [];
+    if (packHolidayEntry) {
+      const isOn = false;
+      const holidayLabel = (lang === "ru" ? `${packHolidayEntry.emoji} ${packHolidayEntry.name_ru}` : `${packHolidayEntry.emoji} ${packHolidayEntry.name_en}`) + (isOn ? ": on" : ": off");
+      holidayRowEntry.push({ text: holidayLabel, callback_data: `pack_holiday:${packHolidayEntry.id}` });
+    }
     const keyboard = {
       inline_keyboard: [
         [
@@ -3843,6 +3867,7 @@ async function handlePackMenuEntry(
           { text: "▶️", callback_data: "pack_carousel_next" },
         ],
         [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+        ...(holidayRowEntry.length ? [holidayRowEntry] : []),
         ...(adminRow.length ? [adminRow] : []),
       ],
     };
@@ -4088,6 +4113,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
       flow_kind: "pack",
       session_rev: 1,
       pack_template_id: templateId,
+      pack_holiday_id: null,
       pack_carousel_index: 0,
       selected_style_id: selectedPackStyleId,
       current_photo_file_id: existingPhoto,
@@ -4128,6 +4154,12 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(telegramId, session.id);
+  const packHolidayEntry = await getPackHolidayTheme();
+  const holidayRowEntry: { text: string; callback_data: string }[] = [];
+  if (packHolidayEntry) {
+    const holidayLabel = (lang === "ru" ? `${packHolidayEntry.emoji} ${packHolidayEntry.name_ru}` : `${packHolidayEntry.emoji} ${packHolidayEntry.name_en}`) + ": off";
+    holidayRowEntry.push({ text: holidayLabel, callback_data: `pack_holiday:${packHolidayEntry.id}` });
+  }
   const keyboard = {
     inline_keyboard: [
       [
@@ -4136,6 +4168,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+      ...(holidayRowEntry.length ? [holidayRowEntry] : []),
       ...(adminRow.length ? [adminRow] : []),
     ],
   };
@@ -4162,6 +4195,46 @@ bot.action("pack_carousel_next", async (ctx) => {
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
   safeAnswerCbQuery(ctx, isRu ? "↪️ Листаю наборы..." : "↪️ Switching sets...");
   await updatePackCarouselCard(ctx, 1);
+});
+
+bot.action(/^pack_holiday:(.+)$/, async (ctx) => {
+  const holidayId = ctx.match[1];
+  if (holidayId !== "march_8") return;
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "🌷 Включаю праздничные наборы..." : "🌷 Switching to holiday sets...");
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+  const session = await getPackFlowSession(user.id);
+  if (!session || session.state !== "wait_pack_carousel") return;
+  const { error } = await supabase.from("sessions").update({ pack_holiday_id: holidayId, pack_carousel_index: 0 }).eq("id", session.id);
+  if (error) {
+    console.warn("[pack_holiday] update failed:", error.message);
+    return;
+  }
+  const updated = { ...session, pack_holiday_id: holidayId, pack_carousel_index: 0 };
+  await renderPackCarouselForSession(ctx, updated, lang, { resetCarouselIndex: true, bumpSessionRev: true });
+});
+
+bot.action("pack_holiday_off", async (ctx) => {
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "Возвращаю обычные наборы..." : "Switching back to regular sets...");
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user) return;
+  const lang = user.lang || "en";
+  const session = await getPackFlowSession(user.id);
+  if (!session || session.state !== "wait_pack_carousel") return;
+  const { error } = await supabase.from("sessions").update({ pack_holiday_id: null, pack_carousel_index: 0 }).eq("id", session.id);
+  if (error) {
+    console.warn("[pack_holiday_off] update failed:", error.message);
+    return;
+  }
+  const updated = { ...session, pack_holiday_id: null, pack_carousel_index: 0 };
+  await renderPackCarouselForSession(ctx, updated, lang, { resetCarouselIndex: true, bumpSessionRev: true });
 });
 
 // Admin-only (test bot): start pack generation flow — ask for theme. When session id is in callback, load by id (no state filter) to avoid RLS/timing issues.
@@ -4494,10 +4567,12 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   if (!user) return;
   const lang = user.lang || "en";
   const session = await getPackFlowSession(user.id);
-  if (!session || session.state !== "wait_pack_carousel" || !session.pack_template_id) return;
+  if (!session || session.state !== "wait_pack_carousel") return;
+  const effectiveTemplateId = getEffectivePackTemplateId(session);
+  if (!effectiveTemplateId) return;
 
   const allContentSets = await getActivePackContentSets();
-  const contentSets = getPackContentSetsForTemplate(allContentSets, session.pack_template_id);
+  const contentSets = getPackContentSetsForTemplate(allContentSets, effectiveTemplateId);
   if (!contentSets?.length) return;
 
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
@@ -4525,6 +4600,13 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(telegramId, session.id);
+  const packHoliday = await getPackHolidayTheme();
+  const holidayRow: { text: string; callback_data: string }[] = [];
+  if (packHoliday) {
+    const isOn = session.pack_holiday_id === packHoliday.id;
+    const holidayLabel = (lang === "ru" ? `${packHoliday.emoji} ${packHoliday.name_ru}` : `${packHoliday.emoji} ${packHoliday.name_en}`) + (isOn ? ": on" : ": off");
+    holidayRow.push({ text: holidayLabel, callback_data: isOn ? "pack_holiday_off" : `pack_holiday:${packHoliday.id}` });
+  }
   const keyboard = {
     inline_keyboard: [
       [
@@ -4533,6 +4615,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+      ...(holidayRow.length ? [holidayRow] : []),
       ...(adminRow.length ? [adminRow] : []),
     ],
   };
@@ -4548,12 +4631,22 @@ async function renderPackCarouselForSession(
   options?: { resetCarouselIndex?: boolean; bumpSessionRev?: boolean }
 ) {
   const allContentSets = await getActivePackContentSets();
-  const contentSets = getPackContentSetsForTemplate(allContentSets, session.pack_template_id);
+  const effectiveTemplateId = getEffectivePackTemplateId(session);
+  const contentSets = getPackContentSetsForTemplate(allContentSets, effectiveTemplateId);
   if (!contentSets?.length) {
-    await ctx.reply(
-      lang === "ru" ? "Список наборов обновился. Нажмите «Создать пак» ещё раз." : "Pack list was updated. Tap «Create pack» again.",
-      getMainMenuKeyboard(lang, ctx?.from?.id)
-    ).catch(() => {});
+    const isHolidayEmpty = Boolean(session.pack_holiday_id);
+    const msg = isHolidayEmpty
+      ? (lang === "ru" ? "Нет наборов для этого праздника. Выключите праздник или выберите другой раздел." : "No sets for this holiday. Turn off holiday or choose another section.")
+      : (lang === "ru" ? "Список наборов обновился. Нажмите «Создать пак» ещё раз." : "Pack list was updated. Tap «Create pack» again.");
+    await ctx.reply(msg, getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
+    if (isHolidayEmpty) {
+      const packHoliday = await getPackHolidayTheme();
+      if (packHoliday) {
+        const holidayLabel = (lang === "ru" ? `${packHoliday.emoji} ${packHoliday.name_ru}: on` : `${packHoliday.emoji} ${packHoliday.name_en}: on`);
+        const keyboard = { inline_keyboard: [[{ text: holidayLabel, callback_data: "pack_holiday_off" }]] };
+        await ctx.reply(lang === "ru" ? "Нажмите, чтобы вернуться к обычным наборам:" : "Tap to return to regular sets:", { reply_markup: keyboard }).catch(() => {});
+      }
+    }
     return;
   }
 
@@ -4582,6 +4675,13 @@ async function renderPackCarouselForSession(
   const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow((ctx.from as any)?.id ?? 0, session.id);
+  const packHoliday = await getPackHolidayTheme();
+  const holidayRow: { text: string; callback_data: string }[] = [];
+  if (packHoliday) {
+    const isOn = session.pack_holiday_id === packHoliday.id;
+    const holidayLabel = (lang === "ru" ? `${packHoliday.emoji} ${packHoliday.name_ru}` : `${packHoliday.emoji} ${packHoliday.name_en}`) + (isOn ? ": on" : ": off");
+    holidayRow.push({ text: holidayLabel, callback_data: isOn ? "pack_holiday_off" : `pack_holiday:${packHoliday.id}` });
+  }
   const keyboard = {
     inline_keyboard: [
       [
@@ -4590,6 +4690,7 @@ async function renderPackCarouselForSession(
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
+      ...(holidayRow.length ? [holidayRow] : []),
       ...(adminRow.length ? [adminRow] : []),
     ],
   };
@@ -4692,7 +4793,8 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
-  if (selectedContentSet.pack_template_id !== session.pack_template_id) {
+  const effectiveTemplateId = getEffectivePackTemplateId(session);
+  if (selectedContentSet.pack_template_id !== effectiveTemplateId) {
     await ctx.answerCbQuery(lang === "ru" ? "Этот набор уже устарел. Выбери из текущей карусели." : "This set is stale. Please pick from the current carousel.", { show_alert: false }).catch(() => {});
     return;
   }

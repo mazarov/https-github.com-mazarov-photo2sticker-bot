@@ -84,6 +84,7 @@ erDiagram
 | `pack_template_id` | text | — | FK → pack_templates (flow «Сделать пак») |
 | `pack_content_set_id` | text | — | id набора (таблица по env: pack_content_sets или pack_content_sets_test) |
 | `pack_carousel_index` | int | — | Индекс текущей карточки в карусели наборов |
+| `pack_holiday_id` | text | — | При включённом празднике (напр. `march_8`) карусель показывает только наборы с этим `pack_template_id`; null = обычный шаблон |
 | `pack_sheet_file_id` | text | — | file_id сгенерированного листа превью |
 | `flow_kind` | text | — | Вид потока (`single`/`assistant`/`pack`) |
 | `session_rev` | int | 1 | Ревизия сессии для stale-callback защиты |
