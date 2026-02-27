@@ -249,15 +249,9 @@ function getEffectivePackTemplateId(session: { pack_holiday_id?: string | null; 
   return String(session.pack_holiday_id || session.pack_template_id || "couple_v1");
 }
 
-/** Admin-only row: "Сгенерировать пак" и "Список наборов". Pass sessionId so handlers load session by id. */
-function getPackCarouselAdminRow(telegramId: number, sessionId?: string): { text: string; callback_data: string }[] {
-  if (!config.adminIds.includes(telegramId)) return [];
-  const generateData = sessionId ? `pack_admin_generate:${sessionId}` : "pack_admin_generate";
-  const listData = sessionId ? `pack_admin_set_list:${sessionId}` : "pack_admin_set_list";
-  return [
-    { text: "🛠 Сгенерировать пак", callback_data: generateData },
-    { text: "📋 Список наборов", callback_data: listData },
-  ];
+/** Admin row removed from carousel: no "Сгенерировать пак" / "Список наборов" in pack carousel. */
+function getPackCarouselAdminRow(_telegramId: number, _sessionId?: string): { text: string; callback_data: string }[] {
+  return [];
 }
 
 /** Escape Telegram Markdown special chars so DB content (name_ru/en, carousel_description_*) does not break parse_mode: "Markdown". */
@@ -3996,9 +3990,7 @@ async function handlePackMenuEntry(
         });
       } catch (e) {
         console.log("[pack_carousel] show first card failed", { contentSetId: set.id, err: (e as Error)?.message });
-        const intro = await getText(lang, "pack.carousel_intro");
-        const nameAndDesc = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
-        const fallbackCaption = intro ? `${intro}\n\n${nameAndDesc}` : nameAndDesc;
+        const fallbackCaption = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
         const sent = await ctx.telegram.sendMessage(ctx.chat.id, fallbackCaption, { reply_markup: keyboard });
         await supabase.from("sessions").update({
           progress_message_id: sent.message_id,
@@ -4293,9 +4285,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const set = visibleSets[0];
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-  const intro = await getText(lang, "pack.carousel_intro");
-  const nameAndDesc = `*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
-  const carouselCaption = intro ? `${intro}\n\n${nameAndDesc}` : nameAndDesc;
+  const carouselCaption = `*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const packHolidayEntry = await getPackHolidayTheme();
@@ -4761,9 +4751,7 @@ async function buildPackCarouselCard(
 ): Promise<{ carouselCaption: string; keyboard: { inline_keyboard: { text: string; callback_data: string }[][] } }> {
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
-  const intro = await getText(lang, "pack.carousel_intro");
-  const nameAndDesc = `*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
-  const carouselCaption = intro ? `${intro}\n\n${nameAndDesc}` : nameAndDesc;
+  const carouselCaption = `*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(opts.telegramId ?? 0, session.id);
   const packHoliday = await getPackHolidayTheme();
@@ -5033,9 +5021,7 @@ async function renderPackCarouselForSession(
         sessionId: session.id,
       });
     } catch (_) {
-      const intro = await getText(lang, "pack.carousel_intro");
-      const nameAndDesc = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
-      const fallbackCaption = intro ? `${intro}\n\n${nameAndDesc}` : nameAndDesc;
+      const fallbackCaption = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
       const sent = await ctx.telegram.sendMessage(ctx.chat.id, fallbackCaption, { reply_markup: keyboard });
       void supabase.from("sessions").update({
         progress_message_id: sent.message_id,
@@ -6252,19 +6238,23 @@ bot.on("text", async (ctx) => {
       console.warn("[pack_admin] Layer 1 check failed (apply migration 121 if missing enum):", alreadyErr.message);
     }
     if (alreadyGenerating?.id) {
-      const updatedAt = alreadyGenerating.updated_at ? new Date(alreadyGenerating.updated_at).getTime() : 0;
-      const isStale = Date.now() - updatedAt > GENERATING_PACK_THEME_STALE_MS;
-      if (isStale) {
-        await supabase
-          .from("sessions")
-          .update({ state: "wait_pack_carousel", is_active: true })
-          .eq("id", alreadyGenerating.id);
-        console.log("[pack_admin] Stale generating_pack_theme reset to wait_pack_carousel", { sessionId: alreadyGenerating.id });
-      } else {
-        console.log("[pack_admin] Skip: user already has session in generating_pack_theme", { userId: user.id, sessionId: alreadyGenerating.id });
+      // Only skip if the SAME session is already generating (duplicate theme submit). Another session in generating_pack_theme = stuck, allow current one.
+      if (alreadyGenerating.id === session.id) {
+        console.log("[pack_admin] Skip: same session already in generating_pack_theme (duplicate)", { sessionId: session.id });
         await ctx.reply(lang === "ru" ? "⏳ Генерация пака уже идёт. Дождись окончания." : "⏳ Pack generation already in progress. Wait for it to finish.");
         return;
       }
+      const updatedAt = alreadyGenerating.updated_at ? new Date(alreadyGenerating.updated_at).getTime() : 0;
+      const isStale = Date.now() - updatedAt > GENERATING_PACK_THEME_STALE_MS;
+      await supabase
+        .from("sessions")
+        .update({ state: "wait_pack_carousel", is_active: true })
+        .eq("id", alreadyGenerating.id);
+      console.log("[pack_admin] Other session in generating_pack_theme reset to wait_pack_carousel (stale or blocking)", {
+        resetSessionId: alreadyGenerating.id,
+        currentSessionId: session.id,
+        isStale,
+      });
     }
 
     // Layer 2 — conditional lock: only update if session is still in theme state (prevents double-run on same session from Telegram retries).
