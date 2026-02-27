@@ -2145,6 +2145,9 @@ async function getActiveSession(userId: string) {
 
 const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "generating_pack_theme", "wait_pack_approval", "wait_pack_rework_feedback", "processing_pack"] as const;
 
+/** States used in SQL IN(...). Excludes generating_pack_theme until migration 121 is applied (invalid enum on prod otherwise breaks getPackFlowSession and holiday button). */
+const PACK_FLOW_STATES_FOR_QUERY = PACK_FLOW_STATES.filter((s) => s !== "generating_pack_theme") as unknown as string[];
+
 /** Get session that is in pack flow (for pack callbacks when user may have is_active assistant session). */
 async function getPackFlowSession(userId: string) {
   const { data } = await supabase
@@ -2152,7 +2155,7 @@ async function getPackFlowSession(userId: string) {
     .select("*")
     .eq("user_id", userId)
     .eq("env", config.appEnv)
-    .in("state", PACK_FLOW_STATES as unknown as string[])
+    .in("state", PACK_FLOW_STATES_FOR_QUERY)
     .order("updated_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .limit(1)
@@ -2190,7 +2193,7 @@ async function getPackFlowSessionById(userId: string, sessionId?: string | null)
     .eq("id", sessionId)
     .eq("user_id", userId)
     .eq("env", config.appEnv)
-    .in("state", PACK_FLOW_STATES as unknown as string[])
+    .in("state", PACK_FLOW_STATES_FOR_QUERY)
     .maybeSingle();
   return data;
 }
