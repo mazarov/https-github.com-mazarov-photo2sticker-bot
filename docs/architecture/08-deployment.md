@@ -103,6 +103,7 @@ git checkout feature/xxx
 | `ADMIN_IDS` | — | Telegram ID админов (через запятую) |
 | `SUPABASE_STORAGE_BUCKET` | `stickers` | Бакет в Supabase Storage (создать в Dashboard: Storage → New bucket; имя = значение переменной). Используется для стикеров и для листов пака (`pack_sheets/`). |
 | `SUPABASE_STORAGE_BUCKET_EXAMPLES` | `stickers-examples` | Публичный бакет для примеров. Создать в Storage, включить **Public**. Пути см. ниже («Storage: примеры»). |
+| `SUPABASE_PUBLIC_STORAGE_URL` | — | Если `SUPABASE_SUPABASE_PUBLIC_URL` внутренний (Dockhost), задать сюда **публичный** URL Supabase (например `https://bk07-67ud-ea1y.gw-1a.dockhost.net`). Используется для URL картинок примеров в карусели паков — их загружает Telegram, поэтому URL должен быть доступен из интернета. |
 | `YANDEX_METRIKA_COUNTER_ID` | — | ID счётчика Яндекс.Метрики для офлайн-конверсий (оплаты). См. `docs/architecture/05-payment.md` → Яндекс Метрика. |
 | `YANDEX_METRIKA_TOKEN` | — | OAuth **access token** Метрики (права `metrika:write` или `metrika:offline_data`). Не путать с Client ID / Client secret. |
 

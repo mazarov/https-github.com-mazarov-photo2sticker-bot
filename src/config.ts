@@ -15,6 +15,8 @@ export const config = {
   telegramBotToken: required("TELEGRAM_BOT_TOKEN"),
   telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET,
   supabaseUrl: required("SUPABASE_SUPABASE_PUBLIC_URL"),
+  /** Если задан — используется для публичных URL картинок (карусель паков, примеры), чтобы Telegram мог загрузить изображение. Иначе берётся supabaseUrl (если он внутренний, фото в карусели не отобразятся). */
+  supabasePublicStorageUrl: process.env.SUPABASE_PUBLIC_STORAGE_URL || "",
   supabaseServiceRoleKey: required("SUPABASE_SERVICE_ROLE_KEY"),
   supabaseStorageBucket: process.env.SUPABASE_STORAGE_BUCKET || "stickers",
   /** Public bucket for style example images (landing). Must exist and be public in Supabase. */

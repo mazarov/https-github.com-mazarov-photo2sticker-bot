@@ -572,11 +572,11 @@ function getPackContentSetExampleStoragePath(contentSetId: string): string {
   return `${PACK_EXAMPLE_STORAGE_PREFIX}${contentSetId}/${PACK_EXAMPLE_FILENAME}`;
 }
 
-/** Public URL для примера набора. Используется в карусели паков в боте. */
+/** Public URL для примера набора. Используется в карусели паков в боте. Для отображения в Telegram URL должен быть доступен с интернета — при внутреннем supabaseUrl задайте SUPABASE_PUBLIC_STORAGE_URL. */
 function getPackContentSetExamplePublicUrl(contentSetId: string): string {
   const bucket = config.supabaseStorageBucketExamples || "stickers-examples";
   const path = getPackContentSetExampleStoragePath(contentSetId);
-  const base = (config.supabaseUrl || "").replace(/\/$/, "");
+  const base = (config.supabasePublicStorageUrl || config.supabaseUrl || "").replace(/\/$/, "");
   return `${base}/storage/v1/object/public/${bucket}/${path}`;
 }
 
@@ -585,8 +585,17 @@ async function getPackContentSetExampleUrlIfExists(contentSetId: string): Promis
   const url = getPackContentSetExamplePublicUrl(contentSetId);
   try {
     const res = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(5000) });
-    return res.ok ? url : null;
-  } catch {
+    if (!res.ok) {
+      if (contentSetId === "march8_awkward" || res.status === 404) {
+        console.warn("[pack_example] HEAD not ok", { contentSetId, status: res.status, url: url.slice(0, 80) });
+      }
+      return null;
+    }
+    return url;
+  } catch (e) {
+    if (contentSetId === "march8_awkward") {
+      console.warn("[pack_example] HEAD failed", { contentSetId, err: (e as Error)?.message, url: url.slice(0, 80) });
+    }
     return null;
   }
 }
