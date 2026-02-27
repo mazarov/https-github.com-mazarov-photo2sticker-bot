@@ -567,9 +567,9 @@ const PACK_EXAMPLE_STORAGE_PREFIX = "sticker_pack_example/";
 /** Имя файла примера набора: одна сетка 1024×1024 из стикеров пака. */
 const PACK_EXAMPLE_FILENAME = "example.webp";
 
-/** Путь в бакете: {contentSetId}/sticker_pack_example/example.webp (сетка из стикеров). */
+/** Путь в бакете: sticker_pack_example/{contentSetId}/example.webp (сетка из стикеров). Совпадает с публичным URL Storage. */
 function getPackContentSetExampleStoragePath(contentSetId: string): string {
-  return `${contentSetId}/${PACK_EXAMPLE_STORAGE_PREFIX}${PACK_EXAMPLE_FILENAME}`;
+  return `${PACK_EXAMPLE_STORAGE_PREFIX}${contentSetId}/${PACK_EXAMPLE_FILENAME}`;
 }
 
 /** Public URL для примера набора. Используется в карусели паков в боте. */
