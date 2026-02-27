@@ -249,7 +249,7 @@ Rules:
 - awkward_style = polite_internal
 - Reactions must stay socially polite on the surface
 - Awkwardness is internal, not expressive
-- Do NOT plan moments that reject, judge, or mock gifts or people
+- Do NOT plan moments that openly reject, judge, or mock gifts or people
 
 ### Costume Lock (CRITICAL)
 If the concept implies a profession or role visually defined by clothing
@@ -285,7 +285,7 @@ This tension MUST visibly surface in at least one moment.
 
 ## Part 2 — Plan (9 Moments)
 
-Expected phrases (tone reference, stay close to this style): keep moments in this tone; do not drift to openly sarcastic or mean.
+Expected phrases (tone reference, stay close to this style):
 
 Rules:
 - Exactly 9 moments.
@@ -422,14 +422,22 @@ NOT descriptions of actions.
 Slight self-irony beats positivity. If a caption sounds confident out loud, rewrite as something you'd admit privately.
 NOTE: Moments already include awkward / anti-postcard beats. Do NOT normalize them.
 
-### If awkward_style = polite_internal (CRITICAL)
+### If awkward_style = polite_internal (REQUIRED)
 - Humor must be subtle and internal
-- No overt sarcasm, mockery, or exaggerated irony
+- No overt sarcasm or mockery
 - Do NOT explicitly say the gift is bad, wrong, or unwanted
-- Captions must remain socially polite
+- Captions must remain socially polite on the surface
+
+### If awkward_style = polite_internal — Sarcasm marker ban
+- Do NOT use sarcasm markers such as: "ha", "haha", "lol", "wow" (as irony), "yeah right", "guess?"
+- Avoid rhetorical questions that imply judgment
+- Prefer ellipses ("...") over irony words
+
+### If awkward_style = polite_internal — Rejection implication ban
+- Do NOT imply rejection, disposal, or refusal of the gift
+- Avoid phrases suggesting the gift will not be used or should not be repeated
 
 Avoid dramatic or performative statements. Reactions should feel restrained and realistic.
-Awkward ≠ Mean. Do not judge or reject the gift in the caption.
 
 ---
 
@@ -568,6 +576,11 @@ You describe ONLY how the same person from the reference photo moves and reacts.
 - Max 1 prop, fully visible
 - Simple background only (flat, gradient, wall)
 
+### Scenes must be purely visual
+Do NOT use speech, thought, or narrative verbs, including:
+"says", "mentions", "comments", "thanks", "explains", "reacts", "thinks", "feels".
+Describe only visible body position, movement, and object interaction.
+
 ### Holiday theme
 If holiday theme is active:
 - Avoid work-related devices (laptops, work tasks).
@@ -579,10 +592,14 @@ If VISUAL_ANCHORS are given in the user message (holiday objects):
 - Anchor must be clearly visible and fully inside the frame.
 - Do NOT hide or partially crop the anchor.
 
-### If awkward theme
+### If awkward_style = polite_internal — Awkward body language control
 - Avoid theatrical gestures
 - Keep reactions small and contained
 - Body language should suggest hesitation, not performance
+
+### If a phone is present
+- Specify that a message is visible on the screen
+- Do NOT describe scrolling, browsing, or idle phone use
 
 ---
 
@@ -651,7 +668,8 @@ If a holiday pack feels like a normal day with devices or neutral routines, sugg
 - Check captions do not openly reject or mock gifts.
 - If needed, suggest softer phrasing.
 - Do NOT fail the pack for tone alone.
-Do NOT police sarcasm, humor style, or caption emotional interpretation for awkward packs.
+
+Do NOT fail awkward packs for: tone judgments; sarcasm or humor style policing; emotional interpretation of captions.
 
 ---
 
