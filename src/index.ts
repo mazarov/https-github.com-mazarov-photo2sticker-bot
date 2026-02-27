@@ -212,6 +212,12 @@ function getEffectivePackTemplateId(session: { pack_holiday_id?: string | null; 
 }
 
 /** Admin-only row for "Сгенерировать пак" (test bot only). Pass sessionId so the handler loads session by id. */
+function getPackCarouselAdminRow(telegramId: number, sessionId?: string): { text: string; callback_data: string }[] {
+  if (!config.adminIds.includes(telegramId)) return [];
+  const callbackData = sessionId ? `pack_admin_generate:${sessionId}` : "pack_admin_generate";
+  return [{ text: "🛠 Сгенерировать пак", callback_data: callbackData }];
+}
+
 /** Escape Telegram Markdown special chars so DB content (name_ru/en, carousel_description_*) does not break parse_mode: "Markdown". */
 function escapeMarkdownForTelegram(text: string): string {
   return String(text ?? "").replace(/\\/g, "\\\\").replace(/[_*`\[\]]/g, "\\$&");
