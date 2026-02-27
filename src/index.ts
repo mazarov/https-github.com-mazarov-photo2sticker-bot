@@ -2935,13 +2935,12 @@ bot.start(async (ctx) => {
     isNewUser = true;
     const languageCode = ctx.from?.language_code || "";
     const lang = languageCode.toLowerCase().startsWith("ru") ? "ru" : "en";
+    console.log("[locale] New user", { telegramId, language_code: languageCode || "(empty)", resolved_lang: lang });
 
     const utm = parseStartPayload(startPayload);
     if (startPayload) {
       console.log("[start] New user - parsed utm:", JSON.stringify(utm));
     }
-
-    console.log("New user - language_code:", languageCode, "-> lang:", lang);
 
     const { data: created, error: insertError } = await supabase
       .from("users")
@@ -2994,10 +2993,27 @@ bot.start(async (ctx) => {
     const currentUsername = ctx.from?.username || null;
     const currentLangCode = ctx.from?.language_code || "";
     const currentLang = currentLangCode.toLowerCase().startsWith("ru") ? "ru" : "en";
+    console.log("[locale] Returning user", {
+      telegramId,
+      db_lang: user.lang ?? "(null)",
+      db_language_code: user.language_code ?? "(null)",
+      telegram_language_code: currentLangCode || "(empty)",
+      resolved_lang: currentLang,
+    });
     const updates: Record<string, any> = {};
 
     if (user.username !== currentUsername) updates.username = currentUsername;
-    if (user.lang !== currentLang) updates.lang = currentLang;
+    if (user.lang !== currentLang) {
+      updates.lang = currentLang;
+      console.log("[locale] Returning user — lang change", {
+        telegramId,
+        db_lang: user.lang ?? "(null)",
+        db_language_code: user.language_code ?? "(null)",
+        telegram_language_code: currentLangCode || "(empty)",
+        resolved_lang: currentLang,
+        change: `${user.lang ?? "?"} -> ${currentLang}`,
+      });
+    }
     if (user.language_code !== currentLangCode) updates.language_code = currentLangCode || null;
 
     // Update UTM + yclid for returning users if they came via a new start link
