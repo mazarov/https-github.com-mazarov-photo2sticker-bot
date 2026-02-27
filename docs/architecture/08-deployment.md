@@ -102,9 +102,19 @@ git checkout feature/xxx
 | `SUPPORT_CHANNEL_ID` | — | ID канала поддержки |
 | `ADMIN_IDS` | — | Telegram ID админов (через запятую) |
 | `SUPABASE_STORAGE_BUCKET` | `stickers` | Бакет в Supabase Storage (создать в Dashboard: Storage → New bucket; имя = значение переменной). Используется для стикеров и для листов пака (`pack_sheets/`). |
-| `SUPABASE_STORAGE_BUCKET_EXAMPLES` | `stickers-examples` | Публичный бакет для примеров стилей (лендинг). Создать в Storage, включить **Public**. При «Сделать примером» файл копируется сюда и в `stickers.public_url` пишется URL. |
+| `SUPABASE_STORAGE_BUCKET_EXAMPLES` | `stickers-examples` | Публичный бакет для примеров. Создать в Storage, включить **Public**. Пути см. ниже («Storage: примеры»). |
 | `YANDEX_METRIKA_COUNTER_ID` | — | ID счётчика Яндекс.Метрики для офлайн-конверсий (оплаты). См. `docs/architecture/05-payment.md` → Яндекс Метрика. |
 | `YANDEX_METRIKA_TOKEN` | — | OAuth **access token** Метрики (права `metrika:write` или `metrika:offline_data`). Не путать с Client ID / Client secret. |
+
+### Storage: примеры (бакет `stickers-examples`)
+
+| Путь | Назначение | Кто пишет | Кто читает |
+|------|------------|-----------|------------|
+| `emotion-examples/{emotion_preset_id}.webp` | Пример для карусели эмоций (одно изображение 1024×1024). | Worker/API: алерт «Сохранить пример для эмоции» (`emotion_make_example`). | Бот: карусель эмоций (первый пресет с файлом). |
+| `sticker_pack_example/{pack_content_set_id}/example.webp` | Пример набора пака для карусели выбора пака (сетка 1024×1024 из стикеров). | API: админ «Сделать примером» из меню → выбор набора из pack_content_sets → ссылка на стикерпак → скачивание до 9 стикеров → `assembleGridTo1024` → загрузка одного файла. | Бот: карточка карусели паков (`getPackContentSetExamplePublicUrl`, `showPackCarouselCard`). |
+| `pack/content/{content_set_id}/1.webp` … `9.webp` | Пилюли для лендинга (Hero). Отдельно от бота. | Ручная загрузка или админ «На лендинг» из алерта (копирование из готовых стикеров пака). | Лендинг: `GET /api/packs/content-sets`. |
+
+**Важно:** в «Сделать примером» из меню сохраняем в `sticker_pack_example/`, а не в `pack/content/`, чтобы не смешивать с контентом лендинга.
 
 Модели Gemini настраиваются через таблицу `app_config` в Supabase, не через env vars. Ключи и корректные названия моделей — см. `04-database.md` → app_config → «Ключи моделей Gemini».
 

@@ -567,12 +567,28 @@ const PACK_EXAMPLE_STORAGE_PREFIX = "sticker_pack_example/";
 /** Имя файла примера набора: одна сетка 1024×1024 из стикеров пака. */
 const PACK_EXAMPLE_FILENAME = "example.webp";
 
-/** Public URL для примера набора (sticker_pack_example/{id}/example.webp — сетка из стикеров). Используется в карусели паков в боте. */
+/** Путь в бакете: {contentSetId}/sticker_pack_example/example.webp (сетка из стикеров). */
+function getPackContentSetExampleStoragePath(contentSetId: string): string {
+  return `${contentSetId}/${PACK_EXAMPLE_STORAGE_PREFIX}${PACK_EXAMPLE_FILENAME}`;
+}
+
+/** Public URL для примера набора. Используется в карусели паков в боте. */
 function getPackContentSetExamplePublicUrl(contentSetId: string): string {
   const bucket = config.supabaseStorageBucketExamples || "stickers-examples";
-  const path = `${PACK_EXAMPLE_STORAGE_PREFIX}${contentSetId}/${PACK_EXAMPLE_FILENAME}`;
+  const path = getPackContentSetExampleStoragePath(contentSetId);
   const base = (config.supabaseUrl || "").replace(/\/$/, "");
   return `${base}/storage/v1/object/public/${bucket}/${path}`;
+}
+
+/** Возвращает URL примера набора только если файл в Storage существует; иначе null (в карусели показываем только текст). */
+async function getPackContentSetExampleUrlIfExists(contentSetId: string): Promise<string | null> {
+  const url = getPackContentSetExamplePublicUrl(contentSetId);
+  try {
+    const res = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(5000) });
+    return res.ok ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -3891,7 +3907,7 @@ async function handlePackMenuEntry(
       currentIndex: 0,
       telegramId,
     });
-    const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
+    const exampleUrl = await getPackContentSetExampleUrlIfExists(set.id);
     if (ctx.chat?.id) {
       try {
         await showPackCarouselCard(ctx.telegram, supabase, {
@@ -4746,6 +4762,12 @@ async function showPackCarouselCard(
         }
       }
     } else {
+      if (existingHasPhoto) {
+        await telegram.deleteMessage(chatId, messageId);
+        const sent = await telegram.sendMessage(chatId, carouselCaption, markdownOpts);
+        updateSessionProgress(sent.message_id);
+        return;
+      }
       await telegram.editMessageText(chatId, messageId, undefined, carouselCaption, markdownOpts);
     }
     updateSessionProgress(messageId);
@@ -4801,7 +4823,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
     currentIndex: idx,
     telegramId,
   });
-  const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
+  const exampleUrl = await getPackContentSetExampleUrlIfExists(set.id);
   const chatId = ctx.callbackQuery?.message?.chat?.id as number | undefined;
   const msgId = ctx.callbackQuery?.message?.message_id as number | undefined;
   const hasPhoto = !!(ctx.callbackQuery?.message?.photo?.length);
@@ -4880,7 +4902,7 @@ async function renderPackCarouselForSession(
     currentIndex: safeIndex,
     telegramId: (ctx.from as any)?.id,
   });
-  const exampleUrl = getPackContentSetExamplePublicUrl(set.id);
+  const exampleUrl = await getPackContentSetExampleUrlIfExists(set.id);
   const callbackMsg = (ctx.callbackQuery as any)?.message;
   const callbackMsgId = callbackMsg?.message_id as number | undefined;
   const callbackChatId = callbackMsg?.chat?.id as number | undefined;
@@ -5865,7 +5887,7 @@ async function handleAdminPackContentExampleText(ctx: any, telegramId: number, t
       buffers.push(buf);
     }
     const grid = await assembleGridTo1024(buffers, 3, 3);
-    const storagePath = `${PACK_EXAMPLE_STORAGE_PREFIX}${contentSetId}/${PACK_EXAMPLE_FILENAME}`;
+    const storagePath = getPackContentSetExampleStoragePath(contentSetId);
     const { error: uploadErr } = await supabase.storage.from(bucket).upload(storagePath, grid, { contentType: "image/webp", upsert: true });
     if (uploadErr) {
       console.error("[admin_pack_content_example] upload failed", storagePath, uploadErr.message);
