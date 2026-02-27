@@ -76,8 +76,8 @@ const pendingAdminReplies = new Map<number, {
   username: string;
 }>();
 
-// Admin flow: «Сделать примером» — ввод emotion id, затем ссылка на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md)
-const adminEmotionExampleFlow = new Map<number, { step: 1 | 2; emotionId?: string }>();
+// Admin flow: «Сделать примером» — выбор эмоции кнопками, затем ссылка на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md)
+const adminEmotionExampleFlow = new Map<number, { step: 2; emotionId: string }>();
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -4001,17 +4001,43 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
   );
 });
 
-// Menu: ⭐ Сделать примером (admin only) — ввод id эмоции, затем ссылка на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md)
+// Menu: ⭐ Сделать примером (admin only) — выбор эмоции кнопками, затем ссылка на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md)
 bot.hears(["⭐ Сделать примером", "⭐ Make as example"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId || !config.adminIds.includes(telegramId)) return;
 
-  adminEmotionExampleFlow.set(telegramId, { step: 1 });
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  const lang = isRu ? "ru" : "en";
+  const presets = await getEmotionPresets();
+  if (!presets.length) {
+    await ctx.reply(isRu ? "Нет активных эмоций в emotion_presets." : "No active emotion presets.", getMainMenuKeyboard(lang, telegramId));
+    return;
+  }
+  const caption = isRu ? "Выбери эмоцию:" : "Choose emotion:";
+  const rows = presets.map((p) => {
+    const label = (p.emoji ? p.emoji + " " : "") + (lang === "ru" ? p.name_ru : p.name_en) || p.id;
+    return [{ text: label, callback_data: `admin_emotion_example:${p.id}` }];
+  });
+  await ctx.reply(caption, { reply_markup: { inline_keyboard: rows } });
+});
+
+// Callback: выбор эмоции для «Сделать примером» — переходим к шагу «ссылка на стикерпак»
+bot.action(/^admin_emotion_example:(.+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
+
+  const emotionId = ctx.match[1]?.trim();
+  if (!emotionId) return;
+  const { data: preset } = await supabase.from("emotion_presets").select("id").eq("id", emotionId).eq("is_active", true).maybeSingle();
+  if (!preset) {
+    await ctx.reply("Эмоция не найдена или неактивна.").catch(() => {});
+    return;
+  }
+  adminEmotionExampleFlow.set(telegramId, { step: 2, emotionId });
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
   await ctx.reply(
-    isRu
-      ? "Введи id эмоции из таблицы emotion_presets (например happy):"
-      : "Enter emotion id from emotion_presets table (e.g. happy):",
+    isRu ? "Пришли ссылку на стикерпак (https://t.me/addstickers/...)" : "Send sticker pack link (https://t.me/addstickers/...)",
     getMainMenuKeyboard(isRu ? "ru" : "en", telegramId)
   );
 });
@@ -5750,27 +5776,10 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
   await ctx.reply(lang === "ru" ? "Оставляем текущее фото." : "Keeping current photo.");
 });
 
-/** Admin flow «Сделать примером»: step 1 = emotion id, step 2 = pack link → download, grid 1024, upload (docs/27-02-admin-make-emotion-example-from-pack-link.md). */
+/** Admin flow «Сделать примером»: эмоция уже выбрана кнопкой (step 2), обрабатываем только ссылку на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md). */
 async function handleAdminEmotionExampleText(ctx: any, telegramId: number, text: string): Promise<void> {
   const flow = adminEmotionExampleFlow.get(telegramId)!;
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
-
-  if (flow.step === 1) {
-    const emotionId = text.trim();
-    if (!emotionId) {
-      await ctx.reply(isRu ? "Введи id эмоции (например happy) или /cancel" : "Enter emotion id (e.g. happy) or /cancel");
-      return;
-    }
-    const { data: preset } = await supabase.from("emotion_presets").select("id").eq("id", emotionId).maybeSingle();
-    if (!preset) {
-      await ctx.reply(isRu ? "Эмоция с таким id не найдена. Введи id ещё раз или /cancel" : "Emotion not found. Enter id again or /cancel");
-      return;
-    }
-    adminEmotionExampleFlow.set(telegramId, { step: 2, emotionId });
-    await ctx.reply(isRu ? "Пришли ссылку на стикерпак (https://t.me/addstickers/...)" : "Send sticker pack link (https://t.me/addstickers/...)");
-    return;
-  }
-
   const emotionId = flow.emotionId!;
   const link = text.trim();
   const match = link.match(/(?:https?:\/\/)?t\.me\/addstickers\/([a-zA-Z0-9_]+)/i) || link.match(/addstickers\/([a-zA-Z0-9_]+)/i);
