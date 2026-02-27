@@ -12403,7 +12403,7 @@ bot.on("successful_payment", async (ctx) => {
   }
 });
 
-// Webhook endpoint
+// Webhook endpoint: respond 200 immediately so proxy/Telegram don't abort; process update in background.
 app.post(config.webhookPath, async (req, res) => {
   if (config.telegramWebhookSecret) {
     const secret = req.header("x-telegram-bot-api-secret-token");
@@ -12412,8 +12412,14 @@ app.post(config.webhookPath, async (req, res) => {
     }
   }
 
-  await bot.handleUpdate(req.body);
+  const body = req.body;
   res.status(200).send({ ok: true });
+
+  setImmediate(() => {
+    bot.handleUpdate(body).catch((err) => {
+      console.error("[webhook] handleUpdate error:", err?.message || err);
+    });
+  });
 });
 
 app.get("/health", (_, res) => res.status(200).send("OK"));
