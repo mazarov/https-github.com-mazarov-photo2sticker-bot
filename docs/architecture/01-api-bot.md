@@ -62,7 +62,7 @@ stateDiagram-v2
 | `processing_text` | Генерация стикера (текст) |
 | `confirm_sticker` | Стикер готов — выбор действий |
 | `waiting_custom_idea` | Ждём описание идеи для пака |
-| `wait_pack_carousel` | Карусель наборов контента (подписи/сцены) для шаблона пака |
+| `wait_pack_carousel` | Карусель наборов контента (подписи/сцены) для шаблона пака. При активной записи `holiday_themes.id = march_8` отображается кнопка переключения «С 8 марта: off/on»; состояние хранится в `sessions.pack_holiday_id`. |
 | `wait_pack_generate_request` | Admin (test): ждём тему пака одной фразой → запуск пайплайна генерации (Brief & Plan → Captions ∥ Scenes → Critic). Вход: кнопка меню «Сгенерировать пак» или inline под каруселью. |
 | `wait_pack_photo` | Flow "Сделать пак" — ждём фото |
 | `wait_pack_preview_payment` | Фото есть — выбор style preset v2 + кнопка превью за 1 кредит |
@@ -167,6 +167,8 @@ flowchart TD
 #### "Сделать пак"
 - `pack_show_carousel:TEMPLATE_ID` — шаг 2: показать карусель наборов контента (после приглашения)
 - `pack_carousel_prev` / `pack_carousel_next` / `pack_carousel_noop` — навигация по карусели
+- `pack_holiday:march_8` — включить праздничные наборы (8 марта); карусель переключается на наборы с `pack_template_id = march_8`
+- `pack_holiday_off` — выключить праздник, вернуть обычные наборы
 - `pack_try:CONTENT_SET_ID` — выбрать набор и перейти к фото/стилю (wait_pack_photo или wait_pack_preview_payment)
 - `pack_start:TEMPLATE_ID` — старт flow по выбранному template (fallback, без карусели)
 - `pack_style:STYLE_ID` — выбрать style preset v2 перед preview
