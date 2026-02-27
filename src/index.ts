@@ -1,5 +1,5 @@
 import express from "express";
-import { Telegraf, Markup } from "telegraf";
+import { Telegraf, Markup, Input } from "telegraf";
 import axios from "axios";
 import sharp from "sharp";
 import { config } from "./config";
@@ -583,17 +583,34 @@ function getPackContentSetExamplePublicUrl(contentSetId: string): string {
 /** Возвращает URL примера набора только если файл в Storage существует; иначе null (в карусели показываем только текст). */
 async function getPackContentSetExampleUrlIfExists(contentSetId: string): Promise<string | null> {
   const url = getPackContentSetExamplePublicUrl(contentSetId);
-  const baseUsed = (config.supabasePublicStorageUrl || config.supabaseUrl || "").replace(/\/$/, "");
   try {
     const res = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(5000) });
     if (!res.ok) {
-      console.log("[pack_example] HEAD not ok", { contentSetId, status: res.status, baseUsed: baseUsed.slice(0, 60), url: url.slice(0, 90) });
+      console.log("[pack_example] HEAD not ok", { contentSetId, status: res.status, url });
       return null;
     }
-    console.log("[pack_example] HEAD ok", { contentSetId, url: url.slice(0, 90) });
+    console.log("[pack_example] HEAD ok", { contentSetId, url });
     return url;
   } catch (e) {
-    console.log("[pack_example] HEAD failed", { contentSetId, err: (e as Error)?.message, baseUsed: baseUsed.slice(0, 60), url: url.slice(0, 90) });
+    console.log("[pack_example] HEAD failed", { contentSetId, err: (e as Error)?.message, url });
+    return null;
+  }
+}
+
+/** Скачивает картинку примера по URL и возвращает буфер; при ошибке или не-image — null. Нужно для sendPhoto буфером, т.к. Telegram по URL может получить «wrong type of the web page content». */
+async function fetchPackExampleAsBuffer(url: string): Promise<Buffer | null> {
+  try {
+    const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const ct = res.headers.get("content-type") ?? "";
+    if (!ct.startsWith("image/")) {
+      console.log("[pack_example] GET not image", { contentType: ct.slice(0, 50), url });
+      return null;
+    }
+    const ab = await res.arrayBuffer();
+    return Buffer.from(ab);
+  } catch (e) {
+    console.log("[pack_example] GET failed", { err: (e as Error)?.message, url });
     return null;
   }
 }
@@ -4731,8 +4748,10 @@ async function showPackCarouselCard(
   }
 ): Promise<void> {
   const { chatId, messageId, carouselCaption, keyboard, exampleUrl, existingHasPhoto, sessionId } = params;
+  const exampleBuffer = exampleUrl ? await fetchPackExampleAsBuffer(exampleUrl) : null;
+  const hasExamplePhoto = !!exampleBuffer;
   const markdownOpts = { parse_mode: "Markdown" as const, reply_markup: keyboard };
-  console.log("[pack_carousel] showPackCarouselCard", { hasMessageId: messageId != null, hasExampleUrl: !!exampleUrl, existingHasPhoto });
+  console.log("[pack_carousel] showPackCarouselCard", { hasMessageId: messageId != null, hasExampleUrl: !!exampleUrl, hasExamplePhoto, existingHasPhoto });
 
   const updateSessionProgress = (msgId: number) => {
     void supabaseClient
@@ -4747,12 +4766,13 @@ async function showPackCarouselCard(
   };
 
   if (messageId != null) {
-    if (exampleUrl) {
+    if (hasExamplePhoto && exampleBuffer) {
+      const photoInput = Input.fromBuffer(exampleBuffer, "example.webp");
       if (existingHasPhoto) {
         try {
           await telegram.editMessageMedia(chatId, messageId, undefined, {
             type: "photo",
-            media: exampleUrl,
+            media: photoInput,
             caption: carouselCaption,
             parse_mode: "Markdown",
           }, { reply_markup: keyboard });
@@ -4762,7 +4782,7 @@ async function showPackCarouselCard(
       } else {
         try {
           await telegram.deleteMessage(chatId, messageId);
-          const sent = await telegram.sendPhoto(chatId, exampleUrl, { caption: carouselCaption, ...markdownOpts });
+          const sent = await telegram.sendPhoto(chatId, photoInput, { caption: carouselCaption, ...markdownOpts });
           updateSessionProgress(sent.message_id);
           return;
         } catch (e) {
@@ -4785,13 +4805,14 @@ async function showPackCarouselCard(
     return;
   }
 
-  if (exampleUrl) {
+  if (hasExamplePhoto && exampleBuffer) {
     try {
-      const sent = await telegram.sendPhoto(chatId, exampleUrl, { caption: carouselCaption, ...markdownOpts });
+      const photoInput = Input.fromBuffer(exampleBuffer, "example.webp");
+      const sent = await telegram.sendPhoto(chatId, photoInput, { caption: carouselCaption, ...markdownOpts });
       updateSessionProgress(sent.message_id);
       return;
     } catch (e) {
-      console.log("[pack_carousel] sendPhoto failed (no messageId)", { err: (e as Error)?.message, urlPreview: exampleUrl.slice(0, 80) });
+      console.log("[pack_carousel] sendPhoto failed (no messageId)", { err: (e as Error)?.message });
     }
   }
   const sent = await telegram.sendMessage(chatId, carouselCaption, markdownOpts);
