@@ -4662,7 +4662,7 @@ async function buildPackCarouselCard(
   session: any,
   lang: string,
   opts: { visibleSetsLength: number; currentIndex: number; telegramId?: number }
-): Promise<{ carouselCaption: string; keyboard: TelegramBot.InlineKeyboardMarkup }> {
+): Promise<{ carouselCaption: string; keyboard: { inline_keyboard: { text: string; callback_data: string }[][] } }> {
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
@@ -4693,13 +4693,13 @@ async function buildPackCarouselCard(
 
 /** Единая точка: отобразить карточку карусели (редактирование существующего сообщения или отправка нового). При ошибке показа фото — fallback на текст. */
 async function showPackCarouselCard(
-  telegram: TelegramBot,
+  telegram: { editMessageMedia: any; editMessageCaption: any; deleteMessage: any; sendPhoto: any; sendMessage: any; editMessageText: any },
   supabaseClient: any,
   params: {
     chatId: number;
     messageId?: number;
     carouselCaption: string;
-    keyboard: TelegramBot.InlineKeyboardMarkup;
+    keyboard: { inline_keyboard: { text: string; callback_data: string }[][] };
     exampleUrl: string | null;
     existingHasPhoto: boolean;
     sessionId: string;
