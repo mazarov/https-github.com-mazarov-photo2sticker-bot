@@ -723,8 +723,6 @@ async function sendEmotionKeyboard(
 
   const caption = await getText(lang, "emotion.choose");
   const replyMarkup = Markup.inlineKeyboard(buttons);
-  const telegramId = (ctx.from as any)?.id as number | undefined;
-  const menuWithoutAdmin = getMainMenuKeyboard(lang, telegramId, { hideAdminGenerate: true });
 
   const firstWithExample = await getFirstEmotionPresetWithExample(presets);
   if (firstWithExample) {
@@ -733,14 +731,12 @@ async function sendEmotionKeyboard(
       .getPublicUrl(`${EMOTION_EXAMPLES_STORAGE_PREFIX}${firstWithExample.id}.webp`);
     const photoUrl = urlData?.publicUrl;
     if (photoUrl) {
-      await ctx.reply(caption, menuWithoutAdmin);
-      await ctx.replyWithPhoto(photoUrl, { caption: "", reply_markup: replyMarkup.reply_markup });
+      await ctx.replyWithPhoto(photoUrl, { caption, reply_markup: replyMarkup.reply_markup });
       return;
     }
   }
 
-  await ctx.reply(caption, menuWithoutAdmin);
-  await ctx.reply("\u200b", { reply_markup: replyMarkup.reply_markup });
+  await ctx.reply(caption, replyMarkup);
 }
 
 async function getMotionPresets(): Promise<MotionPreset[]> {
@@ -1510,10 +1506,9 @@ async function getUser(telegramId: number) {
 }
 
 // Helper: get persistent menu keyboard (2 rows). Admin on test sees "Сгенерировать пак" in row1 (docs/20-02-admin-generate-pack-menu-button.md).
-// Use options.hideAdminGenerate in emotion/motion carousel so "Сгенерировать пак" is not shown there.
-function getMainMenuKeyboard(lang: string, telegramId?: number, options?: { hideAdminGenerate?: boolean }) {
+function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const showAdminGenerate =
-    !options?.hideAdminGenerate && telegramId != null && config.adminIds.includes(telegramId);
+    telegramId != null && config.adminIds.includes(telegramId);
   const row1 =
     lang === "ru"
       ? showAdminGenerate
