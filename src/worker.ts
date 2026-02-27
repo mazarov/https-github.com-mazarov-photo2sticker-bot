@@ -835,6 +835,19 @@ ${packTaskBlock}`
     }).catch((err) => console.warn("[PackPreview] sendPackPreviewAlert failed:", err?.message));
   }
 
+  // Алерт с кнопкой «Сохранить пример для эмоции» (вместе с превью пака, docs/27-02-emotion-carousel-example-images.md)
+  const { data: firstEmotionPreview } = await supabase
+    .from("emotion_presets")
+    .select("id")
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const emotionIdPreview = firstEmotionPreview?.id ?? "custom";
+  sendEmotionExampleAlert(emotionIdPreview, bufferToSend, {
+    user: `@${user.username || telegramId}`,
+  }).catch((err) => console.warn("[PackPreview] sendEmotionExampleAlert failed:", err?.message));
+
   await supabase
     .from("sessions")
     .update({
