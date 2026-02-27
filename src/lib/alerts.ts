@@ -325,6 +325,45 @@ export async function sendPackPreviewAlert(
   }
 }
 
+/** Send emotion sticker to alert channel with "Сохранить пример для эмоции" button (after emotion generation). */
+export async function sendEmotionExampleAlert(
+  emotionId: string,
+  imageBuffer: Buffer,
+  details?: { user?: string }
+): Promise<void> {
+  const channelId = config.alertChannelId;
+  if (!channelId) return;
+
+  const caption = `😊 Эмоция: ${emotionId}${details?.user ? `\nUser: ${details.user}` : ""}`;
+
+  try {
+    const form = new FormData();
+    form.append("chat_id", channelId);
+    form.append("caption", caption);
+    form.append("photo", imageBuffer, {
+      filename: "emotion.webp",
+      contentType: "image/webp",
+    });
+    form.append("reply_markup", JSON.stringify({
+      inline_keyboard: [[
+        { text: "✅ Сохранить пример для эмоции", callback_data: `emotion_make_example:${emotionId}` },
+      ]],
+    }));
+
+    const response = await axios.post(
+      `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`,
+      form,
+      { headers: form.getHeaders(), timeout: 30000 }
+    );
+
+    if (!response.data?.ok) {
+      console.error("[Alert] sendEmotionExampleAlert failed:", response.data);
+    }
+  } catch (err: any) {
+    console.error("[Alert] sendEmotionExampleAlert error:", err?.response?.data || err);
+  }
+}
+
 /** Send pack completed alert with "Показать на лендинге" button (для вывода пака на лендинг). */
 export async function sendPackCompletedLandingAlert(
   batchId: string,

@@ -6,7 +6,7 @@ import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
 import { getText } from "./lib/texts";
-import { sendAlert, sendNotification, sendPackPreviewAlert, sendPackCompletedLandingAlert } from "./lib/alerts";
+import { sendAlert, sendNotification, sendPackPreviewAlert, sendPackCompletedLandingAlert, sendEmotionExampleAlert } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
 import { addTextToSticker, fitStickerIn512WithMargin, addWhiteBorder } from "./lib/image-utils";
@@ -1868,6 +1868,10 @@ async function runJob(job: any) {
     stickerId: stickerId || undefined,  // For "Make example" button
     styleId: session.selected_style_id || undefined,
   }).catch(console.error);
+
+  if (generationType === "emotion" && session.selected_emotion && session.selected_emotion !== "custom") {
+    sendEmotionExampleAlert(session.selected_emotion, stickerBuffer, { user: `@${user.username || telegramId}` }).catch(console.error);
+  }
 
   // Send rating request — DISABLED (temporarily, to reduce noise)
   const skipRating = true; // was: isOnboardingFirstSticker || isAvatarDemo;

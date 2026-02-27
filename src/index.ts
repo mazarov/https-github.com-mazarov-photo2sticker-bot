@@ -679,6 +679,20 @@ async function getEmotionPresets(): Promise<EmotionPreset[]> {
   return data || [];
 }
 
+const EMOTION_EXAMPLES_STORAGE_PREFIX = "emotion-examples/";
+
+/** First emotion preset (by sort_order) that has an example file in Storage (emotion-examples/{id}.webp). */
+async function getFirstEmotionPresetWithExample(presets: EmotionPreset[]): Promise<EmotionPreset | null> {
+  if (!presets.length) return null;
+  const bucket = config.supabaseStorageBucketExamples;
+  const { data: files } = await supabase.storage.from(bucket).list(EMOTION_EXAMPLES_STORAGE_PREFIX.replace(/\/$/, "")).catch(() => ({ data: null }));
+  const names = new Set((files || []).map((f: { name?: string }) => f.name).filter(Boolean));
+  for (const p of presets) {
+    if (names.has(`${p.id}.webp`)) return p;
+  }
+  return null;
+}
+
 async function sendEmotionKeyboard(
   ctx: any,
   lang: string,
@@ -707,10 +721,22 @@ async function sendEmotionKeyboard(
     buttons.push(row);
   }
 
-  await ctx.reply(
-    await getText(lang, "emotion.choose"),
-    Markup.inlineKeyboard(buttons)
-  );
+  const caption = await getText(lang, "emotion.choose");
+  const replyMarkup = Markup.inlineKeyboard(buttons);
+
+  const firstWithExample = await getFirstEmotionPresetWithExample(presets);
+  if (firstWithExample) {
+    const { data: urlData } = supabase.storage
+      .from(config.supabaseStorageBucketExamples)
+      .getPublicUrl(`${EMOTION_EXAMPLES_STORAGE_PREFIX}${firstWithExample.id}.webp`);
+    const photoUrl = urlData?.publicUrl;
+    if (photoUrl) {
+      await ctx.replyWithPhoto(photoUrl, { caption, reply_markup: replyMarkup.reply_markup });
+      return;
+    }
+  }
+
+  await ctx.reply(caption, replyMarkup);
 }
 
 async function getMotionPresets(): Promise<MotionPreset[]> {
@@ -9612,6 +9638,45 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
 
   console.log("Marked as example:", stickerId, "style:", sticker.style_preset_id, publicUrl ? "public_url set" : "no public_url");
   await ctx.editMessageCaption(`✅ Добавлен как пример для стиля "${sticker.style_preset_id}"`).catch(() => {});
+});
+
+// Callback: emotion_make_example (admin only — from alert channel, "Сохранить пример для эмоции")
+bot.action(/^emotion_make_example:(.+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
+
+  const emotionPresetId = ctx.match[1];
+  const msg = ctx.callbackQuery?.message as any;
+  const photo = msg?.photo;
+  if (!Array.isArray(photo) || photo.length === 0) {
+    await ctx.editMessageCaption("❌ Нет фото в сообщении").catch(() => {});
+    return;
+  }
+  const fileId = photo[photo.length - 1]?.file_id;
+  if (!fileId) {
+    await ctx.editMessageCaption("❌ Не удалось получить file_id").catch(() => {});
+    return;
+  }
+
+  try {
+    const filePath = await getFilePath(fileId);
+    const buffer = await downloadFile(filePath);
+    const storagePath = `${EMOTION_EXAMPLES_STORAGE_PREFIX}${emotionPresetId}.webp`;
+    const { error: uploadErr } = await supabase.storage
+      .from(config.supabaseStorageBucketExamples)
+      .upload(storagePath, buffer, { contentType: "image/webp", upsert: true });
+    if (uploadErr) {
+      console.error("[emotion_make_example] Storage upload failed:", uploadErr);
+      await ctx.editMessageCaption("❌ Ошибка загрузки в Storage").catch(() => {});
+      return;
+    }
+    emotionPresetsCache = null;
+    await ctx.editMessageCaption(`✅ Сохранено как пример для эмоции "${emotionPresetId}"`).catch(() => {});
+  } catch (err: any) {
+    console.error("[emotion_make_example] Error:", err?.message || err);
+    await ctx.editMessageCaption("❌ Ошибка: " + (err?.message || "unknown")).catch(() => {});
+  }
 });
 
 // Callback: pack_make_example (admin only — from alert channel, pack preview "Сделать примером")
