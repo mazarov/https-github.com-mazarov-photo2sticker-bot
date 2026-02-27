@@ -3988,6 +3988,7 @@ async function handlePackMenuEntry(
           existingHasPhoto: false,
           sessionId: session.id,
         });
+        await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
       } catch (e) {
         console.log("[pack_carousel] show first card failed", { contentSetId: set.id, err: (e as Error)?.message });
         const fallbackCaption = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
@@ -3998,6 +3999,7 @@ async function handlePackMenuEntry(
           ui_message_id: sent.message_id,
           ui_chat_id: ctx.chat.id,
         }).eq("id", session.id);
+        await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
       }
     }
   } catch (err: any) {
@@ -5020,6 +5022,7 @@ async function renderPackCarouselForSession(
         existingHasPhoto: false,
         sessionId: session.id,
       });
+      await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
     } catch (_) {
       const fallbackCaption = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
       const sent = await ctx.telegram.sendMessage(ctx.chat.id, fallbackCaption, { reply_markup: keyboard });
@@ -5029,6 +5032,7 @@ async function renderPackCarouselForSession(
         ui_message_id: sent.message_id,
         ui_chat_id: ctx.chat.id,
       }).eq("id", session.id);
+      await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
     }
   }
 }
