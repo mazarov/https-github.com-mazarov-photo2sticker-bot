@@ -3946,7 +3946,8 @@ async function handlePackMenuEntry(
       } catch (e) {
         console.log("[pack_carousel] show first card failed", { contentSetId: set.id, err: (e as Error)?.message });
         const intro = await getText(lang, "pack.carousel_intro");
-        const fallbackCaption = `${intro}\n\n${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
+        const nameAndDesc = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
+        const fallbackCaption = intro ? `${intro}\n\n${nameAndDesc}` : nameAndDesc;
         const sent = await ctx.telegram.sendMessage(ctx.chat.id, fallbackCaption, { reply_markup: keyboard });
         await supabase.from("sessions").update({
           progress_message_id: sent.message_id,
@@ -4242,7 +4243,8 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
+  const nameAndDesc = `*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
+  const carouselCaption = intro ? `${intro}\n\n${nameAndDesc}` : nameAndDesc;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const packHolidayEntry = await getPackHolidayTheme();
@@ -4708,7 +4710,8 @@ async function buildPackCarouselCard(
   const setName = lang === "ru" ? set.name_ru : set.name_en;
   const setDesc = lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en);
   const intro = await getText(lang, "pack.carousel_intro");
-  const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
+  const nameAndDesc = `*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
+  const carouselCaption = intro ? `${intro}\n\n${nameAndDesc}` : nameAndDesc;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(opts.telegramId ?? 0, session.id);
   const packHoliday = await getPackHolidayTheme();
@@ -4978,7 +4981,9 @@ async function renderPackCarouselForSession(
         sessionId: session.id,
       });
     } catch (_) {
-      const fallbackCaption = `${await getText(lang, "pack.carousel_intro")}\n\n${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
+      const intro = await getText(lang, "pack.carousel_intro");
+      const nameAndDesc = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
+      const fallbackCaption = intro ? `${intro}\n\n${nameAndDesc}` : nameAndDesc;
       const sent = await ctx.telegram.sendMessage(ctx.chat.id, fallbackCaption, { reply_markup: keyboard });
       void supabase.from("sessions").update({
         progress_message_id: sent.message_id,
