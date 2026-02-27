@@ -6,8 +6,8 @@ import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
-import { getFilePath, downloadFile, sendSticker } from "./lib/telegram";
-import { addWhiteBorder, addTextToSticker } from "./lib/image-utils";
+import { getFilePath, downloadFile, sendSticker, getStickerSet } from "./lib/telegram";
+import { addWhiteBorder, addTextToSticker, assembleGridTo1024 } from "./lib/image-utils";
 import { getAppConfig } from "./lib/app-config";
 import { sendYandexConversion, getMetrikaTargetForPack } from "./lib/yandex-metrika";
 import {
@@ -75,6 +75,9 @@ const pendingAdminReplies = new Map<number, {
   userTelegramId: number;
   username: string;
 }>();
+
+// Admin flow: «Сделать примером» — ввод emotion id, затем ссылка на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md)
+const adminEmotionExampleFlow = new Map<number, { step: 1 | 2; emotionId?: string }>();
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -1486,16 +1489,21 @@ async function getUser(telegramId: number) {
 
 // Helper: get persistent menu keyboard (2 rows). Admin on test sees "Сгенерировать пак" in row1 (docs/20-02-admin-generate-pack-menu-button.md).
 function getMainMenuKeyboard(lang: string, telegramId?: number) {
-  const showAdminGenerate =
-    telegramId != null && config.adminIds.includes(telegramId);
+  const isAdmin = telegramId != null && config.adminIds.includes(telegramId);
+  const showAdminGenerate = isAdmin;
+  const showAdminMakeExample = isAdmin;
   const row1 =
     lang === "ru"
-      ? showAdminGenerate
-        ? ["📦 Создать пак", "🔄 Сгенерировать пак"]
-        : ["📦 Создать пак"]
-      : showAdminGenerate
-        ? ["📦 Create pack", "🔄 Generate pack"]
-        : ["📦 Create pack"];
+      ? showAdminMakeExample
+        ? ["📦 Создать пак", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
+        : showAdminGenerate
+          ? ["📦 Создать пак", "🔄 Сгенерировать пак"]
+          : ["📦 Создать пак"]
+      : showAdminMakeExample
+        ? ["📦 Create pack", "🔄 Generate pack", "⭐ Make as example"]
+        : showAdminGenerate
+          ? ["📦 Create pack", "🔄 Generate pack"]
+          : ["📦 Create pack"];
   const row2 =
     lang === "ru"
       ? ["💰 Ваш баланс", "💬 Поддержка"]
@@ -3989,6 +3997,21 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
   );
 });
 
+// Menu: ⭐ Сделать примером (admin only) — ввод id эмоции, затем ссылка на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md)
+bot.hears(["⭐ Сделать примером", "⭐ Make as example"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
+
+  adminEmotionExampleFlow.set(telegramId, { step: 1 });
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  await ctx.reply(
+    isRu
+      ? "Введи id эмоции из таблицы emotion_presets (например happy):"
+      : "Enter emotion id from emotion_presets table (e.g. happy):",
+    getMainMenuKeyboard(isRu ? "ru" : "en", telegramId)
+  );
+});
+
 // Broadcast "Попробовать" — same as tapping "Пак стикеров"
 bot.action("broadcast_try_pack", async (ctx) => {
   safeAnswerCbQuery(ctx);
@@ -5676,6 +5699,70 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
   await ctx.reply(lang === "ru" ? "Оставляем текущее фото." : "Keeping current photo.");
 });
 
+/** Admin flow «Сделать примером»: step 1 = emotion id, step 2 = pack link → download, grid 1024, upload (docs/27-02-admin-make-emotion-example-from-pack-link.md). */
+async function handleAdminEmotionExampleText(ctx: any, telegramId: number, text: string): Promise<void> {
+  const flow = adminEmotionExampleFlow.get(telegramId)!;
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+
+  if (flow.step === 1) {
+    const emotionId = text.trim();
+    if (!emotionId) {
+      await ctx.reply(isRu ? "Введи id эмоции (например happy) или /cancel" : "Enter emotion id (e.g. happy) or /cancel");
+      return;
+    }
+    const { data: preset } = await supabase.from("emotion_presets").select("id").eq("id", emotionId).maybeSingle();
+    if (!preset) {
+      await ctx.reply(isRu ? "Эмоция с таким id не найдена. Введи id ещё раз или /cancel" : "Emotion not found. Enter id again or /cancel");
+      return;
+    }
+    adminEmotionExampleFlow.set(telegramId, { step: 2, emotionId });
+    await ctx.reply(isRu ? "Пришли ссылку на стикерпак (https://t.me/addstickers/...)" : "Send sticker pack link (https://t.me/addstickers/...)");
+    return;
+  }
+
+  const emotionId = flow.emotionId!;
+  const link = text.trim();
+  const match = link.match(/(?:https?:\/\/)?t\.me\/addstickers\/([a-zA-Z0-9_]+)/i) || link.match(/addstickers\/([a-zA-Z0-9_]+)/i);
+  if (!match) {
+    await ctx.reply(isRu ? "Неверная ссылка. Нужен формат https://t.me/addstickers/ИмяПака или /cancel" : "Invalid link. Use https://t.me/addstickers/Name or /cancel");
+    return;
+  }
+  const shortName = match[1];
+
+  const statusMsg = await ctx.reply(isRu ? "⏳ Скачиваю стикеры и собираю сетку..." : "⏳ Downloading stickers and building grid...").catch(() => null);
+  try {
+    const set = await getStickerSet(shortName);
+    const stickersRaw = (set as { stickers: { file_id: string; is_animated?: boolean; is_video?: boolean }[] }).stickers;
+    const stickers = stickersRaw.filter((s: any) => !s.is_animated && !s.is_video).slice(0, 9);
+    if (stickers.length === 0) {
+      await ctx.reply(isRu ? "В наборе нет статичных стикеров или набор пуст." : "No static stickers in set or set is empty.");
+      adminEmotionExampleFlow.delete(telegramId);
+      return;
+    }
+    const buffers: Buffer[] = [];
+    for (const s of stickers) {
+      const path = await getFilePath(s.file_id);
+      const buf = await downloadFile(path);
+      buffers.push(buf);
+    }
+    const grid = await assembleGridTo1024(buffers, 3, 3);
+    const storagePath = `${EMOTION_EXAMPLES_STORAGE_PREFIX}${emotionId}.webp`;
+    const { error: uploadErr } = await supabase.storage.from(config.supabaseStorageBucketExamples).upload(storagePath, grid, { contentType: "image/webp", upsert: true });
+    if (uploadErr) {
+      await ctx.reply(`❌ Ошибка загрузки: ${uploadErr.message}`);
+      return;
+    }
+    emotionPresetsCache = null;
+    adminEmotionExampleFlow.delete(telegramId);
+    if (statusMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
+    await ctx.reply(isRu ? `✅ Пример для эмоции «${emotionId}» сохранён.` : `✅ Example for emotion «${emotionId}» saved.`);
+  } catch (err: any) {
+    console.error("[admin_make_example] Error:", err?.message || err);
+    if (statusMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
+    await ctx.reply(`❌ ${err?.message || "Error"}`);
+  }
+}
+
 // Text handler (style description)
 bot.on("text", async (ctx) => {
   const telegramId = ctx.from?.id;
@@ -5744,6 +5831,18 @@ bot.on("text", async (ctx) => {
     return;
   }
 
+  // === Admin: «Сделать примером» flow (emotion id → pack link) ===
+  if (config.adminIds.includes(telegramId) && adminEmotionExampleFlow.has(telegramId)) {
+    const text = ctx.message?.text?.trim() ?? "";
+    if (text === "/cancel") {
+      adminEmotionExampleFlow.delete(telegramId);
+      await ctx.reply("❌ Отменено.");
+      return;
+    }
+    await handleAdminEmotionExampleText(ctx, telegramId, text);
+    return;
+  }
+
   if (ctx.message.text?.startsWith("/")) return;
 
   // Skip menu button texts — they are handled by bot.hears() above
@@ -5752,6 +5851,7 @@ bot.on("text", async (ctx) => {
     "🎨 Стили", "🎨 Styles", // legacy, button hidden
     "📦 Создать пак", "📦 Create pack",
     "🔄 Сгенерировать пак", "🔄 Generate pack",
+    "⭐ Сделать примером", "⭐ Make as example",
     "💰 Ваш баланс", "💰 Your balance",
     "💬 Поддержка", "💬 Support",
   ];
@@ -7857,8 +7957,8 @@ bot.action("change_emotion", async (ctx) => {
   });
 });
 
-// Callback: emotion selection
-bot.action(/^emotion_([^:]+)(?::(.+))?$/, async (ctx) => {
+// Callback: emotion selection (не матчим emotion_make_example — тот обрабатывается отдельно в алертах)
+bot.action(/^emotion_(?!make_example)([^:]+)(?::(.+))?$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;

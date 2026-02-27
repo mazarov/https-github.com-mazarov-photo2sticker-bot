@@ -372,6 +372,61 @@ export async function fitStickerIn512WithMargin(
     .toBuffer();
 }
 
+/**
+ * Assemble N image buffers into a single 1024×1024 grid (WebP).
+ * Each image is resized to fit its cell (preserving aspect ratio, centered).
+ * @param buffers Up to 9 images (order: row by row)
+ * @param cols Number of columns (e.g. 3 for 3×3)
+ * @param rows Number of rows (e.g. 3 for 3×3)
+ * @returns 1024×1024 WebP buffer
+ */
+export async function assembleGridTo1024(buffers: Buffer[], cols: number = 3, rows: number = 3): Promise<Buffer> {
+  const size = 1024;
+  const cellW = Math.floor(size / cols);
+  const cellH = Math.floor(size / rows);
+  const composites: { input: Buffer; left: number; top: number; blend: "over" }[] = [];
+
+  for (let i = 0; i < buffers.length && i < cols * rows; i++) {
+    const row = Math.floor(i / cols);
+    const col = i % cols;
+    const left = col * cellW;
+    const top = row * cellH;
+
+    const resized = await sharp(buffers[i])
+      .ensureAlpha()
+      .resize(cellW, cellH, {
+        fit: "contain",
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .toBuffer();
+    const meta = await sharp(resized).metadata();
+    const w = meta.width || cellW;
+    const h = meta.height || cellH;
+    const dx = left + Math.round((cellW - w) / 2);
+    const dy = top + Math.round((cellH - h) / 2);
+
+    composites.push({ input: resized, left: dx, top: dy, blend: "over" });
+  }
+
+  const base = sharp({
+    create: {
+      width: size,
+      height: size,
+      channels: 4,
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    },
+  });
+
+  if (composites.length === 0) {
+    return base.webp().toBuffer();
+  }
+
+  return base
+    .composite(composites)
+    .webp()
+    .toBuffer();
+}
+
 export async function addWhiteBorder(inputBuffer: Buffer, borderWidth: number = 8): Promise<Buffer> {
   // Decode to raw RGBA
   const image = sharp(inputBuffer).ensureAlpha();
