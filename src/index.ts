@@ -4627,7 +4627,9 @@ async function renderPackCarouselForSession(
     } catch (_) {}
   }
 
-  if (session.progress_message_id && session.progress_chat_id) {
+  // Only edit existing carousel message when user tapped a button (callback). When user sent /start or menu text, send new message so carousel is visible.
+  const fromCallback = !!(ctx.callbackQuery as any)?.message?.message_id;
+  if (fromCallback && session.progress_message_id && session.progress_chat_id) {
     try {
       await ctx.telegram.editMessageText(session.progress_chat_id, session.progress_message_id, undefined, carouselCaption, {
         parse_mode: "Markdown",
@@ -4637,7 +4639,7 @@ async function renderPackCarouselForSession(
     } catch (_) {}
   }
 
-  // No callback context (e.g. user tapped menu "Создать пак") or edit failed — send new message. Fallback without Markdown if reply fails.
+  // No callback context (e.g. /start or "Создать пак") or edit failed — send new message. Fallback without Markdown if reply fails.
   try {
     const sent = await ctx.reply(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
     if (sent?.message_id && ctx.chat?.id) {
