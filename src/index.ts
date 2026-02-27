@@ -214,11 +214,15 @@ function getEffectivePackTemplateId(session: { pack_holiday_id?: string | null; 
   return String(session.pack_holiday_id || session.pack_template_id || "couple_v1");
 }
 
-/** Admin-only row for "Сгенерировать пак" (test bot only). Pass sessionId so the handler loads session by id. */
+/** Admin-only row: "Сгенерировать пак" и "Список наборов". Pass sessionId so handlers load session by id. */
 function getPackCarouselAdminRow(telegramId: number, sessionId?: string): { text: string; callback_data: string }[] {
   if (!config.adminIds.includes(telegramId)) return [];
-  const callbackData = sessionId ? `pack_admin_generate:${sessionId}` : "pack_admin_generate";
-  return [{ text: "🛠 Сгенерировать пак", callback_data: callbackData }];
+  const generateData = sessionId ? `pack_admin_generate:${sessionId}` : "pack_admin_generate";
+  const listData = sessionId ? `pack_admin_set_list:${sessionId}` : "pack_admin_set_list";
+  return [
+    { text: "🛠 Сгенерировать пак", callback_data: generateData },
+    { text: "📋 Список наборов", callback_data: listData },
+  ];
 }
 
 /** Escape Telegram Markdown special chars so DB content (name_ru/en, carousel_description_*) does not break parse_mode: "Markdown". */
@@ -4269,6 +4273,53 @@ bot.action("pack_holiday_off", async (ctx) => {
   }
   const updated = { ...session, pack_holiday_id: null, pack_carousel_index: 0 };
   await renderPackCarouselForSession(ctx, updated, lang, { resetCarouselIndex: true, bumpSessionRev: true });
+});
+
+// Admin-only: показать список наборов из pack_content_sets для выбора (вместо ввода id вручную).
+bot.action(/^pack_admin_set_list(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  const rawPayload = ctx.match?.[1] ?? null;
+  const explicitSessionId = typeof rawPayload === "string" && rawPayload.length > 0 ? rawPayload.trim() : null;
+
+  let session: any = null;
+  if (explicitSessionId) {
+    const byId = await getSessionByIdForUser(user.id, explicitSessionId);
+    if (byId?.id && byId.env === config.appEnv && byId.state === "wait_pack_carousel") session = byId;
+  }
+  if (!session) {
+    const resolved = await resolvePackSessionForEvent(user.id, ["wait_pack_carousel"], explicitSessionId);
+    session = resolved.session;
+  }
+  if (!session?.id || session.state !== "wait_pack_carousel") {
+    await ctx.reply(lang === "ru" ? "Сессия не найдена или не в карусели. Открой карусель паков и нажми «Список наборов» снова." : "Session not found or not in carousel. Open pack carousel and tap «Список наборов» again.");
+    return;
+  }
+
+  const templateId = getEffectivePackTemplateId(session);
+  const allSets = await getActivePackContentSets();
+  let visibleSets = getPackContentSetsForTemplate(allSets, templateId);
+  const existingPhoto = session.current_photo_file_id || (await supabase.from("users").select("last_photo_file_id").eq("id", user.id).single().then((r) => r.data?.last_photo_file_id)) || null;
+  const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
+  if (subjectFilterEnabled && existingPhoto) {
+    const subjectMode = getEffectiveSubjectMode(session);
+    visibleSets = filterPackContentSetsBySubjectMode(visibleSets, subjectMode);
+  }
+  if (!visibleSets.length) {
+    await ctx.reply(lang === "ru" ? "Нет наборов для текущего шаблона/праздника." : "No sets for current template/holiday.");
+    return;
+  }
+
+  const listCaption = lang === "ru" ? "Выбери набор:" : "Choose a set:";
+  const rows = visibleSets.map((set) => {
+    const label = (lang === "ru" ? set.name_ru : set.name_en) || set.id || "";
+    return [{ text: label, callback_data: `pack_try:${set.id}` }];
+  });
+  await ctx.reply(listCaption, { reply_markup: { inline_keyboard: rows } });
 });
 
 // Admin-only (test bot): start pack generation flow — ask for theme. When session id is in callback, load by id (no state filter) to avoid RLS/timing issues.
