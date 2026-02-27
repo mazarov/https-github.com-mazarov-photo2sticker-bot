@@ -453,6 +453,7 @@ async function getPackHolidayTheme(): Promise<HolidayTheme | null> {
     .eq("is_active", true)
     .maybeSingle();
   if (error) console.error("[getPackHolidayTheme] error:", error.message);
+  console.log("[getPackHolidayTheme] result:", data ? { id: data.id, is_active: data.is_active } : "null", "error:", error?.message ?? "none");
   return data;
 }
 
