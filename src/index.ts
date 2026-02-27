@@ -184,6 +184,41 @@ async function ensureUniquePackId(spec: PackSpecRow): Promise<PackSpecRow> {
   return { ...normalized, id: candidate };
 }
 
+/** Translate sticker captions from English to Russian (for pack_content_sets.labels). Returns same-length array or empty on error. */
+async function translateLabelsEnToRu(labelsEn: string[]): Promise<string[]> {
+  if (!Array.isArray(labelsEn) || labelsEn.length === 0) return [];
+  try {
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+      {
+        contents: [{ role: "user", parts: [{ text: `Translate these ${labelsEn.length} short sticker captions from English to Russian. Keep the same tone and approximate length. Return ONLY a JSON array of ${labelsEn.length} strings, no other text.\n\n${JSON.stringify(labelsEn)}` }] }],
+        generationConfig: { responseMimeType: "application/json", temperature: 0.3 },
+      },
+      { headers: { "x-goog-api-key": config.geminiApiKey }, timeout: 15000 }
+    );
+    const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) return [];
+    const raw = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    const parsed = JSON.parse(raw);
+    const arr = Array.isArray(parsed) ? parsed : (parsed?.labels ?? []);
+    return arr.slice(0, labelsEn.length).map((s: unknown) => String(s ?? "").trim()).filter(Boolean);
+  } catch (e) {
+    console.warn("[pack_admin] translateLabelsEnToRu failed:", (e as Error)?.message);
+    return [];
+  }
+}
+
+/** Ensure spec has Russian labels for pack_content_sets; if missing, translate from labels_en. */
+async function ensureSpecLabelsRu(spec: PackSpecRow): Promise<PackSpecRow> {
+  const en = spec.labels_en ?? [];
+  const ru = spec.labels ?? [];
+  if (Array.isArray(ru) && ru.length >= en.length && ru.every((s) => s?.trim())) return spec;
+  if (en.length === 0) return spec;
+  const translated = await translateLabelsEnToRu(en);
+  if (translated.length === 0) return spec;
+  return { ...spec, labels: translated };
+}
+
 /** Valid segment_id values (FK pack_segments). Boss/LLM may return other strings — normalize to avoid insert error. */
 const VALID_PACK_SEGMENT_IDS = new Set([
   "reactions",
@@ -4473,6 +4508,7 @@ bot.action(/^(pack_admin_pack_save|pack_admin_save_rejected)(:.+)?$/, async (ctx
   }
 
   const uniqueSpec = await ensureUniquePackId(spec);
+  const specToSave = await ensureSpecLabelsRu(uniqueSpec);
 
   // Чтобы новый пак появился в карусели паков, используем тот же pack_template_id, что у существующих паков (карусель фильтрует по первому паку в списке).
   const existingSets = await getActivePackContentSets();
@@ -4480,25 +4516,25 @@ bot.action(/^(pack_admin_pack_save|pack_admin_save_rejected)(:.+)?$/, async (ctx
 
   // subject_mode из сессии (по фото), иначе из spec: чтобы для 2 человек сохранялся multi, а не single от Boss.
   const sessionSubjectMode = getEffectiveSubjectMode(session);
-  const subjectModeToSave = sessionSubjectMode !== "unknown" ? sessionSubjectMode : (uniqueSpec.subject_mode ?? "any");
+  const subjectModeToSave = sessionSubjectMode !== "unknown" ? sessionSubjectMode : (specToSave.subject_mode ?? "any");
 
   const { error: insertErr } = await supabase.from(config.packContentSetsTable).insert({
-    id: uniqueSpec.id,
+    id: specToSave.id,
     pack_template_id: carouselTemplateId,
-    name_ru: uniqueSpec.name_ru,
-    name_en: uniqueSpec.name_en,
-    carousel_description_ru: uniqueSpec.carousel_description_ru,
-    carousel_description_en: uniqueSpec.carousel_description_en,
-    labels: uniqueSpec.labels,
-    labels_en: uniqueSpec.labels_en,
-    scene_descriptions: uniqueSpec.scene_descriptions,
-    sort_order: uniqueSpec.sort_order,
-    is_active: uniqueSpec.is_active,
-    mood: uniqueSpec.mood,
-    sticker_count: uniqueSpec.sticker_count,
+    name_ru: specToSave.name_ru,
+    name_en: specToSave.name_en,
+    carousel_description_ru: specToSave.carousel_description_ru,
+    carousel_description_en: specToSave.carousel_description_en,
+    labels: specToSave.labels,
+    labels_en: specToSave.labels_en,
+    scene_descriptions: specToSave.scene_descriptions,
+    sort_order: specToSave.sort_order,
+    is_active: specToSave.is_active,
+    mood: specToSave.mood,
+    sticker_count: specToSave.sticker_count,
     subject_mode: subjectModeToSave,
-    cluster: uniqueSpec.cluster,
-    segment_id: uniqueSpec.segment_id,
+    cluster: specToSave.cluster,
+    segment_id: specToSave.segment_id,
   });
 
   await supabase.from("sessions").update({ pending_rejected_pack_spec: null, pending_pack_plan: null, pending_critic_suggestions: null, pending_critic_reasons: null }).eq("id", session.id);
@@ -4509,7 +4545,7 @@ bot.action(/^(pack_admin_pack_save|pack_admin_save_rejected)(:.+)?$/, async (ctx
   }
 
   clearPackContentSetsCache();
-  const successText = (lang === "ru" ? "✅ Пак сохранён: " : "✅ Pack saved: ") + uniqueSpec.id;
+  const successText = (lang === "ru" ? "✅ Пак сохранён: " : "✅ Pack saved: ") + specToSave.id;
   try {
     await ctx.editMessageText(successText).catch(() => ctx.reply(successText));
   } catch {
@@ -6322,28 +6358,29 @@ bot.on("text", async (ctx) => {
     }
 
     const spec = await ensureUniquePackId(result.spec);
+    const specToSave = await ensureSpecLabelsRu(spec);
 
     // subject_mode из сессии (по фото), иначе из spec: чтобы для 2 человек сохранялся multi.
     const sessionSubjectMode = getEffectiveSubjectMode(session);
-    const subjectModeToSave = sessionSubjectMode !== "unknown" ? sessionSubjectMode : (spec.subject_mode ?? "any");
+    const subjectModeToSave = sessionSubjectMode !== "unknown" ? sessionSubjectMode : (specToSave.subject_mode ?? "any");
 
     const { error: insertErr } = await supabase.from(config.packContentSetsTable).insert({
-      id: spec.id,
-      pack_template_id: spec.pack_template_id,
-      name_ru: spec.name_ru,
-      name_en: spec.name_en,
-      carousel_description_ru: spec.carousel_description_ru,
-      carousel_description_en: spec.carousel_description_en,
-      labels: spec.labels,
-      labels_en: spec.labels_en,
-      scene_descriptions: spec.scene_descriptions,
-      sort_order: spec.sort_order,
-      is_active: spec.is_active,
-      mood: spec.mood,
-      sticker_count: spec.sticker_count,
+      id: specToSave.id,
+      pack_template_id: specToSave.pack_template_id,
+      name_ru: specToSave.name_ru,
+      name_en: specToSave.name_en,
+      carousel_description_ru: specToSave.carousel_description_ru,
+      carousel_description_en: specToSave.carousel_description_en,
+      labels: specToSave.labels,
+      labels_en: specToSave.labels_en,
+      scene_descriptions: specToSave.scene_descriptions,
+      sort_order: specToSave.sort_order,
+      is_active: specToSave.is_active,
+      mood: specToSave.mood,
+      sticker_count: specToSave.sticker_count,
       subject_mode: subjectModeToSave,
-      cluster: spec.cluster,
-      segment_id: spec.segment_id,
+      cluster: specToSave.cluster,
+      segment_id: specToSave.segment_id,
     });
 
     if (insertErr) {
@@ -6360,8 +6397,8 @@ bot.on("text", async (ctx) => {
 
     const successText =
       (lang === "ru" ? "✅ Пак сохранён: " : "✅ Pack saved: ") +
-      spec.id +
-      (spec.id !== result.spec!.id ? ` (уникальный id: был ${result.spec!.id})` : "");
+      specToSave.id +
+      (specToSave.id !== result.spec!.id ? ` (уникальный id: был ${result.spec!.id})` : "");
     await ctx.telegram.editMessageText(ctx.chat!.id, (statusMsg as any).message_id, undefined, successText).catch(() => ctx.reply(successText));
     return;
   }
