@@ -332,9 +332,17 @@ export async function sendEmotionExampleAlert(
   details?: { user?: string }
 ): Promise<void> {
   const channelId = config.alertChannelId;
-  if (!channelId) return;
+  if (!channelId) {
+    console.warn("[Alert] sendEmotionExampleAlert skipped: ALERT_CHANNEL_ID not set");
+    return;
+  }
 
   const caption = `😊 Эмоция: ${emotionId}${details?.user ? `\nUser: ${details.user}` : ""}`;
+  const replyMarkup = JSON.stringify({
+    inline_keyboard: [[
+      { text: "✅ Сохранить пример для эмоции", callback_data: `emotion_make_example:${emotionId}` },
+    ]],
+  });
 
   try {
     const form = new FormData();
@@ -344,11 +352,7 @@ export async function sendEmotionExampleAlert(
       filename: "emotion.webp",
       contentType: "image/webp",
     });
-    form.append("reply_markup", JSON.stringify({
-      inline_keyboard: [[
-        { text: "✅ Сохранить пример для эмоции", callback_data: `emotion_make_example:${emotionId}` },
-      ]],
-    }));
+    form.append("reply_markup", replyMarkup);
 
     const response = await axios.post(
       `https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`,
@@ -358,9 +362,11 @@ export async function sendEmotionExampleAlert(
 
     if (!response.data?.ok) {
       console.error("[Alert] sendEmotionExampleAlert failed:", response.data);
+    } else {
+      console.log("[Alert] sendEmotionExampleAlert sent, emotionId:", emotionId);
     }
   } catch (err: any) {
-    console.error("[Alert] sendEmotionExampleAlert error:", err?.response?.data || err);
+    console.error("[Alert] sendEmotionExampleAlert error:", err?.response?.data ?? err?.message ?? err);
   }
 }
 
