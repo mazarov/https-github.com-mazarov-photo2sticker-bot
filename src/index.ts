@@ -76,8 +76,8 @@ const pendingAdminReplies = new Map<number, {
   username: string;
 }>();
 
-// Admin flow: «Сделать примером» — выбор эмоции кнопками, затем ссылка на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md)
-const adminEmotionExampleFlow = new Map<number, { step: 2; emotionId: string }>();
+// Admin flow: «Сделать примером» — выбор набора из pack_content_sets, затем ссылка на стикерпак → pack/content/{id}/1..9.webp (docs/27-02-admin-make-emotion-example-from-pack-link.md)
+const adminPackContentExampleFlow = new Map<number, { step: 2; contentSetId: string }>();
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -4001,40 +4001,40 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
   );
 });
 
-// Menu: ⭐ Сделать примером (admin only) — выбор эмоции кнопками, затем ссылка на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md)
+// Menu: ⭐ Сделать примером (admin only) — выбор набора из pack_content_sets, затем ссылка на стикерпак → pack/content/{id}/1..9.webp
 bot.hears(["⭐ Сделать примером", "⭐ Make as example"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId || !config.adminIds.includes(telegramId)) return;
 
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
   const lang = isRu ? "ru" : "en";
-  const presets = await getEmotionPresets();
-  if (!presets.length) {
-    await ctx.reply(isRu ? "Нет активных эмоций в emotion_presets." : "No active emotion presets.", getMainMenuKeyboard(lang, telegramId));
+  const contentSets = await getActivePackContentSets();
+  if (!contentSets.length) {
+    await ctx.reply(isRu ? "Нет активных наборов в pack_content_sets." : "No active pack content sets.", getMainMenuKeyboard(lang, telegramId));
     return;
   }
-  const caption = isRu ? "Выбери эмоцию:" : "Choose emotion:";
-  const rows = presets.map((p) => {
-    const label = (p.emoji ? p.emoji + " " : "") + (lang === "ru" ? p.name_ru : p.name_en) || p.id;
-    return [{ text: label, callback_data: `admin_emotion_example:${p.id}` }];
+  const caption = isRu ? "Выбери набор (для карусели паков):" : "Choose pack set (for pack carousel):";
+  const rows = contentSets.map((set) => {
+    const label = (lang === "ru" ? set.name_ru : set.name_en) || set.id;
+    return [{ text: label, callback_data: `admin_pack_content_example:${set.id}` }];
   });
   await ctx.reply(caption, { reply_markup: { inline_keyboard: rows } });
 });
 
-// Callback: выбор эмоции для «Сделать примером» — переходим к шагу «ссылка на стикерпак»
-bot.action(/^admin_emotion_example:(.+)$/, async (ctx) => {
+// Callback: выбор набора для «Сделать примером» — переходим к шагу «ссылка на стикерпак»
+bot.action(/^admin_pack_content_example:(.+)$/, async (ctx) => {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId || !config.adminIds.includes(telegramId)) return;
 
-  const emotionId = ctx.match[1]?.trim();
-  if (!emotionId) return;
-  const { data: preset } = await supabase.from("emotion_presets").select("id").eq("id", emotionId).eq("is_active", true).maybeSingle();
-  if (!preset) {
-    await ctx.reply("Эмоция не найдена или неактивна.").catch(() => {});
+  const contentSetId = ctx.match[1]?.trim();
+  if (!contentSetId) return;
+  const { data: row } = await supabase.from(config.packContentSetsTable).select("id").eq("id", contentSetId).eq("is_active", true).maybeSingle();
+  if (!row) {
+    await ctx.reply("Набор не найден или неактивен.").catch(() => {});
     return;
   }
-  adminEmotionExampleFlow.set(telegramId, { step: 2, emotionId });
+  adminPackContentExampleFlow.set(telegramId, { step: 2, contentSetId });
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
   await ctx.reply(
     isRu ? "Пришли ссылку на стикерпак (https://t.me/addstickers/...)" : "Send sticker pack link (https://t.me/addstickers/...)",
@@ -5776,11 +5776,11 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
   await ctx.reply(lang === "ru" ? "Оставляем текущее фото." : "Keeping current photo.");
 });
 
-/** Admin flow «Сделать примером»: эмоция уже выбрана кнопкой (step 2), обрабатываем только ссылку на стикерпак (docs/27-02-admin-make-emotion-example-from-pack-link.md). */
-async function handleAdminEmotionExampleText(ctx: any, telegramId: number, text: string): Promise<void> {
-  const flow = adminEmotionExampleFlow.get(telegramId)!;
+/** Admin flow «Сделать примером»: набор из pack_content_sets выбран кнопкой (step 2), обрабатываем ссылку на стикерпак → pack/content/{id}/1..9.webp */
+async function handleAdminPackContentExampleText(ctx: any, telegramId: number, text: string): Promise<void> {
+  const flow = adminPackContentExampleFlow.get(telegramId)!;
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
-  const emotionId = flow.emotionId!;
+  const contentSetId = flow.contentSetId;
   const link = text.trim();
   const match = link.match(/(?:https?:\/\/)?t\.me\/addstickers\/([a-zA-Z0-9_]+)/i) || link.match(/addstickers\/([a-zA-Z0-9_]+)/i);
   if (!match) {
@@ -5789,35 +5789,33 @@ async function handleAdminEmotionExampleText(ctx: any, telegramId: number, text:
   }
   const shortName = match[1];
 
-  const statusMsg = await ctx.reply(isRu ? "⏳ Скачиваю стикеры и собираю сетку..." : "⏳ Downloading stickers and building grid...").catch(() => null);
+  const statusMsg = await ctx.reply(isRu ? "⏳ Скачиваю стикеры и загружаю в pack/content/..." : "⏳ Downloading stickers and uploading to pack/content/...").catch(() => null);
   try {
     const set = await getStickerSet(shortName);
     const stickersRaw = (set as { stickers: { file_id: string; is_animated?: boolean; is_video?: boolean }[] }).stickers;
     const stickers = stickersRaw.filter((s: any) => !s.is_animated && !s.is_video).slice(0, 9);
     if (stickers.length === 0) {
       await ctx.reply(isRu ? "В наборе нет статичных стикеров или набор пуст." : "No static stickers in set or set is empty.");
-      adminEmotionExampleFlow.delete(telegramId);
+      adminPackContentExampleFlow.delete(telegramId);
       return;
     }
-    const buffers: Buffer[] = [];
-    for (const s of stickers) {
+    const bucket = config.supabaseStorageBucketExamples;
+    let uploaded = 0;
+    for (let i = 0; i < stickers.length; i++) {
+      const s = stickers[i];
       const path = await getFilePath(s.file_id);
       const buf = await downloadFile(path);
-      buffers.push(buf);
+      const pos = i + 1;
+      const storagePath = `pack/content/${contentSetId}/${pos}.webp`;
+      const { error: uploadErr } = await supabase.storage.from(bucket).upload(storagePath, buf, { contentType: "image/webp", upsert: true });
+      if (!uploadErr) uploaded++;
     }
-    const grid = await assembleGridTo1024(buffers, 3, 3);
-    const storagePath = `${EMOTION_EXAMPLES_STORAGE_PREFIX}${emotionId}.webp`;
-    const { error: uploadErr } = await supabase.storage.from(config.supabaseStorageBucketExamples).upload(storagePath, grid, { contentType: "image/webp", upsert: true });
-    if (uploadErr) {
-      await ctx.reply(`❌ Ошибка загрузки: ${uploadErr.message}`);
-      return;
-    }
-    emotionPresetsCache = null;
-    adminEmotionExampleFlow.delete(telegramId);
+    clearPackContentSetsCache();
+    adminPackContentExampleFlow.delete(telegramId);
     if (statusMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
-    await ctx.reply(isRu ? `✅ Пример для эмоции «${emotionId}» сохранён.` : `✅ Example for emotion «${emotionId}» saved.`);
+    await ctx.reply(isRu ? `✅ Примеры для набора «${contentSetId}» сохранены (${uploaded} файлов в pack/content/).` : `✅ Examples for set «${contentSetId}» saved (${uploaded} files in pack/content/).`);
   } catch (err: any) {
-    console.error("[admin_make_example] Error:", err?.message || err);
+    console.error("[admin_pack_content_example] Error:", err?.message || err);
     if (statusMsg?.message_id) await ctx.telegram.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
     await ctx.reply(`❌ ${err?.message || "Error"}`);
   }
@@ -5891,15 +5889,15 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // === Admin: «Сделать примером» flow (emotion id → pack link) ===
-  if (config.adminIds.includes(telegramId) && adminEmotionExampleFlow.has(telegramId)) {
+  // === Admin: «Сделать примером» flow (pack_content_sets → pack link → pack/content/{id}/1..9.webp) ===
+  if (config.adminIds.includes(telegramId) && adminPackContentExampleFlow.has(telegramId)) {
     const text = ctx.message?.text?.trim() ?? "";
     if (text === "/cancel") {
-      adminEmotionExampleFlow.delete(telegramId);
+      adminPackContentExampleFlow.delete(telegramId);
       await ctx.reply("❌ Отменено.");
       return;
     }
-    await handleAdminEmotionExampleText(ctx, telegramId, text);
+    await handleAdminPackContentExampleText(ctx, telegramId, text);
     return;
   }
 
