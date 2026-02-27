@@ -245,6 +245,12 @@ Rules:
 - Concrete lived situations only.
 - Do NOT describe poses, scenes, camera framing, or appearance.
 
+### If awkwardness is required
+- awkward_style = polite_internal
+- Reactions must stay socially polite on the surface
+- Awkwardness is internal, not expressive
+- Do NOT plan moments that reject, judge, or mock gifts or people
+
 ### Costume Lock (CRITICAL)
 If the concept implies a profession or role visually defined by clothing
 (e.g. soldier, war correspondent, doctor, pilot, chef):
@@ -257,13 +263,13 @@ If no such role is implied, explicitly state: outfit = "none".
 
 ### Holiday Visual Anchors (MANDATORY)
 If the theme is a holiday or celebration (e.g. March 8, Valentine's Day, birthday):
-- Define 2–4 REQUIRED visual anchors (objects, not environments).
+- Define 2–4 REQUIRED visual anchors (objects only).
 - Examples: flowers, bouquet, gift box, card, ribbon, envelope, candle.
 - These anchors represent the holiday visually.
 - They must be simple, handheld, and easy to isolate.
 - Put outfit (or "none") first in visual_anchors, then these objects.
-At least HALF of the scenes must include one of these visual anchors.
-Distribute anchors across the day, not only in consecutive moments.
+- At least HALF of the scenes must include one anchor.
+- Distribute anchors across the day, not only consecutively.
 Do NOT replace celebration with neutral daily activities.
 If a moment feels like a normal workday, rewrite it.
 
@@ -278,6 +284,8 @@ This tension MUST visibly surface in at least one moment.
 ---
 
 ## Part 2 — Plan (9 Moments)
+
+Expected phrases (tone reference, stay close to this style): keep moments in this tone; do not drift to openly sarcastic or mean.
 
 Rules:
 - Exactly 9 moments.
@@ -413,6 +421,15 @@ NOT descriptions of actions.
 ## TONE
 Slight self-irony beats positivity. If a caption sounds confident out loud, rewrite as something you'd admit privately.
 NOTE: Moments already include awkward / anti-postcard beats. Do NOT normalize them.
+
+### If awkward_style = polite_internal (CRITICAL)
+- Humor must be subtle and internal
+- No overt sarcasm, mockery, or exaggerated irony
+- Do NOT explicitly say the gift is bad, wrong, or unwanted
+- Captions must remain socially polite
+
+Avoid dramatic or performative statements. Reactions should feel restrained and realistic.
+Awkward ≠ Mean. Do not judge or reject the gift in the caption.
 
 ---
 
@@ -562,6 +579,11 @@ If VISUAL_ANCHORS are given in the user message (holiday objects):
 - Anchor must be clearly visible and fully inside the frame.
 - Do NOT hide or partially crop the anchor.
 
+### If awkward theme
+- Avoid theatrical gestures
+- Keep reactions small and contained
+- Body language should suggest hesitation, not performance
+
 ---
 
 ## LENGTH & STYLE (CRITICAL)
@@ -624,6 +646,12 @@ Act as a strict quality gate for format and usability.
 If everything feels emotionally safe or postcard-like, suggest more awkward or self-ironic moments. Do NOT fail for this alone.
 
 If a holiday pack feels like a normal day with devices or neutral routines, suggest replacing neutral scenes with celebratory ones (by index). Do NOT fail for this alone.
+
+### If awkward_style = polite_internal (batch/publish)
+- Check captions do not openly reject or mock gifts.
+- If needed, suggest softer phrasing.
+- Do NOT fail the pack for tone alone.
+Do NOT police sarcasm, humor style, or caption emotional interpretation for awkward packs.
 
 ---
 
