@@ -211,6 +211,7 @@ function getEffectivePackTemplateId(session: { pack_holiday_id?: string | null; 
   return String(session.pack_holiday_id || session.pack_template_id || "couple_v1");
 }
 
+/** Admin-only row for "Сгенерировать пак" (test bot only). Pass sessionId so the handler loads session by id. */
 /** Escape Telegram Markdown special chars so DB content (name_ru/en, carousel_description_*) does not break parse_mode: "Markdown". */
 function escapeMarkdownForTelegram(text: string): string {
   return String(text ?? "").replace(/\\/g, "\\\\").replace(/[_*`\[\]]/g, "\\$&");
@@ -446,6 +447,7 @@ async function getPackHolidayTheme(): Promise<HolidayTheme | null> {
     .eq("is_active", true)
     .maybeSingle();
   if (error) console.error("[getPackHolidayTheme] error:", error.message);
+  console.log("[getPackHolidayTheme] result:", data ? { id: data.id, is_active: data.is_active } : "null", "error:", error?.message ?? "none");
   return data;
 }
 
@@ -671,6 +673,20 @@ async function getEmotionPresets(): Promise<EmotionPreset[]> {
   return data || [];
 }
 
+const EMOTION_EXAMPLES_STORAGE_PREFIX = "emotion-examples/";
+
+/** First emotion preset (by sort_order) that has an example file in Storage (emotion-examples/{id}.webp). */
+async function getFirstEmotionPresetWithExample(presets: EmotionPreset[]): Promise<EmotionPreset | null> {
+  if (!presets.length) return null;
+  const bucket = config.supabaseStorageBucketExamples;
+  const { data: files } = await supabase.storage.from(bucket).list(EMOTION_EXAMPLES_STORAGE_PREFIX.replace(/\/$/, "")).catch(() => ({ data: null }));
+  const names = new Set((files || []).map((f: { name?: string }) => f.name).filter(Boolean));
+  for (const p of presets) {
+    if (names.has(`${p.id}.webp`)) return p;
+  }
+  return null;
+}
+
 async function sendEmotionKeyboard(
   ctx: any,
   lang: string,
@@ -699,10 +715,22 @@ async function sendEmotionKeyboard(
     buttons.push(row);
   }
 
-  await ctx.reply(
-    await getText(lang, "emotion.choose"),
-    Markup.inlineKeyboard(buttons)
-  );
+  const caption = await getText(lang, "emotion.choose");
+  const replyMarkup = Markup.inlineKeyboard(buttons);
+
+  const firstWithExample = await getFirstEmotionPresetWithExample(presets);
+  if (firstWithExample) {
+    const { data: urlData } = supabase.storage
+      .from(config.supabaseStorageBucketExamples)
+      .getPublicUrl(`${EMOTION_EXAMPLES_STORAGE_PREFIX}${firstWithExample.id}.webp`);
+    const photoUrl = urlData?.publicUrl;
+    if (photoUrl) {
+      await ctx.replyWithPhoto(photoUrl, { caption, reply_markup: replyMarkup.reply_markup });
+      return;
+    }
+  }
+
+  await ctx.reply(caption, replyMarkup);
 }
 
 async function getMotionPresets(): Promise<MotionPreset[]> {
@@ -2030,6 +2058,7 @@ const SESSION_FALLBACK_ACTIVE_STATES = [
   "wait_pack_approval",
   "wait_pack_rework_feedback",
   "generating_pack_preview",
+  "generating_pack_theme",
   "processing_pack",
   // Generic generation states
   "processing",
@@ -2108,7 +2137,7 @@ async function getActiveSession(userId: string) {
   return fallbackByCreatedAt;
 }
 
-const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "wait_pack_approval", "wait_pack_rework_feedback", "processing_pack"] as const;
+const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "generating_pack_theme", "wait_pack_approval", "wait_pack_rework_feedback", "processing_pack"] as const;
 
 /** Get session that is in pack flow (for pack callbacks when user may have is_active assistant session). */
 async function getPackFlowSession(userId: string) {
@@ -3106,6 +3135,7 @@ bot.on("photo", async (ctx) => {
     "wait_pack_approval",
     "wait_pack_rework_feedback",
     "generating_pack_preview",
+    "generating_pack_theme",
     "processing_pack",
   ];
   if (packStatesForReactivation.includes(String(session.state || "")) && !session.is_active) {
@@ -3127,7 +3157,7 @@ bot.on("photo", async (ctx) => {
 
   // === AI Assistant: re-route to assistant_wait_photo if assistant is active after generation ===
   // Skip re-route for pack flow states — pack handles photos independently
-  if (!session.state?.startsWith("assistant_") && !session.state?.startsWith("wait_pack_") && !["processing", "processing_emotion", "processing_motion", "processing_text", "generating_pack_preview", "processing_pack"].includes(session.state)) {
+  if (!session.state?.startsWith("assistant_") && !session.state?.startsWith("wait_pack_") && !["processing", "processing_emotion", "processing_motion", "processing_text", "generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(session.state)) {
     const activeAssistant = await getActiveAssistantSession(user.id);
     if (activeAssistant && activeAssistant.status === "active") {
       console.log("Assistant photo re-route: state was", session.state, "→ switching to assistant_wait_photo");
@@ -3157,7 +3187,7 @@ bot.on("photo", async (ctx) => {
         ? "assistant"
         : (
             session.state?.startsWith("wait_pack_")
-            || ["generating_pack_preview", "processing_pack"].includes(String(session.state || ""))
+            || ["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(String(session.state || ""))
           )
           ? "pack"
           : "single";
@@ -3728,7 +3758,7 @@ async function handlePackMenuEntry(
   try {
     const activeSession = await getActiveSession(user.id);
     console.log("[pack_flow] after getActiveSession in pack_entry", { userId: user.id, sessionId: activeSession?.id ?? null, sessionState: activeSession?.state ?? null });
-    const isProcessingState = activeSession?.state === "generating_pack_preview" || activeSession?.state === "processing_pack";
+    const isProcessingState = activeSession?.state === "generating_pack_preview" || activeSession?.state === "generating_pack_theme" || activeSession?.state === "processing_pack";
     const processingStaleMinutes = 10;
     const processingUpdatedAt = activeSession?.updated_at ? new Date(activeSession.updated_at).getTime() : 0;
     const processingIsStale = !activeSession?.updated_at || (Date.now() - processingUpdatedAt > processingStaleMinutes * 60 * 1000);
@@ -3844,6 +3874,7 @@ async function handlePackMenuEntry(
     const intro = await getText(lang, "pack.carousel_intro");
     const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
     const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+    const adminRow = getPackCarouselAdminRow(telegramId, session.id);
     const packHolidayEntry = await getPackHolidayTheme();
     const holidayRowEntry: { text: string; callback_data: string }[] = [];
     if (packHolidayEntry) {
@@ -3860,6 +3891,7 @@ async function handlePackMenuEntry(
         ],
         [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
         ...(holidayRowEntry.length ? [holidayRowEntry] : []),
+        ...(adminRow.length ? [adminRow] : []),
       ],
     };
     let msg: any = null;
@@ -4144,6 +4176,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const packHolidayEntry = await getPackHolidayTheme();
   const holidayRowEntry: { text: string; callback_data: string }[] = [];
   if (packHolidayEntry) {
@@ -4159,6 +4192,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
       ...(holidayRowEntry.length ? [holidayRowEntry] : []),
+      ...(adminRow.length ? [adminRow] : []),
     ],
   };
   await ctx.editMessageText(carouselCaption, { parse_mode: "Markdown", reply_markup: keyboard });
@@ -4588,6 +4622,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const adminRow = getPackCarouselAdminRow(telegramId, session.id);
   const packHoliday = await getPackHolidayTheme();
   const holidayRow: { text: string; callback_data: string }[] = [];
   if (packHoliday) {
@@ -4604,6 +4639,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
       ...(holidayRow.length ? [holidayRow] : []),
+      ...(adminRow.length ? [adminRow] : []),
     ],
   };
   try {
@@ -4661,6 +4697,7 @@ async function renderPackCarouselForSession(
   const intro = await getText(lang, "pack.carousel_intro");
   const carouselCaption = `${intro}\n\n*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
+  const adminRow = getPackCarouselAdminRow((ctx.from as any)?.id ?? 0, session.id);
   const packHoliday = await getPackHolidayTheme();
   const holidayRow: { text: string; callback_data: string }[] = [];
   if (packHoliday) {
@@ -4677,6 +4714,7 @@ async function renderPackCarouselForSession(
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
       ...(holidayRow.length ? [holidayRow] : []),
+      ...(adminRow.length ? [adminRow] : []),
     ],
   };
 
@@ -5572,7 +5610,7 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
     await rejectSessionEvent(ctx, lang, "single_new_photo", "session_not_found");
     return;
   }
-  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "processing_pack"].includes(session.state)) {
+  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(session.state)) {
     await rejectSessionEvent(ctx, lang, "single_new_photo", "wrong_state");
     return;
   }
@@ -5627,7 +5665,7 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
     await rejectSessionEvent(ctx, lang, "single_keep_photo", "session_not_found");
     return;
   }
-  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "processing_pack"].includes(session.state)) {
+  if (session.state?.startsWith("assistant_") || session.state?.startsWith("wait_pack_") || ["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(session.state)) {
     await rejectSessionEvent(ctx, lang, "single_keep_photo", "wrong_state");
     return;
   }
@@ -5795,7 +5833,7 @@ bot.on("text", async (ctx) => {
     // #endregion
   }
   // #region agent log
-  console.log("[pack_text_resolve] before pack_theme check", { sessionId: session?.id, sessionState: session?.state, wouldBePackTheme: (config.appEnv === "test" && config.adminIds.includes(telegramId) && (session.state === "wait_pack_generate_request" || session.state === "wait_pack_carousel")), textLen: ctx.message?.text?.length ?? 0 });
+  console.log("[pack_text_resolve] before pack_theme check", { sessionId: session?.id, sessionState: session?.state, wouldBePackTheme: (config.adminIds.includes(telegramId) && (session.state === "wait_pack_generate_request" || session.state === "wait_pack_carousel")), textLen: ctx.message?.text?.length ?? 0 });
   // #endregion
 
   // === Admin pack rework: user sent feedback (Critic approved, user tapped Rework and described what to change) ===
@@ -5865,7 +5903,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // === Admin pack generation: theme text → run pipeline → insert (test bot only) ===
+  // === Admin pack generation: theme text → run pipeline → insert ===
   const isAdminPackThemeRequest =
     config.adminIds.includes(telegramId) &&
     (session.state === "wait_pack_generate_request" || session.state === "wait_pack_carousel");
@@ -5875,6 +5913,18 @@ bot.on("text", async (ctx) => {
       await ctx.reply(lang === "ru" ? "Введите тему одной фразой." : "Enter the theme in one phrase.");
       return;
     }
+
+    // Prevent duplicate runs: set state before any await so re-delivered updates don't start a second pipeline.
+    const { error: lockErr } = await supabase
+      .from("sessions")
+      .update({ state: "generating_pack_theme", is_active: true })
+      .eq("id", session.id);
+    if (lockErr) {
+      console.warn("[pack_admin] Failed to set generating_pack_theme:", lockErr.message, "sessionId:", session.id);
+      await ctx.reply(lang === "ru" ? "Не удалось заблокировать сессию. Попробуй ещё раз." : "Failed to lock session. Try again.");
+      return;
+    }
+    session.state = "generating_pack_theme";
 
     const adminPackStageLabels: Record<string, { ru: string; en: string }> = {
       brief_and_plan: { ru: "Brief & Plan", en: "Brief & Plan" },
@@ -5895,13 +5945,16 @@ bot.on("text", async (ctx) => {
         await ctx.telegram.editMessageText(chatId, progressMsgId, undefined, text);
       } catch {}
     };
-    const subjectType = subjectTypeFromSession(session);
-    const result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2, onProgress });
-
-    await supabase
-      .from("sessions")
-      .update({ state: "wait_pack_carousel", is_active: true })
-      .eq("id", session.id);
+    let result: Awaited<ReturnType<typeof runPackGenerationPipeline>>;
+    try {
+      const subjectType = subjectTypeFromSession(session);
+      result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2, onProgress });
+    } finally {
+      await supabase
+        .from("sessions")
+        .update({ state: "wait_pack_carousel", is_active: true })
+        .eq("id", session.id);
+    }
 
     if (!result.ok && !result.spec) {
       const errText = result.error || "Unknown error";
@@ -6010,7 +6063,7 @@ bot.on("text", async (ctx) => {
   }
 
   // === Pack states: ignore text input during pack flow ===
-  if (session.state?.startsWith("wait_pack_") || session.state === "generating_pack_preview" || session.state === "processing_pack") {
+  if (session.state?.startsWith("wait_pack_") || session.state === "generating_pack_preview" || session.state === "generating_pack_theme" || session.state === "processing_pack") {
     return;
   }
 
@@ -9596,6 +9649,45 @@ bot.action(/^make_example:(.+)$/, async (ctx) => {
 
   console.log("Marked as example:", stickerId, "style:", sticker.style_preset_id, publicUrl ? "public_url set" : "no public_url");
   await ctx.editMessageCaption(`✅ Добавлен как пример для стиля "${sticker.style_preset_id}"`).catch(() => {});
+});
+
+// Callback: emotion_make_example (admin only — from alert channel, "Сохранить пример для эмоции")
+bot.action(/^emotion_make_example:(.+)$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId || !config.adminIds.includes(telegramId)) return;
+
+  const emotionPresetId = ctx.match[1];
+  const msg = ctx.callbackQuery?.message as any;
+  const photo = msg?.photo;
+  if (!Array.isArray(photo) || photo.length === 0) {
+    await ctx.editMessageCaption("❌ Нет фото в сообщении").catch(() => {});
+    return;
+  }
+  const fileId = photo[photo.length - 1]?.file_id;
+  if (!fileId) {
+    await ctx.editMessageCaption("❌ Не удалось получить file_id").catch(() => {});
+    return;
+  }
+
+  try {
+    const filePath = await getFilePath(fileId);
+    const buffer = await downloadFile(filePath);
+    const storagePath = `${EMOTION_EXAMPLES_STORAGE_PREFIX}${emotionPresetId}.webp`;
+    const { error: uploadErr } = await supabase.storage
+      .from(config.supabaseStorageBucketExamples)
+      .upload(storagePath, buffer, { contentType: "image/webp", upsert: true });
+    if (uploadErr) {
+      console.error("[emotion_make_example] Storage upload failed:", uploadErr);
+      await ctx.editMessageCaption("❌ Ошибка загрузки в Storage").catch(() => {});
+      return;
+    }
+    emotionPresetsCache = null;
+    await ctx.editMessageCaption(`✅ Сохранено как пример для эмоции "${emotionPresetId}"`).catch(() => {});
+  } catch (err: any) {
+    console.error("[emotion_make_example] Error:", err?.message || err);
+    await ctx.editMessageCaption("❌ Ошибка: " + (err?.message || "unknown")).catch(() => {});
+  }
 });
 
 // Callback: pack_make_example (admin only — from alert channel, pack preview "Сделать примером")
