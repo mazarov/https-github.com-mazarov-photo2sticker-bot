@@ -723,6 +723,8 @@ async function sendEmotionKeyboard(
 
   const caption = await getText(lang, "emotion.choose");
   const replyMarkup = Markup.inlineKeyboard(buttons);
+  const telegramId = (ctx.from as any)?.id as number | undefined;
+  const menuWithoutAdmin = getMainMenuKeyboard(lang, telegramId, { hideAdminGenerate: true });
 
   const firstWithExample = await getFirstEmotionPresetWithExample(presets);
   if (firstWithExample) {
@@ -731,12 +733,14 @@ async function sendEmotionKeyboard(
       .getPublicUrl(`${EMOTION_EXAMPLES_STORAGE_PREFIX}${firstWithExample.id}.webp`);
     const photoUrl = urlData?.publicUrl;
     if (photoUrl) {
-      await ctx.replyWithPhoto(photoUrl, { caption, reply_markup: replyMarkup.reply_markup });
+      await ctx.reply(caption, menuWithoutAdmin);
+      await ctx.replyWithPhoto(photoUrl, { caption: "", reply_markup: replyMarkup.reply_markup });
       return;
     }
   }
 
-  await ctx.reply(caption, replyMarkup);
+  await ctx.reply(caption, menuWithoutAdmin);
+  await ctx.reply("\u200b", { reply_markup: replyMarkup.reply_markup });
 }
 
 async function getMotionPresets(): Promise<MotionPreset[]> {
@@ -1506,9 +1510,10 @@ async function getUser(telegramId: number) {
 }
 
 // Helper: get persistent menu keyboard (2 rows). Admin on test sees "Сгенерировать пак" in row1 (docs/20-02-admin-generate-pack-menu-button.md).
-function getMainMenuKeyboard(lang: string, telegramId?: number) {
+// Use options.hideAdminGenerate in emotion/motion carousel so "Сгенерировать пак" is not shown there.
+function getMainMenuKeyboard(lang: string, telegramId?: number, options?: { hideAdminGenerate?: boolean }) {
   const showAdminGenerate =
-    telegramId != null && config.adminIds.includes(telegramId);
+    !options?.hideAdminGenerate && telegramId != null && config.adminIds.includes(telegramId);
   const row1 =
     lang === "ru"
       ? showAdminGenerate
@@ -5924,10 +5929,11 @@ bot.on("text", async (ctx) => {
     }
 
     // Layer 1 — one run per user: if this user already has a session in generating_pack_theme, do not start another.
-    // (Requires migration 121; if enum missing, this query may error — we still proceed and Layer 2 lock will fail.)
+    // If that session is stale (updated > 15 min ago), treat as crashed and allow new run; reset stale to wait_pack_carousel.
+    const GENERATING_PACK_THEME_STALE_MS = 15 * 60 * 1000; // 15 min
     const { data: alreadyGenerating, error: alreadyErr } = await supabase
       .from("sessions")
-      .select("id")
+      .select("id, updated_at")
       .eq("user_id", user.id)
       .eq("env", config.appEnv)
       .eq("state", "generating_pack_theme")
@@ -5937,9 +5943,19 @@ bot.on("text", async (ctx) => {
       console.warn("[pack_admin] Layer 1 check failed (apply migration 121 if missing enum):", alreadyErr.message);
     }
     if (alreadyGenerating?.id) {
-      console.log("[pack_admin] Skip: user already has session in generating_pack_theme", { userId: user.id, sessionId: alreadyGenerating.id });
-      await ctx.reply(lang === "ru" ? "⏳ Генерация пака уже идёт. Дождись окончания." : "⏳ Pack generation already in progress. Wait for it to finish.");
-      return;
+      const updatedAt = alreadyGenerating.updated_at ? new Date(alreadyGenerating.updated_at).getTime() : 0;
+      const isStale = Date.now() - updatedAt > GENERATING_PACK_THEME_STALE_MS;
+      if (isStale) {
+        await supabase
+          .from("sessions")
+          .update({ state: "wait_pack_carousel", is_active: true })
+          .eq("id", alreadyGenerating.id);
+        console.log("[pack_admin] Stale generating_pack_theme reset to wait_pack_carousel", { sessionId: alreadyGenerating.id });
+      } else {
+        console.log("[pack_admin] Skip: user already has session in generating_pack_theme", { userId: user.id, sessionId: alreadyGenerating.id });
+        await ctx.reply(lang === "ru" ? "⏳ Генерация пака уже идёт. Дождись окончания." : "⏳ Pack generation already in progress. Wait for it to finish.");
+        return;
+      }
     }
 
     // Layer 2 — conditional lock: only update if session is still in theme state (prevents double-run on same session from Telegram retries).
