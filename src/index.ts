@@ -583,19 +583,17 @@ function getPackContentSetExamplePublicUrl(contentSetId: string): string {
 /** Возвращает URL примера набора только если файл в Storage существует; иначе null (в карусели показываем только текст). */
 async function getPackContentSetExampleUrlIfExists(contentSetId: string): Promise<string | null> {
   const url = getPackContentSetExamplePublicUrl(contentSetId);
+  const baseUsed = (config.supabasePublicStorageUrl || config.supabaseUrl || "").replace(/\/$/, "");
   try {
     const res = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(5000) });
     if (!res.ok) {
-      if (contentSetId === "march8_awkward" || res.status === 404) {
-        console.warn("[pack_example] HEAD not ok", { contentSetId, status: res.status, url: url.slice(0, 80) });
-      }
+      console.log("[pack_example] HEAD not ok", { contentSetId, status: res.status, baseUsed: baseUsed.slice(0, 60), url: url.slice(0, 90) });
       return null;
     }
+    console.log("[pack_example] HEAD ok", { contentSetId, url: url.slice(0, 90) });
     return url;
   } catch (e) {
-    if (contentSetId === "march8_awkward") {
-      console.warn("[pack_example] HEAD failed", { contentSetId, err: (e as Error)?.message, url: url.slice(0, 80) });
-    }
+    console.log("[pack_example] HEAD failed", { contentSetId, err: (e as Error)?.message, baseUsed: baseUsed.slice(0, 60), url: url.slice(0, 90) });
     return null;
   }
 }
@@ -3917,6 +3915,7 @@ async function handlePackMenuEntry(
       telegramId,
     });
     const exampleUrl = await getPackContentSetExampleUrlIfExists(set.id);
+    console.log("[pack_carousel] show first card", { contentSetId: set.id, hasExampleUrl: !!exampleUrl, exampleUrlPreview: exampleUrl?.slice(0, 80) ?? null });
     if (ctx.chat?.id) {
       try {
         await showPackCarouselCard(ctx.telegram, supabase, {
@@ -3927,7 +3926,8 @@ async function handlePackMenuEntry(
           existingHasPhoto: false,
           sessionId: session.id,
         });
-      } catch (_) {
+      } catch (e) {
+        console.log("[pack_carousel] show first card failed", { contentSetId: set.id, err: (e as Error)?.message });
         const intro = await getText(lang, "pack.carousel_intro");
         const fallbackCaption = `${intro}\n\n${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
         const sent = await ctx.telegram.sendMessage(ctx.chat.id, fallbackCaption, { reply_markup: keyboard });
@@ -4732,6 +4732,7 @@ async function showPackCarouselCard(
 ): Promise<void> {
   const { chatId, messageId, carouselCaption, keyboard, exampleUrl, existingHasPhoto, sessionId } = params;
   const markdownOpts = { parse_mode: "Markdown" as const, reply_markup: keyboard };
+  console.log("[pack_carousel] showPackCarouselCard", { hasMessageId: messageId != null, hasExampleUrl: !!exampleUrl, existingHasPhoto });
 
   const updateSessionProgress = (msgId: number) => {
     void supabaseClient
@@ -4764,7 +4765,8 @@ async function showPackCarouselCard(
           const sent = await telegram.sendPhoto(chatId, exampleUrl, { caption: carouselCaption, ...markdownOpts });
           updateSessionProgress(sent.message_id);
           return;
-        } catch {
+        } catch (e) {
+          console.log("[pack_carousel] sendPhoto failed (replace photo with text)", { err: (e as Error)?.message });
           const sent = await telegram.sendMessage(chatId, carouselCaption, markdownOpts);
           updateSessionProgress(sent.message_id);
           return;
@@ -4788,7 +4790,9 @@ async function showPackCarouselCard(
       const sent = await telegram.sendPhoto(chatId, exampleUrl, { caption: carouselCaption, ...markdownOpts });
       updateSessionProgress(sent.message_id);
       return;
-    } catch (_) {}
+    } catch (e) {
+      console.log("[pack_carousel] sendPhoto failed (no messageId)", { err: (e as Error)?.message, urlPreview: exampleUrl.slice(0, 80) });
+    }
   }
   const sent = await telegram.sendMessage(chatId, carouselCaption, markdownOpts);
   updateSessionProgress(sent.message_id);
