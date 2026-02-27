@@ -1086,18 +1086,7 @@ async function ensureSubjectProfileForGeneration(
       subjectCount: nextProfile.subjectCount,
       subjectGender: nextProfile.subjectGender,
     });
-    sendAlert({
-      type: "subject_profile_detected",
-      message: "Subject profile saved after photo/source",
-      details: {
-        sessionId: session.id,
-        sourceKind,
-        subjectMode: nextProfile.subjectMode,
-        subjectCount: nextProfile.subjectCount ?? "-",
-        subjectGender: nextProfile.subjectGender ?? "-",
-        subjectConfidence: nextProfile.subjectConfidence ?? "-",
-      },
-    }).catch(() => {});
+    // Алерт subject_profile_detected шлём только из воркера (один раз на джоб), чтобы не дублировать.
     return nextProfile;
   } catch (err: any) {
     console.warn("[subject-profile] failed to resolve profile:", err?.message || err);
@@ -1129,17 +1118,7 @@ async function ensureSubjectProfileForGeneration(
       object_source_kind: fallbackProfile.sourceKind,
       object_detected_at: fallbackProfile.detectedAt,
     });
-    sendAlert({
-      type: "subject_profile_detected",
-      message: "Subject profile fallback (detection failed)",
-      details: {
-        sessionId: session.id,
-        sourceKind,
-        subjectMode: fallbackProfile.subjectMode,
-        subjectCount: fallbackProfile.subjectCount ?? "-",
-        subjectGender: fallbackProfile.subjectGender ?? "-",
-      },
-    }).catch(() => {});
+    // Алерт subject_profile_detected шлём только из воркера, чтобы не дублировать.
     return fallbackProfile;
   }
 }
