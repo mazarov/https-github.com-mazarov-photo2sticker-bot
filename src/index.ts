@@ -2997,17 +2997,7 @@ bot.start(async (ctx) => {
     const updates: Record<string, any> = {};
 
     if (user.username !== currentUsername) updates.username = currentUsername;
-    if (user.lang !== currentLang) {
-      updates.lang = currentLang;
-      console.log("[locale] Returning user — lang change", {
-        telegramId,
-        db_lang: user.lang ?? "(null)",
-        db_language_code: user.language_code ?? "(null)",
-        telegram_language_code: currentLangCode || "(empty)",
-        resolved_lang: currentLang,
-        change: `${user.lang ?? "?"} -> ${currentLang}`,
-      });
-    }
+    // Не перезаписываем lang у returning user по telegram — язык уже выбран при регистрации/ранее; только сохраняем language_code для аналитики.
     if (user.language_code !== currentLangCode) updates.language_code = currentLangCode || null;
 
     // Update UTM + yclid for returning users if they came via a new start link
@@ -6252,9 +6242,9 @@ bot.on("text", async (ctx) => {
       const isStale = Date.now() - updatedAt > GENERATING_PACK_THEME_STALE_MS;
       await supabase
         .from("sessions")
-        .update({ state: "wait_pack_carousel", is_active: true })
+        .update({ state: "wait_pack_carousel", is_active: false })
         .eq("id", alreadyGenerating.id);
-      console.log("[pack_admin] Other session in generating_pack_theme reset to wait_pack_carousel (stale or blocking)", {
+      console.log("[pack_admin] Other session in generating_pack_theme reset to wait_pack_carousel (stale or blocking), proceeding with theme", {
         resetSessionId: alreadyGenerating.id,
         currentSessionId: session.id,
         isStale,
