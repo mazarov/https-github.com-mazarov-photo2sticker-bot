@@ -7276,7 +7276,7 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
     const backText = lang === "ru" ? "↩️ Назад" : "↩️ Back";
 
     const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
-    const applyCallback = sessionRef ? `style_v2:${preset.id}:${sessionRef}` : `style_v2:${preset.id}`;
+    const applyCallback = appendSessionRefIfFits(`style_v2:${preset.id}`, sessionRef);
     const keyboard = {
       inline_keyboard: [[
         { text: backText, callback_data: `back_to_style_list:${stickerMsgId}` },

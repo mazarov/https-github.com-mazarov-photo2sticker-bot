@@ -6,7 +6,7 @@ import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
 import { getText } from "./lib/texts";
-import { sendAlert, sendNotification, sendPackPreviewAlert, sendPackCompletedLandingAlert, sendEmotionExampleAlert } from "./lib/alerts";
+import { sendAlert, sendNotification, sendPackPreviewAlert, sendPackCompletedLandingAlert } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
 import { addTextToSticker, fitStickerIn512WithMargin, addWhiteBorder } from "./lib/image-utils";
@@ -835,19 +835,6 @@ ${packTaskBlock}`
     }).catch((err) => console.warn("[PackPreview] sendPackPreviewAlert failed:", err?.message));
   }
 
-  // Алерт с кнопкой «Сохранить пример для эмоции» (вместе с превью пака, docs/27-02-emotion-carousel-example-images.md)
-  const { data: firstEmotionPreview } = await supabase
-    .from("emotion_presets")
-    .select("id")
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  const emotionIdPreview = firstEmotionPreview?.id ?? "custom";
-  sendEmotionExampleAlert(emotionIdPreview, bufferToSend, {
-    user: `@${user.username || telegramId}`,
-  }).catch((err) => console.warn("[PackPreview] sendEmotionExampleAlert failed:", err?.message));
-
   await supabase
     .from("sessions")
     .update({
@@ -1222,19 +1209,6 @@ async function runPackAssembleJob(job: any) {
       contentSetId: session.pack_content_set_id ?? undefined,
       styleId: session.selected_style_id ?? undefined,
     }).catch((err) => console.warn("[PackAssemble] sendPackCompletedLandingAlert failed:", err?.message));
-
-    // Алерт с кнопкой «Сохранить пример для эмоции» (docs/27-02-emotion-carousel-example-images.md)
-    const { data: firstEmotion } = await supabase
-      .from("emotion_presets")
-      .select("id")
-      .eq("is_active", true)
-      .order("sort_order", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    const emotionId = firstEmotion?.id ?? "custom";
-    sendEmotionExampleAlert(emotionId, stickerBuffers[0], {
-      user: `@${user.username || telegramId}`,
-    }).catch((err) => console.warn("[PackAssemble] sendEmotionExampleAlert failed:", err?.message));
   }
 
   console.log("[PackAssemble] Job complete! Set:", setName);
