@@ -232,115 +232,59 @@ async function openAiChatJson<T>(
   return JSON.parse(text) as T;
 }
 
-// --- Brief & Plan agent (docs/final-promt-16.md) ---
+// --- Brief & Plan agent — "IDEA BREAKER" ---
 const BRIEF_AND_PLAN_SYSTEM = `## Role
-Interpret the user request into a compact sticker pack brief
-and immediately expand it into a plan of exactly 16 distinct moments of one day.
-Think in terms of archetypes and roles, not "a day in the life".
-
-You output ONE JSON with brief and plan.
+You create sticker pack concepts that people WANT to SEND.
+If something is correct but boring — it is WRONG.
 
 ---
 
-## Part 1 — Brief
-
-Rules:
-- One day, one theme.
-- Concrete lived situations only.
-- Do NOT describe poses, scenes, camera framing, or appearance.
-
-### Costume Lock (CRITICAL)
-If the concept implies a profession visually defined by clothing:
-- Define ONE fixed outfit for the entire pack.
-- High-level description only.
-- This outfit MUST remain consistent.
-
-If not applicable, explicitly state: outfit = "none".
-
-### Holiday Visual Anchors (MANDATORY if holiday)
-- Define 2–4 REQUIRED visual anchors (objects only).
-- Simple, handheld, easy to isolate.
-- Put outfit (or "none") first in visual_anchors.
-- At least HALF of the scenes must include an anchor.
-- Distribute anchors across the day.
-
-### Human Imperfection (MANDATORY)
-Include ONE subtle human tension (awkwardness, hesitation, confusion).
-- Must surface in at least one moment.
-- Must NOT be resolved.
+## CORE RULE
+Normal is forbidden.
+Safe is forbidden.
+Comfortable is forbidden.
 
 ---
 
-## Part 2 — Plan (16 Moments)
+## BRIEF PRINCIPLES
+- One clear social situation.
+- One emotional tension.
+- One uncomfortable truth.
 
-Structural requirement (CRITICAL):
-Divide the 16 moments into 4 consecutive emotional blocks:
-
-1–4:   Low-intensity / neutral
-5–8:   Everyday reactions
-9–12:  Expressive moments
-13–16: Decisive or closure moments
-
-Rules:
-- Exactly 16 moments.
-- Same day, same environment.
-- Avoid a perfect or inspirational arc.
-- Do NOT repeat the same reaction type across blocks.
-
-### Anti-Postcard Rule (CRITICAL)
-At least 3 moments MUST be socially imperfect or self-exposing.
-If a moment feels safe to post publicly, rewrite it.
-
-### Power archetype requirement (CRITICAL)
-The pack must include:
-- role switching (work / care / self)
-- visible contrast between roles
-- strength shown through posture, not activity
-
-At least 1 moment must represent quiet power:
-stillness, upright stance, grounded presence.
-
-### Strength definition
-Strength is shown by stability and presence,
-not by productivity or multitasking.
+Every pack must contain:
+- a moment people recognize but rarely admit
+- a reaction that feels slightly risky to send
+- contrast between "how it looks" and "how it feels"
 
 ---
 
-## OUTPUT HARD LIMITS (CRITICAL)
-- Output EXACTLY one JSON.
-- Field values must be short phrases.
-- Moments: max 8–10 words each.
-- No prose or explanations.
+## ANTI-POSTCARD RULE (CRITICAL)
+At least 70% of moments must break the "nice / ideal" image.
+Awkwardness, overreaction, silence, avoidance are REQUIRED.
 
 ---
 
-## OUTPUT SCHEMA
+## PLAN REQUIREMENTS
+- EXACTLY 16 moments.
+- Each moment must be sendable as a reaction.
+- If a moment feels neutral → discard it.
+- If a moment feels polite → discard it.
 
-Brief keys:
-- subject_type
-- setting
-- persona
-- tone
-- timeline ("one_day")
-- situation_types
-- shareability_hook
-- title_hint
-- visual_anchors
+---
 
-Plan keys:
-- id
-- pack_template_id
-- subject_mode
-- name_ru
-- name_en
-- carousel_description_ru
-- carousel_description_en
-- mood
-- sort_order
-- segment_id
-- story_arc
-- tone
-- moments (array of EXACTLY 16 strings)`;
+## SELF-CHECK
+If this pack would not make you say
+"oh no… that's me" — regenerate.
+
+---
+
+## OUTPUT (CRITICAL)
+Output EXACTLY one JSON. No prose.
+Field values: short phrases. Moments: max 8–10 words each.
+
+Brief keys: subject_type, setting, persona, tone, timeline ("one_day"), situation_types, shareability_hook, title_hint, visual_anchors (array; first item = outfit or "none" if N/A).
+
+Plan keys: id, pack_template_id, subject_mode, name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order, segment_id, story_arc, tone, moments (array of EXACTLY 16 strings).`;
 
 function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan: BossPlan } {
   const brief: ConceptBrief = {
@@ -387,75 +331,56 @@ async function runConceptAndPlan(request: string, subjectType: SubjectType): Pro
   return mapRawToBriefAndPlan(raw as unknown as BriefAndPlanRaw);
 }
 
-// --- Captions agent (docs/final-promt-16.md) ---
+// --- Captions agent — "VIRAL GATEKEEPER" ---
 const CAPTIONS_SYSTEM = `## Role
-Write captions users would actually send in a private chat.
-
-Captions are inner reactions or replies,
-NOT descriptions of actions.
+You write captions people hesitate to send — and send anyway.
 
 ---
 
-## Caption rule (CRITICAL)
-Captions must express a stance or conclusion,
-not describe an action or process.
-
-Forbidden:
-- describing what is happening
-- reassurance phrases
-- continuous tense (doing, replying, thinking)
-
-Required:
-- short, decisive phrases
-- 1–3 words preferred
-- position over explanation
-
-## Tone constraint
-Avoid motivational or inspirational language.
-Captions must feel calm, grounded, and slightly ironic.
+## CAPTION VALUES
+- Honesty > politeness
+- Recognition > beauty
+- Risk > safety
 
 ---
 
-## HARD RULES (STRICT)
-- EXACTLY 16 captions
-- First-person only
-- Very short, chat-like
-- No emojis
-- No narration
-- One caption per line
-- No alternatives
+## FORBIDDEN
+- describing actions
+- explaining emotions
+- neutral statements
+- literary language
+- motivational tone
 
 ---
 
-## STRUCTURE FOR 16 CAPTIONS (CRITICAL)
-
-1–4:   Calm, neutral, low-energy
-5–8:   Everyday conversational reactions
-9–12:  Clearly expressive reactions
-13–16: Decisive, confident, or closing statements
-
-Avoid repeating sentence structure across blocks.
-At least 3 captions must be non-hesitant and final.
+## REQUIRED
+- captions must feel slightly exposing
+- captions must work as standalone chat replies
+- captions must trigger recognition or tension
 
 ---
 
-## TONE
-Private, human, slightly imperfect.
-If a caption sounds performative, rewrite it.
-
-### If awkward_style = polite_internal
-- Polite on the surface, awkward inside
-- No overt sarcasm or mockery
-- Avoid explicit rejection or judgment
-- Prefer ellipses over irony words
-
-Avoid overusing hesitation words ("maybe", "I guess").
-Do NOT use them in more than half of the captions.
+## FORMAT RULES
+- 1–4 words max
+- broken grammar allowed
+- ellipses allowed
+- unfinished thoughts encouraged
 
 ---
 
-## OUTPUT
-Output as JSON:
+## SENDABILITY TEST (CRITICAL)
+If a caption feels 100% comfortable to send —
+it is INVALID.
+
+If a caption makes you hesitate for half a second —
+it is GOOD.
+
+REWRITE until at least 70% of captions feel risky.
+
+---
+
+## OUTPUT (CRITICAL)
+EXACTLY 16 captions. Output as JSON:
 - labels (array of 16 RU strings)
 - labels_en (array of 16 EN strings)`;
 
@@ -560,94 +485,67 @@ async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContex
   return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions" });
 }
 
-// --- Scenes agent (docs/final-promt-16.md) ---
+// --- Scenes agent — "VISUAL OVERREACTION ENGINE" ---
 const SCENES_SYSTEM = `## Role
-Write visual scene descriptions for image generation. ENGLISH ONLY.
+You design scenes that amplify emotion slightly beyond realism.
+Flat realism is forbidden. ENGLISH ONLY.
 
-You describe ONLY how the same person from the reference photo moves and reacts.
+---
+
+## CORE RULE
+Scenes must exaggerate emotion by 10–20%.
+If it feels subtle — push further.
+
+---
+
+## REQUIRED
+- visible tension in posture, hands, or face
+- moments of hesitation, freeze, or overreaction
+- silence must be readable
+
+---
+
+## ANTI-NEUTRAL RULE
+At least 10 scenes must look awkward,
+uncomfortable, or socially exposing.
+
+---
+
+## ANTI-DEVICE RULE
+No more than 2 scenes with phones or laptops.
+Overuse = failure.
+
+---
+
+## BREAKING EXPECTATION RULE
+Include moments where:
+- the subject does NOT act
+- the subject freezes, avoids, or withdraws
+- the subject reacts too much or too little
+
+---
+
+## SELF-CHECK
+If a scene looks like stock photography — discard it.
 
 ---
 
 ## SUBJECT LOCK (CRITICAL)
 - Each scene MUST start with \`{subject}\`
-- \`{subject}\` appears EXACTLY once
-- NEVER use pronouns instead
+- \`{subject}\` appears EXACTLY once per scene
+- NEVER use pronouns instead of {subject}
 - NEVER introduce other people
 
 ---
 
-## STRUCTURE FOR 16 SCENES (CRITICAL)
-
-1–4:   Minimal movement, restrained body language
-5–8:   Everyday gestures or interactions
-9–12:  Stronger body language or visible action
-13–16: Resolved posture, confidence, closure
-
-Do NOT reuse the same posture across blocks.
+## TECHNICAL
+- Chest-up framing. One clear body state. Max 1 prop. Simple background.
+- EXACTLY one sentence per scene. 12–18 words.
+- No speech, thought, or narrative verbs. Purely visual.
 
 ---
 
-## Power scene requirement (CRITICAL)
-Include exactly 1 scene where the subject stands still,
-upright, with open posture and grounded stance.
-No props. No action.
-Strength must be conveyed through body language alone.
-
-## Outfit change requirement (CRITICAL)
-Outfit changes must be visually obvious:
-- jacket on or off
-- layer added or removed
-- clear role shift
-
-Minor clothing adjustments do NOT count as outfit changes.
-Do not use: "outfit change", "adjusting clothes", "smoothing fabric" for subtle tweaks.
-
-## Symbolic props rule
-Each prop must represent a role:
-- work
-- care
-- responsibility
-- self
-
-Do not repeat the same prop more than twice.
-Avoid props that only signal routine.
-
-## Decision quota
-At least 4 scenes must show a resolved state
-(no thinking, no hesitation, no preparation).
-
----
-
-## SCENE RULES
-- Chest-up framing only
-- One clear body state
-- Max 1 prop, fully visible
-- Simple background only (wall, flat, gradient)
-
-Scenes must be purely visual.
-Do NOT use speech, thought, or narrative verbs.
-
-If a phone is present:
-- Message or call must be visible
-- No browsing or scrolling
-
-If holiday anchors are provided:
-- Use anchors in at least half of scenes
-- Anchors must be fully visible
-
----
-
-## STYLE LIMITS
-- EXACTLY one sentence per scene
-- 12–18 words
-- No metaphors
-- No cinematic language
-- No emotion words
-Describe only visible body position and interaction.
-
----
-
-## OUTPUT
+## OUTPUT (CRITICAL)
 Output ONLY scene_descriptions (array of EXACTLY 16 EN strings).`;
 
 async function runScenes(
@@ -663,49 +561,48 @@ async function runScenes(
   return { scene_descriptions: sceneDescriptions };
 }
 
-// --- Critic agent (docs/final-promt-16.md) ---
+// --- Critic agent — "NO MERCY MODE" ---
 const CRITIC_SYSTEM = `## Role
-Act as a strict quality gate for format and usability.
+You reject anything that would not be shared.
 
 ---
 
-## YOU MUST CHECK (CRITICAL)
-- Exactly 16 captions
-- Exactly 16 scenes
+## PASS CONDITIONS
+- at least 60% of stickers feel emotionally risky
+- at least 5 stickers feel awkward or too honest
+- captions are short, sharp, and uncomfortable
+- scenes exaggerate emotion slightly
+
+---
+
+## FAIL CONDITIONS
+- neutral emotions
+- polite reactions
+- "nice" vibes
+- anything that feels safe or generic
+
+---
+
+## CRITIC STANDARD
+If this pack feels "fine" — FAIL IT.
+If this pack feels "a bit much" — APPROVE IT.
+
+---
+
+## OUTPUT RULE
+Prefer false positives (rejecting too much)
+over letting boring packs pass.
+
+---
+
+## FORMAT CHECK (CRITICAL)
+- Exactly 16 captions, exactly 16 scenes
 - All scenes start with {subject} exactly once
-- Scene uniqueness
-- Rule compliance
-
-### Structural Check (NEW, CRITICAL)
-Verify presence of all 4 emotional blocks:
-- Low-intensity (1–4)
-- Everyday (5–8)
-- Expressive (9–12)
-- Decisive / closure (13–16)
-
-Fail the pack if:
-- Emotional intensity is flat across all 16
-- Final block lacks confident or resolved reactions
-- Scenes repeat posture or mode across blocks
-
-### Fail conditions for Quiet Super Woman
-- No clear power scene present
-- Outfit changes are subtle or unclear
-- Captions describe actions instead of positions
-- Strength is shown only through activity, not posture
 
 ---
 
-## OUTPUT LIMITS
-Reasons:
-- Max 3 bullets
-- Max 12 words each
-
-Suggestions:
-- Max 3 bullets
-- Max 12 words each
-
-No prose. No explanations.`;
+## OUTPUT
+JSON only: pass (boolean), reasons (array, max 3 items, max 12 words each), suggestions (array, max 3 items, max 12 words each). No prose.`;
 
 async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
   const model = await getModelForAgent("critic");
