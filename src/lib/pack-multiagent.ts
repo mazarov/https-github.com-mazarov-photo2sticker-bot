@@ -44,6 +44,12 @@ export interface BossPlan {
   tone: string;
   day_structure?: string[];
   moments: string[];
+  /** Visual commitment: 1-based scene numbers with visible outfit change (≥5). */
+  outfit_change_scenes?: number[];
+  /** Visual commitment: 1-based scene numbers with distinctive props (≥5). */
+  prop_scenes?: number[];
+  /** Visual commitment: 1-based scene numbers for hero/power moment (exactly 2). */
+  hero_scenes?: number[];
 }
 
 /** Плоский вывод объединённого агента Brief & Plan (поля брифa + плана в одном JSON). */
@@ -293,7 +299,7 @@ Field values: short phrases. Moments: max 8–10 words each.
 
 Brief keys: subject_type, setting, persona, tone, timeline ("one_day"), situation_types, shareability_hook, title_hint, visual_anchors (array; first item = outfit or "none" if N/A).
 
-Plan keys: id, pack_template_id, subject_mode, name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order, segment_id, story_arc, tone, moments (array of EXACTLY 16 strings).`;
+Plan keys: id, pack_template_id, subject_mode, name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order, segment_id, story_arc, tone, moments (array of EXACTLY 16 strings), outfit_change_scenes (array of 1-based scene numbers, at least 5), prop_scenes (array of 1-based scene numbers, at least 5), hero_scenes (array of exactly 2 1-based scene numbers).`;
 
 function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan: BossPlan } {
   const brief: ConceptBrief = {
@@ -322,6 +328,9 @@ function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan
     tone: raw.tone,
     day_structure: raw.day_structure,
     moments: (raw.moments ?? []).slice(0, PACK_STICKER_COUNT),
+    outfit_change_scenes: raw.outfit_change_scenes,
+    prop_scenes: raw.prop_scenes,
+    hero_scenes: raw.hero_scenes,
   };
   return { brief, plan };
 }
@@ -359,10 +368,26 @@ Risk > safety.
 ---
 
 ## FORMAT
-- 3 words max
+- 2–5 words
+- chat-like, first-person
 - broken grammar allowed
-- ellipses allowed
-- unfinished thoughts encouraged
+- ellipses and unfinished thoughts encouraged
+
+---
+
+## TONE EXAMPLES (reference only, do NOT copy)
+RU: "ну всё, я легла" / "а можно не надо" / "это не я" / "справлюсь. наверное" / "не трогай"
+EN: "handled." / "not now" / "oh no, that's me" / "fine. totally fine" / "leave me alone"
+
+---
+
+## STRUCTURE (16 captions in 4 blocks)
+1–4:   Quiet, grounded
+5–8:   Everyday, relatable
+9–12:  Sharp, reactive
+13–16: Decisive, closing
+
+Avoid same intensity across all 16.
 
 ---
 
@@ -451,6 +476,15 @@ function formatScenesUserMessage(
     lines.push(`${i + 1}. ${m}`);
   });
   lines.push("", `SUBJECT_MODE: ${plan.subject_mode ?? "single"}`, `OUTFIT: ${outfit}`);
+  if (Array.isArray(plan.outfit_change_scenes) && plan.outfit_change_scenes.length > 0) {
+    lines.push("", `OUTFIT_CHANGE_SCENES (must show visible clothing change): ${plan.outfit_change_scenes.join(", ")}`);
+  }
+  if (Array.isArray(plan.prop_scenes) && plan.prop_scenes.length > 0) {
+    lines.push("", `PROP_SCENES (must include eye-catching, non-routine prop): ${plan.prop_scenes.join(", ")}`);
+  }
+  if (Array.isArray(plan.hero_scenes) && plan.hero_scenes.length > 0) {
+    lines.push("", `HERO_SCENES (must stand out by posture, presence, or iconic prop): ${plan.hero_scenes.join(", ")}`);
+  }
   if (Array.isArray(visualAnchors) && visualAnchors.length > 0) {
     lines.push("", `VISUAL_ANCHORS: ${visualAnchors.join(", ")}`);
   }
@@ -553,6 +587,20 @@ If a scene feels "nice" — push it further.
 
 ---
 
+## RENDER CONTEXT (CRITICAL)
+These scenes will be rendered as stickers:
+- Flat background (no environment). Background will be removed later.
+- Do NOT describe rooms, doors, furniture, or walls.
+- Props must be handheld or on-body only.
+
+---
+
+## FRAMING
+- Default: chest-up (mid-torso to head).
+- For OUTFIT_CHANGE_SCENES: half-body (waist-up) allowed so clothing changes are clearly visible.
+
+---
+
 ## SUBJECT LOCK (CRITICAL)
 - Each scene MUST start with \`{subject}\`
 - \`{subject}\` appears EXACTLY once per scene
@@ -562,7 +610,7 @@ If a scene feels "nice" — push it further.
 ---
 
 ## TECHNICAL
-- Chest-up framing. One clear body state. Max 1 prop. Simple background.
+- One clear body state. Max 1 prop. Simple or flat background only.
 - EXACTLY one sentence per scene. 12–18 words.
 - No speech, thought, or narrative verbs. Purely visual.
 
@@ -614,6 +662,18 @@ If it feels "a bit much" — APPROVE IT.
 
 Prefer rejecting good packs
 over approving boring ones.
+
+---
+
+## TECHNICAL CHECK
+- Each scene must work as an isolated chest-up (or waist-up) sticker; no background-dependent staging (rooms, doors, large furniture).
+- No more than 3 scenes with the same body posture (e.g. arms crossed, hands on hips).
+
+---
+
+## EMOTIONAL ARC CHECK
+- Pack must have variety: quiet + everyday + sharp + decisive. If all 16 feel the same intensity — FAIL.
+- At least 2–3 quiet/grounded, 2–3 everyday, 2–3 sharp, 2–3 decisive or closing.
 
 ---
 
@@ -719,8 +779,9 @@ async function runScenesForIndices(
 }
 
 // --- Validation (docs/pack-batch-flow-9-scenes-rules.md, 16 in docs/final-promt-16.md) ---
-const CAPTION_MIN_CHARS = 15;
-const CAPTION_MAX_CHARS = 20;
+/** Allow 2–5 word captions (~2–25 chars). */
+const CAPTION_MIN_CHARS = 2;
+const CAPTION_MAX_CHARS = 30;
 const SCENE_MIN_WORDS = 12;
 const SCENE_MAX_WORDS = 18;
 
