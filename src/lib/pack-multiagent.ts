@@ -236,6 +236,7 @@ async function openAiChatJson<T>(
 const BRIEF_AND_PLAN_SYSTEM = `## Role
 Interpret the user request into a compact sticker pack brief
 and immediately expand it into a plan of exactly 16 distinct moments of one day.
+Think in terms of archetypes and roles, not "a day in the life".
 
 You output ONE JSON with brief and plan.
 
@@ -289,6 +290,19 @@ Rules:
 ### Anti-Postcard Rule (CRITICAL)
 At least 3 moments MUST be socially imperfect or self-exposing.
 If a moment feels safe to post publicly, rewrite it.
+
+### Power archetype requirement (CRITICAL)
+The pack must include:
+- role switching (work / care / self)
+- visible contrast between roles
+- strength shown through posture, not activity
+
+At least 1 moment must represent quiet power:
+stillness, upright stance, grounded presence.
+
+### Strength definition
+Strength is shown by stability and presence,
+not by productivity or multitasking.
 
 ---
 
@@ -379,6 +393,26 @@ Write captions users would actually send in a private chat.
 
 Captions are inner reactions or replies,
 NOT descriptions of actions.
+
+---
+
+## Caption rule (CRITICAL)
+Captions must express a stance or conclusion,
+not describe an action or process.
+
+Forbidden:
+- describing what is happening
+- reassurance phrases
+- continuous tense (doing, replying, thinking)
+
+Required:
+- short, decisive phrases
+- 1–3 words preferred
+- position over explanation
+
+## Tone constraint
+Avoid motivational or inspirational language.
+Captions must feel calm, grounded, and slightly ironic.
 
 ---
 
@@ -553,6 +587,37 @@ Do NOT reuse the same posture across blocks.
 
 ---
 
+## Power scene requirement (CRITICAL)
+Include exactly 1 scene where the subject stands still,
+upright, with open posture and grounded stance.
+No props. No action.
+Strength must be conveyed through body language alone.
+
+## Outfit change requirement (CRITICAL)
+Outfit changes must be visually obvious:
+- jacket on or off
+- layer added or removed
+- clear role shift
+
+Minor clothing adjustments do NOT count as outfit changes.
+Do not use: "outfit change", "adjusting clothes", "smoothing fabric" for subtle tweaks.
+
+## Symbolic props rule
+Each prop must represent a role:
+- work
+- care
+- responsibility
+- self
+
+Do not repeat the same prop more than twice.
+Avoid props that only signal routine.
+
+## Decision quota
+At least 4 scenes must show a resolved state
+(no thinking, no hesitation, no preparation).
+
+---
+
 ## SCENE RULES
 - Chest-up framing only
 - One clear body state
@@ -622,6 +687,12 @@ Fail the pack if:
 - Emotional intensity is flat across all 16
 - Final block lacks confident or resolved reactions
 - Scenes repeat posture or mode across blocks
+
+### Fail conditions for Quiet Super Woman
+- No clear power scene present
+- Outfit changes are subtle or unclear
+- Captions describe actions instead of positions
+- Strength is shown only through activity, not posture
 
 ---
 
