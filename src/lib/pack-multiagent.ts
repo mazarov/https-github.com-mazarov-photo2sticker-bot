@@ -381,13 +381,18 @@ EN: "handled." / "not now" / "oh no, that's me" / "fine. totally fine" / "leave 
 
 ---
 
-## STRUCTURE (16 captions in 4 blocks)
-1–4:   Quiet, grounded
-5–8:   Everyday, relatable
-9–12:  Sharp, reactive
-13–16: Decisive, closing
+## INDEX BINDING (CRITICAL)
+Caption N must be the chat reply for moment N only.
+labels[0] = reply for moment 1, labels[1] = reply for moment 2, … labels[15] = reply for moment 16.
+Do not assign captions by mood slot — assign by matching the situation in that moment.
 
-Avoid same intensity across all 16.
+## STRUCTURE (16 captions in 4 blocks)
+1–4:   Quiet, grounded (but still tied to moments 1–4)
+5–8:   Everyday, relatable (tied to moments 5–8)
+9–12:  Sharp, reactive (tied to moments 9–12)
+13–16: Decisive, closing (tied to moments 13–16)
+
+Avoid same intensity across all 16. Each caption must fit its moment.
 
 ---
 
@@ -423,9 +428,10 @@ If no — rewrite.
 ---
 
 ## OUTPUT (CRITICAL)
-EXACTLY 16 captions. Output as JSON:
-- labels (array of 16 RU strings)
-- labels_en (array of 16 EN strings)`;
+EXACTLY 16 captions. Order is binding: labels[i] and labels_en[i] are the chat reply for moment i+1 only.
+Output as JSON:
+- labels (array of 16 RU strings, index 0 = moment 1, … index 15 = moment 16)
+- labels_en (array of 16 EN strings, same order)`;
 
 export interface CriticFeedbackContext {
   suggestions: string[];
@@ -440,7 +446,7 @@ function formatCaptionsUserMessage(plan: BossPlan, criticFeedback?: CriticFeedba
   moments.forEach((m, i) => {
     lines.push(`${i + 1}. ${m}`);
   });
-  lines.push("", `TONE: ${plan.tone ?? ""}`, "", "Output labels and labels_en as JSON.");
+  lines.push("", `TONE: ${plan.tone ?? ""}`, "", "Write one caption per moment: caption 1 for moment 1, caption 2 for moment 2, … caption 16 for moment 16. Output labels and labels_en as JSON.");
   let msg = lines.join("\n");
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
@@ -488,7 +494,7 @@ function formatScenesUserMessage(
   if (Array.isArray(visualAnchors) && visualAnchors.length > 0) {
     lines.push("", `VISUAL_ANCHORS: ${visualAnchors.join(", ")}`);
   }
-  lines.push("", "Output scene_descriptions as JSON.");
+  lines.push("", "Write one scene per moment: scene 1 for moment 1, scene 2 for moment 2, … scene 16 for moment 16. Output scene_descriptions as JSON.");
   let msg = lines.join("\n");
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
@@ -617,7 +623,7 @@ These scenes will be rendered as stickers:
 ---
 
 ## OUTPUT (CRITICAL)
-Output ONLY scene_descriptions (array of EXACTLY 16 EN strings).`;
+Output ONLY scene_descriptions (array of EXACTLY 16 EN strings). Order is binding: scene_descriptions[0] = visual for moment 1, … scene_descriptions[15] = visual for moment 16.`;
 
 async function runScenes(
   plan: BossPlan,
@@ -674,6 +680,12 @@ over approving boring ones.
 ## EMOTIONAL ARC CHECK
 - Pack must have variety: quiet + everyday + sharp + decisive. If all 16 feel the same intensity — FAIL.
 - At least 2–3 quiet/grounded, 2–3 everyday, 2–3 sharp, 2–3 decisive or closing.
+
+---
+
+## CAPTION–SCENE MATCH (CRITICAL)
+- Caption N must match the situation/emotion of scene N. If caption 5 describes a different moment than what scene 5 shows — FAIL.
+- Reject if captions feel generic or shuffled (could apply to any sticker in the pack).
 
 ---
 
