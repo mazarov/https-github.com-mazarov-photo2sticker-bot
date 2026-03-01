@@ -208,12 +208,17 @@ async function translateLabelsEnToRu(labelsEn: string[]): Promise<string[]> {
   }
 }
 
-/** Ensure spec has Russian labels for pack_content_sets; if missing, translate from labels_en. */
+/** Ensure spec has Russian labels for pack_content_sets; if missing or same as EN, translate from labels_en. */
 async function ensureSpecLabelsRu(spec: PackSpecRow): Promise<PackSpecRow> {
   const en = spec.labels_en ?? [];
   const ru = spec.labels ?? [];
-  if (Array.isArray(ru) && ru.length >= en.length && ru.every((s) => s?.trim())) return spec;
   if (en.length === 0) return spec;
+  const ruMissingOrShort = !Array.isArray(ru) || ru.length < en.length;
+  const ruSameAsEn =
+    ru.length === en.length &&
+    en.every((e, i) => (ru[i] ?? "").trim().toLowerCase() === (e ?? "").trim().toLowerCase());
+  const ruHasBlanks = ru.length > 0 && !ru.every((s) => String(s ?? "").trim());
+  if (!ruMissingOrShort && !ruSameAsEn && !ruHasBlanks) return spec;
   const translated = await translateLabelsEnToRu(en);
   if (translated.length === 0) return spec;
   return { ...spec, labels: translated };
