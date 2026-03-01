@@ -3878,7 +3878,16 @@ async function handlePackMenuEntry(
     // Source of truth for pack catalog in current DB: pack_content_sets.
     const contentSets = await getActivePackContentSets();
     if (!contentSets?.length) {
-      await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang, ctx?.from?.id));
+      const isAdmin = config.adminIds.includes(telegramId);
+      const msg =
+        lang === "ru"
+          ? isAdmin
+            ? "Наборов пока нет. Используйте «Сгенерировать пак» в меню, чтобы создать первый."
+            : "Наборы пока не готовы."
+          : isAdmin
+            ? "No sets yet. Use «Generate pack» in the menu to create the first one."
+            : "Sets not ready yet.";
+      await ctx.reply(msg, getMainMenuKeyboard(lang, ctx?.from?.id));
       return;
     }
     const templateId = String(contentSets[0].pack_template_id || "couple_v1");
@@ -4007,6 +4016,7 @@ bot.hears(["📦 Создать пак", "📦 Create pack", "📦 Пак сти
 });
 
 // Menu: 🔄 Сгенерировать пак (admin only, test) — create session wait_pack_generate_request, ask for theme (docs/20-02-admin-generate-pack-menu-button.md)
+// When no content sets exist yet, admin can still generate the first pack (template_id default, pack_content_set_id null).
 bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId || !config.adminIds.includes(telegramId)) return;
@@ -4016,15 +4026,10 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
   const lang = user.lang || "en";
 
   const contentSets = await getActivePackContentSets();
-  if (!contentSets?.length) {
-    await ctx.reply(
-      lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.",
-      getMainMenuKeyboard(lang, telegramId)
-    );
-    return;
-  }
-  const templateId = String(contentSets[0].pack_template_id || "couple_v1");
-  const contentSetId = contentSets[0].id;
+  const templateId = contentSets?.length
+    ? String(contentSets[0].pack_template_id || "couple_v1")
+    : "couple_v1";
+  const contentSetId = contentSets?.length ? contentSets[0].id : null;
 
   await supabase
     .from("sessions")
@@ -4042,7 +4047,7 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
       flow_kind: "pack",
       session_rev: 1,
       pack_template_id: templateId,
-      pack_content_set_id: contentSetId,
+      ...(contentSetId != null && { pack_content_set_id: contentSetId }),
       subject_mode: "single",
       subject_gender: "female",
       env: config.appEnv,
