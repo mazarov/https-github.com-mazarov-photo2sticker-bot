@@ -364,6 +364,18 @@ function subjectGenderFromType(subjectType: SubjectType): "male" | "female" | "n
   return "neutral";
 }
 
+/** Parse subject type from theme request text when user explicitly mentions men/male or women/female. Overrides session when theme says e.g. "(Men)" or "Single male." */
+export function parseSubjectTypeFromThemeRequest(request: string): SubjectType | null {
+  if (!request || typeof request !== "string") return null;
+  const maleHints = /\b(men|male|мужчин|мужск|для мужчин|single male)\b|\(men\)|\(m\)/i;
+  const femaleHints = /\b(women|female|женщин|женск|для женщин|single female)\b|\(women\)|\(w\)/i;
+  const hasMale = maleHints.test(request);
+  const hasFemale = femaleHints.test(request);
+  if (hasMale && !hasFemale) return "single_male";
+  if (hasFemale && !hasMale) return "single_female";
+  return null;
+}
+
 // --- Captions — shareability filter ---
 const CAPTIONS_SYSTEM = `## Role
 You write captions people hesitate to send — and send anyway.
@@ -519,7 +531,7 @@ function formatScenesUserMessage(
   const gender = subjectGenderFromType(subjectType);
   lines.push("", `SUBJECT_MODE: ${plan.subject_mode ?? "single"}`);
   if (gender !== "neutral") {
-    lines.push(`SUBJECT_GENDER: ${gender}. Describe a ${gender === "male" ? "man" : "woman"} — posture, expression, and styling must match.`);
+    lines.push(`SUBJECT_GENDER: ${gender}. The person in the photo is ${gender === "male" ? "male" : "female"} — describe posture, expression, and styling to match. Do NOT write "man", "woman", "male", or "female" in the scene text; use only {subject}.`);
   }
   lines.push(`OUTFIT: ${outfit}`);
   if (Array.isArray(plan.outfit_change_scenes) && plan.outfit_change_scenes.length > 0) {
@@ -678,6 +690,7 @@ These scenes will be rendered as stickers:
 - \`{subject}\` appears EXACTLY once per scene
 - NEVER use pronouns instead of {subject}
 - NEVER introduce other people
+- FORBIDDEN in scene text: the words "man", "woman", "male", "female", "boy", "girl", "dark-bob woman", "young man", etc. Do NOT name the gender in the description. Use ONLY \`{subject}\` for the person. SUBJECT_GENDER (in the user message) tells you who to describe so posture and styling match; the scene output must contain only \`{subject}\`, e.g. "{subject} chest-up, arms crossed, ..." not "{subject} woman chest-up ..."
 
 ---
 
@@ -846,7 +859,7 @@ async function runScenesForIndices(
     "\n\nSUBJECT_MODE: " +
     (plan.subject_mode ?? "single");
   if (gender !== "neutral") {
-    flatPlan += `\nSUBJECT_GENDER: ${gender}. Describe a ${gender === "male" ? "man" : "woman"}.`;
+    flatPlan += `\nSUBJECT_GENDER: ${gender}. Person is ${gender}. Do NOT write "man" or "woman" in scene text — use only {subject}.`;
   }
   flatPlan += "\nOUTFIT: " + outfit;
   if (Array.isArray(visualAnchors) && visualAnchors.length > 0) {

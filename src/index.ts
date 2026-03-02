@@ -50,6 +50,7 @@ import {
   runPackGenerationPipeline,
   reworkOneIteration,
   specToMinimalPlan,
+  parseSubjectTypeFromThemeRequest,
   subjectTypeFromSession,
   type PackSpecRow,
   type BossPlan,
@@ -6298,7 +6299,7 @@ bot.on("text", async (ctx) => {
     };
     let result: Awaited<ReturnType<typeof runPackGenerationPipeline>>;
     try {
-      const subjectType = subjectTypeFromSession(session);
+      const subjectType = parseSubjectTypeFromThemeRequest(request) ?? subjectTypeFromSession(session);
       result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2, onProgress });
     } finally {
       await supabase
