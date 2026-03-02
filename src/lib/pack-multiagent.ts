@@ -364,11 +364,11 @@ function subjectGenderFromType(subjectType: SubjectType): "male" | "female" | "n
   return "neutral";
 }
 
-/** Parse subject type from theme request text when user explicitly mentions men/male or women/female. Overrides session when theme says e.g. "(Men)" or "Single male." */
+/** Parse subject type from theme request text when user explicitly mentions men/male or women/female. Overrides session when theme says e.g. "(Men)", "Single male.", "A man who". */
 export function parseSubjectTypeFromThemeRequest(request: string): SubjectType | null {
   if (!request || typeof request !== "string") return null;
-  const maleHints = /\b(men|male|мужчин|мужск|для мужчин|single male)\b|\(men\)|\(m\)/i;
-  const femaleHints = /\b(women|female|женщин|женск|для женщин|single female)\b|\(women\)|\(w\)/i;
+  const maleHints = /\b(man|men|male|мужчин|мужск|для мужчин|single male)\b|\(men\)|\(m\)|^he\s|\she\s/i;
+  const femaleHints = /\b(woman|women|female|женщин|женск|для женщин|single female)\b|\(women\)|\(w\)|^she\s|\sshe\s/i;
   const hasMale = maleHints.test(request);
   const hasFemale = femaleHints.test(request);
   if (hasMale && !hasFemale) return "single_male";
