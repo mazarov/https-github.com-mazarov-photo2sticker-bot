@@ -412,6 +412,18 @@ Avoid same intensity across all 16. Each caption must fit its moment.
 
 ---
 
+## CAPTION SHARPNESS RULE
+Reject captions that feel descriptive or passive.
+Prefer reactions that sound like a reflex.
+
+---
+
+## BAN ABSTRACT REACTIONS
+Avoid captions like "logic", "silence", "small smile".
+Use concrete, sendable reactions, not abstract labels.
+
+---
+
 ## SENDABILITY GATE (CRITICAL)
 If a caption feels 100% comfortable to send —
 it is INVALID.
@@ -584,6 +596,32 @@ uncomfortable, frozen, or overreactive.
 
 ## ANTI-DEVICE RULE
 No more than 3 scenes with phones or laptops.
+
+---
+
+## PROP USAGE LIMIT (CRITICAL)
+No more than 6 scenes may include eye-catching or playful props.
+Remaining scenes must rely on posture, face, or stillness only.
+Props are a special effect, not the base.
+
+---
+
+## STATE VARIATION RULE
+Across the pack, the subject must visibly shift between:
+- confused
+- skeptical
+- amused
+- firm
+- withdrawn
+- relaxed
+Outfit or styling alone does not count as variation.
+
+---
+
+## NO REPEATED GIMMICKS
+Do not reuse the same visual trick
+(red lipstick emphasis, raised eyebrow exaggeration, props)
+more than twice across the pack.
 
 ---
 
