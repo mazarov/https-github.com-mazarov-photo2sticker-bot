@@ -299,7 +299,7 @@ Field values: short phrases. Moments: max 8–10 words each.
 
 Brief keys: subject_type, setting, persona, tone, timeline ("one_day"), situation_types, shareability_hook, title_hint, visual_anchors (array; first item = outfit or "none" if N/A).
 
-Plan keys: id, pack_template_id, subject_mode, name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order, segment_id, story_arc, tone, moments (array of EXACTLY 16 strings), outfit_change_scenes (array of 1-based scene numbers, at least 5), prop_scenes (array of 1-based scene numbers, at least 5), hero_scenes (array of exactly 2 1-based scene numbers).`;
+Plan keys: id, pack_template_id, subject_mode (MUST be exactly "single" or "multi", never "photo"), name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order, segment_id, story_arc, tone, moments (array of EXACTLY 16 strings), outfit_change_scenes (array of 1-based scene numbers, at least 5), prop_scenes (array of 1-based scene numbers, at least 5), hero_scenes (array of exactly 2 1-based scene numbers).`;
 
 function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan: BossPlan } {
   const brief: ConceptBrief = {
@@ -347,6 +347,21 @@ async function runConceptAndPlan(request: string, subjectType: SubjectType): Pro
     return { brief, plan };
   }
   return mapRawToBriefAndPlan(raw as unknown as BriefAndPlanRaw);
+}
+
+/** Normalize plan.subject_mode from subjectType (model sometimes returns "photo" or wrong value). */
+function normalizePlanSubjectMode(plan: BossPlan, subjectType: SubjectType): void {
+  const mode = subjectType === "couple" ? "multi" : "single";
+  if (plan.subject_mode !== "single" && plan.subject_mode !== "multi") {
+    plan.subject_mode = mode;
+  }
+}
+
+/** Subject gender for Captions (RU grammar) and Scenes (who we describe). */
+function subjectGenderFromType(subjectType: SubjectType): "male" | "female" | "neutral" {
+  if (subjectType === "single_male") return "male";
+  if (subjectType === "single_female") return "female";
+  return "neutral";
 }
 
 // --- Captions — shareability filter ---
@@ -452,13 +467,20 @@ export interface CriticFeedbackContext {
 }
 
 // Slim + flat context per agent (docs/26-02-pack-agents-slim-context-tz.md: Level 1 + Level 2)
-function formatCaptionsUserMessage(plan: BossPlan, criticFeedback?: CriticFeedbackContext): string {
+function formatCaptionsUserMessage(plan: BossPlan, subjectType: SubjectType, criticFeedback?: CriticFeedbackContext): string {
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
   const lines: string[] = ["MOMENTS:"];
   moments.forEach((m, i) => {
     lines.push(`${i + 1}. ${m}`);
   });
-  lines.push("", `TONE: ${plan.tone ?? ""}`, "", "Write one caption per moment: caption 1 for moment 1, caption 2 for moment 2, … caption 16 for moment 16. Output labels and labels_en as JSON.");
+  const gender = subjectGenderFromType(subjectType);
+  lines.push("", `TONE: ${plan.tone ?? ""}`);
+  if (gender === "male") {
+    lines.push("", "SUBJECT: male. Russian labels (labels) MUST use masculine grammatical forms: e.g. видел, понял, сделал — NOT feminine (видела, поняла).");
+  } else if (gender === "female") {
+    lines.push("", "SUBJECT: female. Russian labels (labels) MUST use feminine grammatical forms: e.g. видела, поняла, сделала — NOT masculine.");
+  }
+  lines.push("", "Write one caption per moment: caption 1 for moment 1, caption 2 for moment 2, … caption 16 for moment 16. Output labels and labels_en as JSON.");
   let msg = lines.join("\n");
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
@@ -485,6 +507,7 @@ function formatCaptionsUserMessage(plan: BossPlan, criticFeedback?: CriticFeedba
 function formatScenesUserMessage(
   plan: BossPlan,
   outfit: string,
+  subjectType: SubjectType,
   criticFeedback?: CriticFeedbackContext,
   visualAnchors?: string[]
 ): string {
@@ -493,7 +516,12 @@ function formatScenesUserMessage(
   moments.forEach((m, i) => {
     lines.push(`${i + 1}. ${m}`);
   });
-  lines.push("", `SUBJECT_MODE: ${plan.subject_mode ?? "single"}`, `OUTFIT: ${outfit}`);
+  const gender = subjectGenderFromType(subjectType);
+  lines.push("", `SUBJECT_MODE: ${plan.subject_mode ?? "single"}`);
+  if (gender !== "neutral") {
+    lines.push(`SUBJECT_GENDER: ${gender}. Describe a ${gender === "male" ? "man" : "woman"} — posture, expression, and styling must match.`);
+  }
+  lines.push(`OUTFIT: ${outfit}`);
   if (Array.isArray(plan.outfit_change_scenes) && plan.outfit_change_scenes.length > 0) {
     lines.push("", `OUTFIT_CHANGE_SCENES (must show visible clothing change): ${plan.outfit_change_scenes.join(", ")}`);
   }
@@ -549,9 +577,9 @@ function formatCriticUserMessage(spec: PackSpecRow): string {
   return lines.join("\n");
 }
 
-async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContext): Promise<CaptionsOutput> {
+async function runCaptions(plan: BossPlan, subjectType: SubjectType, criticFeedback?: CriticFeedbackContext): Promise<CaptionsOutput> {
   const model = await getModelForAgent("captions");
-  const userMessage = formatCaptionsUserMessage(plan, criticFeedback);
+  const userMessage = formatCaptionsUserMessage(plan, subjectType, criticFeedback);
   return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions" });
 }
 
@@ -666,11 +694,12 @@ Output ONLY scene_descriptions (array of EXACTLY 16 EN strings). Order is bindin
 async function runScenes(
   plan: BossPlan,
   outfit: string,
+  subjectType: SubjectType,
   criticFeedback?: CriticFeedbackContext,
   visualAnchors?: string[]
 ): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
-  const userMessage = formatScenesUserMessage(plan, outfit, criticFeedback, visualAnchors);
+  const userMessage = formatScenesUserMessage(plan, outfit, subjectType, criticFeedback, visualAnchors);
   const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes" });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, PACK_STICKER_COUNT) : [];
   return { scene_descriptions: sceneDescriptions };
@@ -771,6 +800,7 @@ function parseCriticIndices(reasons: string[] | undefined, suggestions: string[]
 /** Regenerate only captions at given 0-based indices. Returns arrays in same order as indices. */
 async function runCaptionsForIndices(
   plan: BossPlan,
+  subjectType: SubjectType,
   criticContext: CriticFeedbackContext,
   indices: number[]
 ): Promise<{ labels: string[]; labels_en: string[] }> {
@@ -778,7 +808,10 @@ async function runCaptionsForIndices(
   const model = await getModelForAgent("captions");
   const prev = criticContext.previousSpec;
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
-  const flatPlan = "MOMENTS:\n" + moments.map((m, i) => `${i + 1}. ${m}`).join("\n") + "\n\nTONE: " + (plan.tone ?? "");
+  const gender = subjectGenderFromType(subjectType);
+  let flatPlan = "MOMENTS:\n" + moments.map((m, i) => `${i + 1}. ${m}`).join("\n") + "\n\nTONE: " + (plan.tone ?? "");
+  if (gender === "male") flatPlan += "\n\nSUBJECT: male. Russian labels MUST use masculine forms (видел, понял), NOT feminine (видела, поняла).";
+  else if (gender === "female") flatPlan += "\n\nSUBJECT: female. Russian labels MUST use feminine forms (видела, поняла).";
   const userMessage =
     `The critic rejected specific captions. Regenerate ONLY the captions at 0-based indices: ${JSON.stringify(indices)}.\n\n` +
     `${flatPlan}\n\n` +
@@ -797,6 +830,7 @@ async function runCaptionsForIndices(
 async function runScenesForIndices(
   plan: BossPlan,
   outfit: string,
+  subjectType: SubjectType,
   criticContext: CriticFeedbackContext,
   indices: number[],
   visualAnchors?: string[]
@@ -805,13 +839,16 @@ async function runScenesForIndices(
   const model = await getModelForAgent("scenes");
   const prev = criticContext.previousSpec;
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
+  const gender = subjectGenderFromType(subjectType);
   let flatPlan =
     "MOMENTS:\n" +
     moments.map((m, i) => `${i + 1}. ${m}`).join("\n") +
     "\n\nSUBJECT_MODE: " +
-    (plan.subject_mode ?? "single") +
-    "\nOUTFIT: " +
-    outfit;
+    (plan.subject_mode ?? "single");
+  if (gender !== "neutral") {
+    flatPlan += `\nSUBJECT_GENDER: ${gender}. Describe a ${gender === "male" ? "man" : "woman"}.`;
+  }
+  flatPlan += "\nOUTFIT: " + outfit;
   if (Array.isArray(visualAnchors) && visualAnchors.length > 0) {
     flatPlan += "\nVISUAL_ANCHORS: " + visualAnchors.join(", ");
   }
@@ -949,13 +986,15 @@ export async function runPackGenerationPipeline(
     console.log(stageLabel("brief_and_plan"), "done in", Date.now() - t0, "ms");
     await onProgress?.("brief_and_plan");
 
+    normalizePlanSubjectMode(plan, subjectType);
+
     const outfit = brief?.visual_anchors?.[0] ?? "none";
     const t2 = Date.now();
     let captions: CaptionsOutput;
     let scenes: ScenesOutput;
     [captions, scenes] = await Promise.all([
-      wrapStage("captions", () => runCaptions(plan)),
-      wrapStage("scenes", () => runScenes(plan, outfit, undefined, brief.visual_anchors)),
+      wrapStage("captions", () => runCaptions(plan, subjectType)),
+      wrapStage("scenes", () => runScenes(plan, outfit, subjectType, undefined, brief.visual_anchors)),
     ]);
     console.log("[pack-multiagent] captions + scenes (parallel) done in", Date.now() - t2, "ms");
     await onProgress?.("captions");
@@ -1004,7 +1043,7 @@ export async function runPackGenerationPipeline(
       const tRework = Date.now();
       const [captionsRework, scenesRework] = await Promise.all([
         usePartialCaptions
-          ? wrapStage("captions_rework", () => runCaptionsForIndices(plan, criticContext, captionIndices)).then((partial) => {
+          ? wrapStage("captions_rework", () => runCaptionsForIndices(plan, subjectType, criticContext, captionIndices)).then((partial) => {
               const nextLabels = [...(spec.labels ?? [])];
               const nextLabelsEn = [...(spec.labels_en ?? [])];
               captionIndices.forEach((idx, j) => {
@@ -1013,16 +1052,16 @@ export async function runPackGenerationPipeline(
               });
               return { labels: nextLabels.slice(0, PACK_STICKER_COUNT), labels_en: nextLabelsEn.slice(0, PACK_STICKER_COUNT) };
             })
-          : wrapStage("captions_rework", () => runCaptions(plan, criticContext)),
+          : wrapStage("captions_rework", () => runCaptions(plan, subjectType, criticContext)),
         usePartialScenes
-          ? wrapStage("scenes_rework", () => runScenesForIndices(plan, outfit, criticContext, sceneIndices, brief.visual_anchors)).then((partial) => {
+          ? wrapStage("scenes_rework", () => runScenesForIndices(plan, outfit, subjectType, criticContext, sceneIndices, brief.visual_anchors)).then((partial) => {
               const nextScenes = [...(spec.scene_descriptions ?? [])];
               sceneIndices.forEach((idx, j) => {
                 if (partial.scene_descriptions[j] != null) nextScenes[idx] = partial.scene_descriptions[j];
               });
               return { scene_descriptions: nextScenes.slice(0, PACK_STICKER_COUNT), scene_descriptions_ru: spec.scene_descriptions_ru ? spec.scene_descriptions_ru.slice(0, PACK_STICKER_COUNT) : [] };
             })
-          : wrapStage("scenes_rework", () => runScenes(plan, outfit, criticContext, brief.visual_anchors)),
+          : wrapStage("scenes_rework", () => runScenes(plan, outfit, subjectType, criticContext, brief.visual_anchors)),
       ]);
       captions = captionsRework as CaptionsOutput;
       scenes = scenesRework as ScenesOutput;
@@ -1056,6 +1095,7 @@ export async function runPackGenerationPipeline(
  */
 export async function reworkOneIteration(
   plan: BossPlan,
+  subjectType: SubjectType,
   suggestions: string[],
   previousSpec?: PackSpecRow | null,
   reasons?: string[] | null
@@ -1071,8 +1111,8 @@ export async function reworkOneIteration(
     !!criticContext.previousSpec;
   const outfit = "none";
   const [captions, scenes] = await Promise.all([
-    runCaptions(plan, hasContext ? criticContext : undefined),
-    runScenes(plan, outfit, hasContext ? criticContext : undefined),
+    runCaptions(plan, subjectType, hasContext ? criticContext : undefined),
+    runScenes(plan, outfit, subjectType, hasContext ? criticContext : undefined),
   ]);
   const spec = assembleSpec(plan, captions, scenes);
   const critic = await runCritic(spec);

@@ -4678,14 +4678,15 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
     let previousSpec: PackSpecRow | null = (session.pending_rejected_pack_spec as PackSpecRow | null) ?? null;
     let reworkSuggestions = suggestions;
     let reworkReasons = (reasons?.length ?? 0) > 0 ? reasons : undefined;
-    let result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons);
+    const reworkSubjectType = subjectTypeFromSession(session);
+    let result = await reworkOneIteration(reworkPlan, reworkSubjectType, reworkSuggestions, previousSpec, reworkReasons);
     let spec = result.spec;
     let critic = result.critic;
     if (!critic.pass) {
       previousSpec = spec;
       reworkSuggestions = critic.suggestions ?? [];
       reworkReasons = critic.reasons ?? [];
-      result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons.length ? reworkReasons : undefined);
+      result = await reworkOneIteration(reworkPlan, reworkSubjectType, reworkSuggestions, previousSpec, reworkReasons.length ? reworkReasons : undefined);
       spec = result.spec;
       critic = result.critic;
     }
@@ -6167,7 +6168,7 @@ bot.on("text", async (ctx) => {
     }
     const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Переделываю по твоему фидбеку…" : "⏳ Reworking with your feedback…").catch(() => null);
     try {
-      const result = await reworkOneIteration(plan, [userFeedback], undefined, undefined);
+      const result = await reworkOneIteration(plan, subjectTypeFromSession(session), [userFeedback], undefined, undefined);
       const spec = result.spec;
       const critic = result.critic;
       await supabase
