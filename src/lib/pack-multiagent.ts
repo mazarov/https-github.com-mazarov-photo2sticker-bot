@@ -8,6 +8,9 @@ import axios from "axios";
 import { config } from "../config";
 import { getAppConfig } from "./app-config";
 
+/** Number of stickers in pack (docs/28-02-pack-sticker-count-9-to-16.md, docs/final-promt-16.md). */
+const PACK_STICKER_COUNT = 16;
+
 // --- Subject type for photo context (from Gemini detector) ---
 export type SubjectType = "single_male" | "single_female" | "couple" | "unknown";
 
@@ -41,6 +44,12 @@ export interface BossPlan {
   tone: string;
   day_structure?: string[];
   moments: string[];
+  /** Visual commitment: 1-based scene numbers with visible outfit change (≥5). */
+  outfit_change_scenes?: number[];
+  /** Visual commitment: 1-based scene numbers with distinctive props (≥5). */
+  prop_scenes?: number[];
+  /** Visual commitment: 1-based scene numbers for hero/power moment (exactly 2). */
+  hero_scenes?: number[];
 }
 
 /** Плоский вывод объединённого агента Brief & Plan (поля брифa + плана в одном JSON). */
@@ -141,15 +150,15 @@ export interface PackGenerationResult {
 export const PACK_AGENT_APP_CONFIG_KEYS = {
   /** Brief & Plan — запрос + фото → бриф и план пака в одном вызове (объединённый Concept + Boss) */
   brief_and_plan: "pack_openai_model_brief_and_plan",
-  /** Captions — план → 9 подписей RU + EN */
+  /** Captions — план → 16 подписей RU + EN */
   captions: "pack_openai_model_captions",
-  /** Scenes — план → 9 scene_descriptions с {subject} */
+  /** Scenes — план → 16 scene_descriptions с {subject} */
   scenes: "pack_openai_model_scenes",
   /** Critic — полный спек → pass/fail + reasons + suggestions (строгий gate) */
   critic: "pack_openai_model_critic",
 } as const;
 
-const OPENAI_TIMEOUT_MS = 180_000;
+const OPENAI_TIMEOUT_MS = 300_000;
 
 /** Модель берётся только из app_config (ключи PACK_AGENT_APP_CONFIG_KEYS). Дефолтов в коде нет. */
 async function getModelForAgent(agent: keyof typeof PACK_AGENT_APP_CONFIG_KEYS): Promise<string> {
@@ -169,7 +178,7 @@ async function openAiChatJson<T>(
   model: string,
   systemPrompt: string,
   userMessage: string,
-  options?: { temperature?: number; agentLabel?: string }
+  options?: { temperature?: number; agentLabel?: string; maxCompletionTokens?: number }
 ): Promise<T> {
   if (!config.openaiApiKey) {
     throw new Error("OPENAI_API_KEY is not set; pack pipeline requires OpenAI.");
@@ -193,6 +202,9 @@ async function openAiChatJson<T>(
     response_format: { type: "json_object" },
     temperature: options?.temperature ?? 1,
   };
+  if (typeof options?.maxCompletionTokens === "number" && options.maxCompletionTokens > 0) {
+    body.max_completion_tokens = options.maxCompletionTokens;
+  }
   const response = await axios.post(
     "https://api.openai.com/v1/chat/completions",
     body,
@@ -229,127 +241,68 @@ async function openAiChatJson<T>(
   return JSON.parse(text) as T;
 }
 
-// --- Brief & Plan agent (Concept + Boss in one call) ---
+// --- Brief & Plan — idea generator + strict plan ---
 const BRIEF_AND_PLAN_SYSTEM = `## Role
-Interpret the user request into a compact sticker pack brief
-and immediately expand it into a plan of exactly 9 distinct moments of one day.
-
-You output ONE JSON with brief and plan.
+You create sticker pack concepts people WANT to SEND.
+If something is correct but boring — it is WRONG.
 
 ---
 
-## Part 1 — Brief (Concept)
-
-Rules:
-- One day, one theme.
-- Concrete lived situations only.
-- Do NOT describe poses, scenes, camera framing, or appearance.
-
-### If awkwardness is required
-- awkward_style = polite_internal
-- Reactions must stay socially polite on the surface
-- Awkwardness is internal, not expressive
-- Do NOT plan moments that openly reject, judge, or mock gifts or people
-
-### Costume Lock (CRITICAL)
-If the concept implies a profession or role visually defined by clothing
-(e.g. soldier, war correspondent, doctor, pilot, chef):
-
-- Define ONE fixed outfit for the entire pack.
-- Describe it at a high level only.
-- This outfit MUST remain the same across all moments.
-
-If no such role is implied, explicitly state: outfit = "none".
-
-### Holiday Visual Anchors (MANDATORY)
-If the theme is a holiday or celebration (e.g. March 8, Valentine's Day, birthday):
-- Define 2–4 REQUIRED visual anchors (objects only).
-- Examples: flowers, bouquet, gift box, card, ribbon, envelope, candle.
-- These anchors represent the holiday visually.
-- They must be simple, handheld, and easy to isolate.
-- Put outfit (or "none") first in visual_anchors, then these objects.
-- At least HALF of the scenes must include one anchor.
-- Distribute anchors across the day, not only consecutively.
-Do NOT replace celebration with neutral daily activities.
-If a moment feels like a normal workday, rewrite it.
-
-### Human Imperfection (MANDATORY)
-Include ONE human tension that would feel
-slightly embarrassing, confusing, or socially uncomfortable
-to share in a private chat.
-
-This tension MUST NOT be resolved.
-This tension MUST visibly surface in at least one moment.
+## CORE PRINCIPLE
+Shareability > correctness.
+Risk > comfort.
+Recognition > beauty.
 
 ---
 
-## Part 2 — Plan (9 Moments)
-
-Expected phrases (tone reference, stay close to this style):
-
-Rules:
-- Exactly 9 moments.
-- Same day, same environment.
-- Avoid a perfect or inspirational arc.
-- Balance energy: calm, awkward, tense, overreactive.
-
-### Holiday: Celebratory Moments Quota (MANDATORY)
-If the theme is a holiday:
-- At least 4 of the 9 moments must be explicitly celebratory.
-- Celebratory means: receiving, holding, reacting to, or thinking about a gift or attention.
-- Do NOT replace celebration with neutral daily activities.
-
-### Anti-Postcard Rule (CRITICAL)
-At least 2 moments MUST be clearly uncomfortable,
-self-exposing, or socially imperfect.
-
-If a moment feels safe to post publicly,
-it is NOT anti-postcard enough.
-
-Do NOT smooth or justify these moments.
+## BRIEF RULES
+- One clear social situation.
+- One emotional tension.
+- One uncomfortable or revealing truth.
 
 ---
 
-## OUTPUT HARD LIMITS (CRITICAL)
-
-- Output EXACTLY one JSON object.
-- Total JSON length MUST be under 600 characters.
-- If the limit is exceeded:
-  - Prioritize moments and visual_anchors.
-  - Keep names and carousel descriptions minimal.
-- Field values MUST be short phrases, not sentences.
-- Moments: max 8–10 words each.
-- No prose. No explanations. No commentary.
+## ANTI-COMFORT RULE (CRITICAL)
+At least 80% of moments must feel slightly awkward,
+too honest, or socially risky to send.
 
 ---
 
-## OUTPUT SCHEMA
+## STRUCTURE
+Create EXACTLY 16 moments forming one pack.
 
-Brief keys:
-- subject_type (single_male | single_female | couple | unknown)
-- setting
-- persona
-- tone
-- timeline ("one_day")
-- situation_types (array)
-- shareability_hook
-- title_hint
-- visual_anchors (array, first = outfit or "none")
+---
 
-Plan keys:
-- id (snake_case)
-- pack_template_id
-- subject_mode (single | multi)
-- name_ru
-- name_en
-- carousel_description_ru
-- carousel_description_en
-- mood
-- sort_order (number)
-- segment_id
-- story_arc (short phrase, may include mismatch)
-- tone
-- moments (array of EXACTLY 9 strings)`;
+## VISUAL COMMITMENT STEP (CRITICAL)
+Before writing moments, explicitly commit to:
+- which scene numbers include visible outfit changes (at least 5)
+- which scene numbers include distinctive, eye-catching props (at least 5)
+- which scene number is the hero / power moment (exactly 2)
+
+This commitment must be part of the plan
+and must be followed exactly by Scenes.
+
+---
+
+## ROLE-SWITCH LOGIC
+When the role changes (work / care / self / power),
+a corresponding outfit or gear change is REQUIRED.
+
+---
+
+## SELF-CHECK
+If this pack would not make someone say
+"oh no… that's me" — regenerate.
+
+---
+
+## OUTPUT (CRITICAL)
+Output EXACTLY one JSON. No prose.
+Field values: short phrases. Moments: max 8–10 words each.
+
+Brief keys: subject_type, setting, persona, tone, timeline ("one_day"), situation_types, shareability_hook, title_hint, visual_anchors (array; first item = outfit or "none" if N/A).
+
+Plan keys: id, pack_template_id, subject_mode (MUST be exactly "single" or "multi", never "photo"), name_ru, name_en, carousel_description_ru, carousel_description_en, mood, sort_order, segment_id, story_arc, tone, moments (array of EXACTLY 16 strings), outfit_change_scenes (array of 1-based scene numbers, at least 5), prop_scenes (array of 1-based scene numbers, at least 5), hero_scenes (array of exactly 2 1-based scene numbers).`;
 
 function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan: BossPlan } {
   const brief: ConceptBrief = {
@@ -377,7 +330,10 @@ function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan
     story_arc: raw.story_arc,
     tone: raw.tone,
     day_structure: raw.day_structure,
-    moments: raw.moments ?? [],
+    moments: (raw.moments ?? []).slice(0, PACK_STICKER_COUNT),
+    outfit_change_scenes: raw.outfit_change_scenes,
+    prop_scenes: raw.prop_scenes,
+    hero_scenes: raw.hero_scenes,
   };
   return { brief, plan };
 }
@@ -385,72 +341,144 @@ function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan
 async function runConceptAndPlan(request: string, subjectType: SubjectType): Promise<{ brief: ConceptBrief; plan: BossPlan }> {
   const model = await getModelForAgent("brief_and_plan");
   const userMessage = `User request: ${request}\n\nPhoto context (subject_type): ${subjectType}\n\nOutput the combined brief and plan as a single JSON.`;
-  const raw = await openAiChatJson<BriefAndPlanRaw | { brief: ConceptBrief; plan: BossPlan }>(model, BRIEF_AND_PLAN_SYSTEM, userMessage, { agentLabel: "brief_and_plan" });
+  const raw = await openAiChatJson<BriefAndPlanRaw | { brief: ConceptBrief; plan: BossPlan }>(model, BRIEF_AND_PLAN_SYSTEM, userMessage, {
+    agentLabel: "brief_and_plan",
+    maxCompletionTokens: 2200,
+  });
   // Модель может вернуть вложенный { brief, plan } или плоский объект со всеми полями
   if (raw && typeof raw === "object" && "plan" in raw && raw.plan && typeof raw.plan === "object" && "moments" in raw.plan) {
     const plan = raw.plan as BossPlan;
+    plan.moments = (plan.moments ?? []).slice(0, PACK_STICKER_COUNT);
     const brief = "brief" in raw && raw.brief && typeof raw.brief === "object" ? (raw.brief as ConceptBrief) : mapRawToBriefAndPlan(raw as unknown as BriefAndPlanRaw).brief;
     return { brief, plan };
   }
   return mapRawToBriefAndPlan(raw as unknown as BriefAndPlanRaw);
 }
 
-// --- Captions agent ---
+/** Normalize plan.subject_mode from subjectType (model sometimes returns "photo" or wrong value). */
+function normalizePlanSubjectMode(plan: BossPlan, subjectType: SubjectType): void {
+  const mode = subjectType === "couple" ? "multi" : "single";
+  if (plan.subject_mode !== "single" && plan.subject_mode !== "multi") {
+    plan.subject_mode = mode;
+  }
+}
+
+/** Subject gender for Captions (RU grammar) and Scenes (who we describe). */
+function subjectGenderFromType(subjectType: SubjectType): "male" | "female" | "neutral" {
+  if (subjectType === "single_male") return "male";
+  if (subjectType === "single_female") return "female";
+  return "neutral";
+}
+
+/** Parse subject type from theme request text when user explicitly mentions men/male or women/female. Overrides session when theme says e.g. "(Men)", "Single male.", "A man who". */
+export function parseSubjectTypeFromThemeRequest(request: string): SubjectType | null {
+  if (!request || typeof request !== "string") return null;
+  const maleHints = /\b(man|men|male|мужчин|мужск|для мужчин|single male)\b|\(men\)|\(m\)|^he\s|\she\s/i;
+  const femaleHints = /\b(woman|women|female|женщин|женск|для женщин|single female)\b|\(women\)|\(w\)|^she\s|\sshe\s/i;
+  const hasMale = maleHints.test(request);
+  const hasFemale = femaleHints.test(request);
+  if (hasMale && !hasFemale) return "single_male";
+  if (hasFemale && !hasMale) return "single_female";
+  return null;
+}
+
+// --- Captions — shareability filter ---
 const CAPTIONS_SYSTEM = `## Role
-Write captions users would actually send in a private chat.
-
-Captions are inner reactions or replies,
-NOT descriptions of actions.
+You write captions people hesitate to send — and send anyway.
 
 ---
 
-## HARD RULES (STRICT)
-- EXACTLY 9 captions
-- First-person only
-- Very short captions.
-- Target ~12–16 characters.
-- Shorter is safer than longer.
-- No emojis
-- No narration
-- One caption per line
-- No alternatives
-- No explanations
+## CORE RULE
+A caption is a CHAT REPLY, not a description or thought.
 
 ---
 
-## TONE
-Slight self-irony beats positivity. If a caption sounds confident out loud, rewrite as something you'd admit privately.
-NOTE: Moments already include awkward / anti-postcard beats. Do NOT normalize them.
-
-### If awkward_style = polite_internal (REQUIRED)
-- Humor must be subtle and internal
-- No overt sarcasm or mockery
-- Do NOT explicitly say the gift is bad, wrong, or unwanted
-- Captions must remain socially polite on the surface
-
-### If awkward_style = polite_internal — Sarcasm marker ban
-- Do NOT use sarcasm markers such as: "ha", "haha", "lol", "wow" (as irony), "yeah right", "guess?"
-- Avoid rhetorical questions that imply judgment
-- Prefer ellipses ("...") over irony words
-
-### If awkward_style = polite_internal — Rejection implication ban
-- Do NOT imply rejection, disposal, or refusal of the gift
-- Avoid phrases suggesting the gift will not be used or should not be repeated
-
-Avoid dramatic or performative statements. Reactions should feel restrained and realistic.
+## VALUES
+Honesty > politeness.
+Recognition > explanation.
+Risk > safety.
 
 ---
 
-## SELF-CHECK (MANDATORY)
-Before outputting:
-- Ensure captions are very short and chat-like.
-- Do NOT aim for exact character counts.
+## FORMAT
+- 2–5 words
+- chat-like, first-person
+- broken grammar allowed
+- ellipses and unfinished thoughts encouraged
+- RU captions: 2-15 characters max
+- EN captions: 2-18 characters max
 
 ---
 
-## OUTPUT
-Output ONLY 9 captions, one per line.
-Output as JSON: labels (array of 9 RU strings), labels_en (array of 9 EN strings).`;
+## TONE EXAMPLES (reference only, do NOT copy)
+RU: "ну всё, я легла" / "а можно не надо" / "это не я" / "справлюсь. наверное" / "не трогай"
+EN: "handled." / "not now" / "oh no, that's me" / "fine. totally fine" / "leave me alone"
+
+---
+
+## INDEX BINDING (CRITICAL)
+Caption N must be the chat reply for moment N only.
+labels[0] = reply for moment 1, labels[1] = reply for moment 2, … labels[15] = reply for moment 16.
+Do not assign captions by mood slot — assign by matching the situation in that moment.
+
+## STRUCTURE (16 captions in 4 blocks)
+1–4:   Quiet, grounded (but still tied to moments 1–4)
+5–8:   Everyday, relatable (tied to moments 5–8)
+9–12:  Sharp, reactive (tied to moments 9–12)
+13–16: Decisive, closing (tied to moments 13–16)
+
+Avoid same intensity across all 16. Each caption must fit its moment.
+
+---
+
+## FORBIDDEN
+- describing actions
+- explaining emotions
+- motivational or inspirational tone
+- literary or poetic language
+- neutral or polite statements
+
+---
+
+## REQUIRED
+- captions must feel slightly exposing
+- captions must work without context
+- captions must trigger recognition or tension
+
+---
+
+## CAPTION SHARPNESS RULE
+Reject captions that feel descriptive or passive.
+Prefer reactions that sound like a reflex.
+
+---
+
+## BAN ABSTRACT REACTIONS
+Avoid captions like "logic", "silence", "small smile".
+Use concrete, sendable reactions, not abstract labels.
+
+---
+
+## SENDABILITY GATE (CRITICAL)
+If a caption feels 100% comfortable to send —
+it is INVALID.
+
+If a caption makes you hesitate for half a second —
+it is GOOD.
+
+---
+
+## SELF-CHECK
+Ask: "Would a real person type this in a chat?"
+If no — rewrite.
+
+---
+
+## OUTPUT (CRITICAL)
+EXACTLY 16 captions. Order is binding: labels[i] and labels_en[i] are the chat reply for moment i+1 only.
+Output as JSON:
+- labels (array of 16 RU strings, index 0 = moment 1, … index 15 = moment 16)
+- labels_en (array of 16 EN strings, same order)`;
 
 export interface CriticFeedbackContext {
   suggestions: string[];
@@ -459,13 +487,20 @@ export interface CriticFeedbackContext {
 }
 
 // Slim + flat context per agent (docs/26-02-pack-agents-slim-context-tz.md: Level 1 + Level 2)
-function formatCaptionsUserMessage(plan: BossPlan, criticFeedback?: CriticFeedbackContext): string {
+function formatCaptionsUserMessage(plan: BossPlan, subjectType: SubjectType, criticFeedback?: CriticFeedbackContext): string {
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
   const lines: string[] = ["MOMENTS:"];
   moments.forEach((m, i) => {
     lines.push(`${i + 1}. ${m}`);
   });
-  lines.push("", `TONE: ${plan.tone ?? ""}`, "", "Output labels and labels_en as JSON.");
+  const gender = subjectGenderFromType(subjectType);
+  lines.push("", `TONE: ${plan.tone ?? ""}`);
+  if (gender === "male") {
+    lines.push("", "SUBJECT: male. Russian labels (labels) MUST use masculine grammatical forms: e.g. видел, понял, сделал — NOT feminine (видела, поняла).");
+  } else if (gender === "female") {
+    lines.push("", "SUBJECT: female. Russian labels (labels) MUST use feminine grammatical forms: e.g. видела, поняла, сделала — NOT masculine.");
+  }
+  lines.push("", "Write one caption per moment: caption 1 for moment 1, caption 2 for moment 2, … caption 16 for moment 16. Output labels and labels_en as JSON.");
   let msg = lines.join("\n");
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
@@ -492,6 +527,7 @@ function formatCaptionsUserMessage(plan: BossPlan, criticFeedback?: CriticFeedba
 function formatScenesUserMessage(
   plan: BossPlan,
   outfit: string,
+  subjectType: SubjectType,
   criticFeedback?: CriticFeedbackContext,
   visualAnchors?: string[]
 ): string {
@@ -500,11 +536,25 @@ function formatScenesUserMessage(
   moments.forEach((m, i) => {
     lines.push(`${i + 1}. ${m}`);
   });
-  lines.push("", `SUBJECT_MODE: ${plan.subject_mode ?? "single"}`, `OUTFIT: ${outfit}`);
+  const gender = subjectGenderFromType(subjectType);
+  lines.push("", `SUBJECT_MODE: ${plan.subject_mode ?? "single"}`);
+  if (gender !== "neutral") {
+    lines.push(`SUBJECT_GENDER: ${gender}. The person in the photo is ${gender === "male" ? "male" : "female"} — describe posture, expression, and styling to match. Do NOT write "man", "woman", "male", or "female" in the scene text; use only {subject}.`);
+  }
+  lines.push(`OUTFIT: ${outfit}`);
+  if (Array.isArray(plan.outfit_change_scenes) && plan.outfit_change_scenes.length > 0) {
+    lines.push("", `OUTFIT_CHANGE_SCENES (must show visible clothing change): ${plan.outfit_change_scenes.join(", ")}`);
+  }
+  if (Array.isArray(plan.prop_scenes) && plan.prop_scenes.length > 0) {
+    lines.push("", `PROP_SCENES (must include eye-catching, non-routine prop): ${plan.prop_scenes.join(", ")}`);
+  }
+  if (Array.isArray(plan.hero_scenes) && plan.hero_scenes.length > 0) {
+    lines.push("", `HERO_SCENES (must stand out by posture, presence, or iconic prop): ${plan.hero_scenes.join(", ")}`);
+  }
   if (Array.isArray(visualAnchors) && visualAnchors.length > 0) {
     lines.push("", `VISUAL_ANCHORS: ${visualAnchors.join(", ")}`);
   }
-  lines.push("", "Output scene_descriptions as JSON.");
+  lines.push("", "Write one scene per moment: scene 1 for moment 1, scene 2 for moment 2, … scene 16 for moment 16. Output scene_descriptions as JSON.");
   let msg = lines.join("\n");
   if (criticFeedback?.suggestions?.length || criticFeedback?.reasons?.length || criticFeedback?.previousSpec) {
     const parts: string[] = [];
@@ -512,9 +562,11 @@ function formatScenesUserMessage(
       parts.push("Critic reasons (what was wrong):\n" + criticFeedback.reasons.join("\n"));
     }
     if (criticFeedback.previousSpec?.scene_descriptions?.length) {
-      parts.push(
-        "Previous version (rejected — improve this):\nscene_descriptions: " + JSON.stringify(criticFeedback.previousSpec.scene_descriptions)
-      );
+      const compactPrevious = criticFeedback.previousSpec.scene_descriptions
+        .slice(0, PACK_STICKER_COUNT)
+        .map((s, i) => `${i + 1}. ${String(s).slice(0, 120)}`)
+        .join("\n");
+      parts.push("Previous version (rejected — improve this):\n" + compactPrevious);
     }
     if (criticFeedback.suggestions?.length) {
       parts.push("Critic suggestions (apply these fixes):\n" + criticFeedback.suggestions.join("\n"));
@@ -547,149 +599,210 @@ function formatCriticUserMessage(spec: PackSpecRow): string {
   return lines.join("\n");
 }
 
-async function runCaptions(plan: BossPlan, criticFeedback?: CriticFeedbackContext): Promise<CaptionsOutput> {
+async function runCaptions(plan: BossPlan, subjectType: SubjectType, criticFeedback?: CriticFeedbackContext): Promise<CaptionsOutput> {
   const model = await getModelForAgent("captions");
-  const userMessage = formatCaptionsUserMessage(plan, criticFeedback);
-  return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions" });
+  const userMessage = formatCaptionsUserMessage(plan, subjectType, criticFeedback);
+  return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, {
+    agentLabel: "captions",
+    maxCompletionTokens: 900,
+  });
 }
 
-// --- Scenes agent (docs/pack-batch-flow-9-scenes-rules.md) ---
+// --- Scenes — visual "WOW" engine, executes plan ---
 const SCENES_SYSTEM = `## Role
-Write visual scene descriptions for image generation. ENGLISH ONLY. Scenes are for image generation only.
+You execute the plan exactly.
+You do NOT decide what to include — you perform it. ENGLISH ONLY.
 
-You describe ONLY how the same person from the reference photo moves and reacts.
+---
+
+## CORE RULE
+Flat realism is forbidden.
+Scenes must exaggerate emotion by 10–20%.
+
+---
+
+## EXECUTION RULES (CRITICAL)
+- Scene numbers marked as outfit changes MUST show
+  visually obvious clothing changes
+  (jacket on/off, layer added/removed).
+  Minor adjustments do NOT count.
+- Scene numbers marked as distinctive props MUST include
+  eye-catching, non-routine items.
+- The hero scene MUST visually stand out through posture,
+  presence, or iconic prop.
+  No fantasy, no costumes.
+
+---
+
+## CONSISTENCY RULE
+Face, body, and identity remain consistent.
+Clothing, outer layers, and gear may change
+to signal role or power shifts.
+
+---
+
+## ANTI-NEUTRAL RULE
+At least 4 scenes must feel awkward,
+uncomfortable, frozen, or overreactive.
+
+---
+
+## ANTI-DEVICE RULE
+No more than 3 scenes with phones or laptops.
+
+---
+
+## PROP USAGE LIMIT (CRITICAL)
+No more than 6 scenes may include eye-catching or playful props.
+Remaining scenes must rely on posture, face, or stillness only.
+Props are a special effect, not the base.
+
+---
+
+## STATE VARIATION RULE
+Across the pack, the subject must visibly shift between:
+- confused
+- skeptical
+- amused
+- firm
+- withdrawn
+- relaxed
+Outfit or styling alone does not count as variation.
+
+---
+
+## NO REPEATED GIMMICKS
+Do not reuse the same visual trick
+(red lipstick emphasis, raised eyebrow exaggeration, props)
+more than twice across the pack.
+
+---
+
+## SELF-CHECK
+If a scene looks like stock photography — discard it.
+If a scene feels "nice" — push it further.
+
+---
+
+## RENDER CONTEXT (CRITICAL)
+These scenes will be rendered as stickers:
+- Flat background (no environment). Background will be removed later.
+- Do NOT describe rooms, doors, furniture, or walls.
+- Props must be handheld or on-body only.
+
+---
+
+## FRAMING
+- Default: chest-up (mid-torso to head).
+- For OUTFIT_CHANGE_SCENES: half-body (waist-up) allowed so clothing changes are clearly visible.
 
 ---
 
 ## SUBJECT LOCK (CRITICAL)
 - Each scene MUST start with \`{subject}\`
 - \`{subject}\` appears EXACTLY once per scene
-- NEVER use pronouns instead of \`{subject}\`
-- NEVER introduce new people
+- NEVER use pronouns instead of {subject}
+- NEVER introduce other people
+- FORBIDDEN in scene text: the words "man", "woman", "male", "female", "boy", "girl", "dark-bob woman", "young man", etc. Do NOT name the gender in the description. Use ONLY \`{subject}\` for the person. SUBJECT_GENDER (in the user message) tells you who to describe so posture and styling match; the scene output must contain only \`{subject}\`, e.g. "{subject} chest-up, arms crossed, ..." not "{subject} woman chest-up ..."
 
 ---
 
-## SCENE RULES
-- Chest-up framing only
-- One clear pose or body state
-- Emotion through posture or tension, not facial traits
-- Max 1 prop, fully visible
-- Simple background only (flat, gradient, wall)
-
-### Scenes must be purely visual
-Do NOT use speech, thought, or narrative verbs, including:
-"says", "mentions", "comments", "thanks", "explains", "reacts", "thinks", "feels".
-Describe only visible body position, movement, and object interaction.
-
-### Holiday theme
-If holiday theme is active:
-- Avoid work-related devices (laptops, work tasks).
-- Phones are allowed only for messages or calls, not work or browsing.
-
-### Holiday visual anchors
-If VISUAL_ANCHORS are given in the user message (holiday objects):
-- Use at least one anchor in at least half of the scenes.
-- Anchor must be clearly visible and fully inside the frame.
-- Do NOT hide or partially crop the anchor.
-
-### If awkward_style = polite_internal — Awkward body language control
-- Avoid theatrical gestures
-- Keep reactions small and contained
-- Body language should suggest hesitation, not performance
-
-### If a phone is present
-- Specify that a message is visible on the screen
-- Do NOT describe scrolling, browsing, or idle phone use
+## TECHNICAL
+- One clear body state. Max 1 prop. Simple or flat background only.
+- EXACTLY one sentence per scene. 12–18 words.
+- No speech, thought, or narrative verbs. Purely visual.
 
 ---
 
-## LENGTH & STYLE (CRITICAL)
-Each scene: EXACTLY one sentence. 12–18 words. One body action, one posture.
-No metaphors. No cinematic language. Functional visual description only.
-NOTE: Moments already include awkward / anti-postcard beats. Allow imbalance, hesitation, frozen mid-reaction; do NOT beautify.
-
----
-
-## FORBIDDEN
-- Emotions as words
-- Metaphors
-- Cinematic language
-- Adverbs: suddenly, awkwardly, nervously
-- Explanations or humor
-Describe only visible body state.
-
-### If holiday theme
-- Avoid scenes that could belong to a normal workday.
-- If the scene feels non-celebratory, rewrite it.
-
----
-
-## OUTPUT (MANDATORY)
-Output ONLY scene_descriptions (EN). Exactly 9 items. No Russian.`;
+## OUTPUT (CRITICAL)
+Output ONLY scene_descriptions (array of EXACTLY 16 EN strings). Order is binding: scene_descriptions[0] = visual for moment 1, … scene_descriptions[15] = visual for moment 16.`;
 
 async function runScenes(
   plan: BossPlan,
   outfit: string,
+  subjectType: SubjectType,
   criticFeedback?: CriticFeedbackContext,
   visualAnchors?: string[]
 ): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
-  const userMessage = formatScenesUserMessage(plan, outfit, criticFeedback, visualAnchors);
-  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes" });
-  const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, 9) : [];
+  const userMessage = formatScenesUserMessage(plan, outfit, subjectType, criticFeedback, visualAnchors);
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, {
+    agentLabel: "scenes",
+    maxCompletionTokens: 1800,
+  });
+  const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, PACK_STICKER_COUNT) : [];
   return { scene_descriptions: sceneDescriptions };
 }
 
-// --- Critic agent ---
+// --- Critic — no mercy mode ---
 const CRITIC_SYSTEM = `## Role
-Act as a strict quality gate for format and usability.
+You reject anything that would not be shared.
 
 ---
 
-## YOU MUST CHECK
-- Exactly 9 captions
-- Exactly 9 scenes (EN)
-- Each scene starts with {subject} and has it exactly once
-- Scene uniqueness
-- Rule compliance
-
-### If holiday theme
-- Check that visual anchors appear in at least half of the scenes.
-- Suggest specific scene indices if anchors are missing.
+## PASS CONDITIONS
+- At least 60% of stickers feel emotionally risky
+- At least 5 stickers feel awkward, too honest, or exposing
+- Captions are short, sharp, and chat-like
+- Scenes exaggerate emotion beyond realism
+- Outfit changes, props, and hero scene match the plan exactly
 
 ---
 
-## TASTE CHECK (SOFT)
-If everything feels emotionally safe or postcard-like, suggest more awkward or self-ironic moments. Do NOT fail for this alone.
-
-If a holiday pack feels like a normal day with devices or neutral routines, suggest replacing neutral scenes with celebratory ones (by index). Do NOT fail for this alone.
-
-### If awkward_style = polite_internal (batch/publish)
-- Check captions do not openly reject or mock gifts.
-- If needed, suggest softer phrasing.
-- Do NOT fail the pack for tone alone.
-
-Do NOT fail awkward packs for: tone judgments; sarcasm or humor style policing; emotional interpretation of captions.
+## FAIL CONDITIONS
+- Neutral or polite reactions
+- "Nice", safe, or generic vibes
+- Descriptive or explanatory captions
+- Planned outfit or prop scenes not executed
+- Hero scene does not stand out visually
 
 ---
 
-## OUTPUT LIMITS (CRITICAL)
-Reasons:
-- Max 3 bullets
-- Max 12 words per bullet
+## STANDARD
+If the pack feels "fine" — FAIL IT.
+If it feels "a bit much" — APPROVE IT.
 
-Suggestions:
-- Max 3 bullets
-- Max 12 words per bullet
+Prefer rejecting good packs
+over approving boring ones.
 
-No prose.
-No restating rules.
-No explanations.`;
+---
+
+## TECHNICAL CHECK
+- Each scene must work as an isolated chest-up (or waist-up) sticker; no background-dependent staging (rooms, doors, large furniture).
+- No more than 3 scenes with the same body posture (e.g. arms crossed, hands on hips).
+- Do NOT fail by "too many chest-up scenes": chest-up is the default framing in this pipeline.
+
+---
+
+## EMOTIONAL ARC CHECK
+- Pack must have variety: quiet + everyday + sharp + decisive. If all 16 feel the same intensity — FAIL.
+- At least 2–3 quiet/grounded, 2–3 everyday, 2–3 sharp, 2–3 decisive or closing.
+
+---
+
+## CAPTION–SCENE MATCH (CRITICAL)
+- Caption N must match the situation/emotion of scene N. If caption 5 describes a different moment than what scene 5 shows — FAIL.
+- Reject if captions feel generic or shuffled (could apply to any sticker in the pack).
+
+---
+
+## FORMAT CHECK (CRITICAL)
+- Exactly 16 captions, exactly 16 scenes
+- All scenes start with {subject} exactly once
+
+---
+
+## OUTPUT
+JSON only: pass (boolean), reasons (array, max 3 items, max 12 words each), suggestions (array, max 3 items, max 12 words each). No prose.`;
 
 async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
   const model = await getModelForAgent("critic");
   const userMessage = formatCriticUserMessage(spec);
-  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, { temperature: 1, agentLabel: "critic" });
+  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, {
+    temperature: 1,
+    agentLabel: "critic",
+    maxCompletionTokens: 600,
+  });
 }
 
 // --- Partial rework: parse indices from Critic feedback ---
@@ -698,7 +811,7 @@ const SCENE_INDEX_REG = /(?:scene|сцен[аы]|moment|момент)\s*[№#]?\
 
 function parseCriticIndices(reasons: string[] | undefined, suggestions: string[] | undefined): { captionIndices: number[]; sceneIndices: number[] } {
   const text = [...(reasons ?? []), ...(suggestions ?? [])].join(" ");
-  const toZeroBased = (n: number) => (n >= 1 && n <= 9 ? n - 1 : n >= 0 && n <= 8 ? n : -1);
+  const toZeroBased = (n: number) => (n >= 1 && n <= PACK_STICKER_COUNT ? n - 1 : n >= 0 && n < PACK_STICKER_COUNT ? n : -1);
   const captionSet = new Set<number>();
   let m: RegExpExecArray | null;
   CAPTION_INDEX_REG.lastIndex = 0;
@@ -721,6 +834,7 @@ function parseCriticIndices(reasons: string[] | undefined, suggestions: string[]
 /** Regenerate only captions at given 0-based indices. Returns arrays in same order as indices. */
 async function runCaptionsForIndices(
   plan: BossPlan,
+  subjectType: SubjectType,
   criticContext: CriticFeedbackContext,
   indices: number[]
 ): Promise<{ labels: string[]; labels_en: string[] }> {
@@ -728,7 +842,11 @@ async function runCaptionsForIndices(
   const model = await getModelForAgent("captions");
   const prev = criticContext.previousSpec;
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
-  const flatPlan = "MOMENTS:\n" + moments.map((m, i) => `${i + 1}. ${m}`).join("\n") + "\n\nTONE: " + (plan.tone ?? "");
+  const gender = subjectGenderFromType(subjectType);
+  const selectedMoments = indices.map((idx) => `${idx}: ${moments[idx] ?? ""}`).join("\n");
+  let flatPlan = "REJECTED_MOMENTS_BY_INDEX:\n" + selectedMoments + "\n\nTONE: " + (plan.tone ?? "");
+  if (gender === "male") flatPlan += "\n\nSUBJECT: male. Russian labels MUST use masculine forms (видел, понял), NOT feminine (видела, поняла).";
+  else if (gender === "female") flatPlan += "\n\nSUBJECT: female. Russian labels MUST use feminine forms (видела, поняла).";
   const userMessage =
     `The critic rejected specific captions. Regenerate ONLY the captions at 0-based indices: ${JSON.stringify(indices)}.\n\n` +
     `${flatPlan}\n\n` +
@@ -736,8 +854,11 @@ async function runCaptionsForIndices(
       ? `Previous labels (RU): ${JSON.stringify(prev.labels)}\nPrevious labels_en (EN): ${JSON.stringify(prev.labels_en)}\n\n`
       : "") +
     `Critic reasons: ${(criticContext.reasons ?? []).join(" ")}\nCritic suggestions: ${criticContext.suggestions.join(" ")}\n\n` +
-    `Output JSON with keys: labels (array of ${indices.length} strings, RU, in order of indices), labels_en (array of ${indices.length} strings, EN). Each caption 15–20 characters.`;
-  const raw = await openAiChatJson<{ labels: string[]; labels_en: string[] }>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions_rework" });
+    `Output JSON with keys: labels (array of ${indices.length} strings, RU, in order of indices), labels_en (array of ${indices.length} strings, EN). RU: 2-15 chars each, EN: 2-18 chars each.`;
+  const raw = await openAiChatJson<{ labels: string[]; labels_en: string[] }>(model, CAPTIONS_SYSTEM, userMessage, {
+    agentLabel: "captions_rework",
+    maxCompletionTokens: 500,
+  });
   const labels = Array.isArray(raw.labels) ? raw.labels.slice(0, indices.length) : [];
   const labels_en = Array.isArray(raw.labels_en) ? raw.labels_en.slice(0, indices.length) : [];
   return { labels, labels_en };
@@ -747,6 +868,7 @@ async function runCaptionsForIndices(
 async function runScenesForIndices(
   plan: BossPlan,
   outfit: string,
+  subjectType: SubjectType,
   criticContext: CriticFeedbackContext,
   indices: number[],
   visualAnchors?: string[]
@@ -755,32 +877,44 @@ async function runScenesForIndices(
   const model = await getModelForAgent("scenes");
   const prev = criticContext.previousSpec;
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
+  const gender = subjectGenderFromType(subjectType);
+  const selectedMoments = indices.map((idx) => `${idx}: ${moments[idx] ?? ""}`).join("\n");
+  const previousSelectedScenes = prev?.scene_descriptions?.length
+    ? indices.map((idx) => `${idx}: ${prev.scene_descriptions[idx] ?? ""}`).join("\n")
+    : "";
   let flatPlan =
-    "MOMENTS:\n" +
-    moments.map((m, i) => `${i + 1}. ${m}`).join("\n") +
+    "REJECTED_MOMENTS_BY_INDEX:\n" +
+    selectedMoments +
     "\n\nSUBJECT_MODE: " +
-    (plan.subject_mode ?? "single") +
-    "\nOUTFIT: " +
-    outfit;
+    (plan.subject_mode ?? "single");
+  if (gender !== "neutral") {
+    flatPlan += `\nSUBJECT_GENDER: ${gender}. Person is ${gender}. Do NOT write "man" or "woman" in scene text — use only {subject}.`;
+  }
+  flatPlan += "\nOUTFIT: " + outfit;
   if (Array.isArray(visualAnchors) && visualAnchors.length > 0) {
     flatPlan += "\nVISUAL_ANCHORS: " + visualAnchors.join(", ");
   }
   const userMessage =
     `The critic rejected specific scenes. Regenerate ONLY the scene_descriptions at 0-based indices: ${JSON.stringify(indices)}.\n\n` +
     `${flatPlan}\n\n` +
-    (prev?.scene_descriptions?.length
-      ? `Previous scene_descriptions: ${JSON.stringify(prev.scene_descriptions)}\n\n`
+    (previousSelectedScenes
+      ? `Previous scene_descriptions by same indices:\n${previousSelectedScenes}\n\n`
       : "") +
     `Critic reasons: ${(criticContext.reasons ?? []).join(" ")}\nCritic suggestions: ${criticContext.suggestions.join(" ")}\n\n` +
     `Output JSON with one key: scene_descriptions (array of ${indices.length} strings, in order of indices). Each sentence 12–18 words, start with {subject}. No subordinate clauses.`;
-  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes_rework" });
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, {
+    agentLabel: "scenes_rework",
+    maxCompletionTokens: 700,
+  });
   const scene_descriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, indices.length) : [];
   return { scene_descriptions };
 }
 
-// --- Validation (docs/pack-batch-flow-9-scenes-rules.md) ---
-const CAPTION_MIN_CHARS = 15;
-const CAPTION_MAX_CHARS = 20;
+// --- Validation (docs/pack-batch-flow-9-scenes-rules.md, 16 in docs/final-promt-16.md) ---
+/** Caption hard limits for sticker readability in Telegram. */
+const CAPTION_MIN_CHARS = 2;
+const CAPTION_MAX_CHARS_RU = 15;
+const CAPTION_MAX_CHARS_EN = 18;
 const SCENE_MIN_WORDS = 12;
 const SCENE_MAX_WORDS = 18;
 
@@ -792,6 +926,40 @@ function countSubjectOccurrences(s: string): number {
   return (s.match(/\{subject\}/g) ?? []).length;
 }
 
+function normalizeCaptionLength(text: string, maxChars: number): string {
+  const raw = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  if (raw.length <= maxChars) return raw;
+
+  // First, try truncating by words while preserving readability.
+  const words = raw.split(" ");
+  let best = "";
+  for (const w of words) {
+    const candidate = best ? `${best} ${w}` : w;
+    if (candidate.length > maxChars) break;
+    best = candidate;
+  }
+  if (best.length >= CAPTION_MIN_CHARS) {
+    return best.replace(/[.,;:!?…-]+$/g, "").trim();
+  }
+
+  // Fallback: hard cut.
+  return raw.slice(0, maxChars).replace(/[.,;:!?…-]+$/g, "").trim();
+}
+
+function normalizeCaptions(captions: CaptionsOutput): CaptionsOutput {
+  return {
+    labels: (captions.labels ?? [])
+      .slice(0, PACK_STICKER_COUNT)
+      .map((c) => normalizeCaptionLength(c, CAPTION_MAX_CHARS_RU))
+      .map((c) => (c.length < CAPTION_MIN_CHARS ? c.slice(0, CAPTION_MIN_CHARS) : c)),
+    labels_en: (captions.labels_en ?? [])
+      .slice(0, PACK_STICKER_COUNT)
+      .map((c) => normalizeCaptionLength(c, CAPTION_MAX_CHARS_EN))
+      .map((c) => (c.length < CAPTION_MIN_CHARS ? c.slice(0, CAPTION_MIN_CHARS) : c)),
+  };
+}
+
 export function validateBatchSpec(spec: PackSpecRow): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
   const labels = spec.labels ?? [];
@@ -799,14 +967,14 @@ export function validateBatchSpec(spec: PackSpecRow): { ok: boolean; errors: str
   const scenes = spec.scene_descriptions ?? [];
   labels.forEach((l, i) => {
     const len = String(l).length;
-    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS) {
-      errors.push(`Caption[${i}] RU length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS})`);
+    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS_RU) {
+      errors.push(`Caption[${i}] RU length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS_RU})`);
     }
   });
   labelsEn.forEach((l, i) => {
     const len = String(l).length;
-    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS) {
-      errors.push(`Caption[${i}] EN length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS})`);
+    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS_EN) {
+      errors.push(`Caption[${i}] EN length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS_EN})`);
     }
   });
   scenes.forEach((s, i) => {
@@ -824,6 +992,7 @@ export function validateBatchSpec(spec: PackSpecRow): { ok: boolean; errors: str
 
 // --- Assembly: plan + captions + scenes → row ---
 function assembleSpec(plan: BossPlan, captions: CaptionsOutput, scenes: ScenesOutput): PackSpecRow {
+  const normalizedCaptions = normalizeCaptions(captions);
   return {
     id: plan.id,
     pack_template_id: plan.pack_template_id,
@@ -831,14 +1000,14 @@ function assembleSpec(plan: BossPlan, captions: CaptionsOutput, scenes: ScenesOu
     name_en: plan.name_en,
     carousel_description_ru: plan.carousel_description_ru,
     carousel_description_en: plan.carousel_description_en,
-    labels: Array.isArray(captions.labels) ? captions.labels.slice(0, 9) : [],
-    labels_en: Array.isArray(captions.labels_en) ? captions.labels_en.slice(0, 9) : [],
-    scene_descriptions: Array.isArray(scenes.scene_descriptions) ? scenes.scene_descriptions.slice(0, 9) : [],
-    scene_descriptions_ru: Array.isArray(scenes.scene_descriptions_ru) ? scenes.scene_descriptions_ru.slice(0, 9) : undefined,
+    labels: Array.isArray(normalizedCaptions.labels) ? normalizedCaptions.labels.slice(0, PACK_STICKER_COUNT) : [],
+    labels_en: Array.isArray(normalizedCaptions.labels_en) ? normalizedCaptions.labels_en.slice(0, PACK_STICKER_COUNT) : [],
+    scene_descriptions: Array.isArray(scenes.scene_descriptions) ? scenes.scene_descriptions.slice(0, PACK_STICKER_COUNT) : [],
+    scene_descriptions_ru: Array.isArray(scenes.scene_descriptions_ru) ? scenes.scene_descriptions_ru.slice(0, PACK_STICKER_COUNT) : undefined,
     sort_order: Number(plan.sort_order) || 200,
     is_active: true,
     mood: plan.mood || "everyday",
-    sticker_count: 9,
+    sticker_count: PACK_STICKER_COUNT,
     subject_mode: plan.subject_mode,
     cluster: false,
     segment_id: plan.segment_id || "home",
@@ -898,13 +1067,15 @@ export async function runPackGenerationPipeline(
     console.log(stageLabel("brief_and_plan"), "done in", Date.now() - t0, "ms");
     await onProgress?.("brief_and_plan");
 
+    normalizePlanSubjectMode(plan, subjectType);
+
     const outfit = brief?.visual_anchors?.[0] ?? "none";
     const t2 = Date.now();
     let captions: CaptionsOutput;
     let scenes: ScenesOutput;
     [captions, scenes] = await Promise.all([
-      wrapStage("captions", () => runCaptions(plan)),
-      wrapStage("scenes", () => runScenes(plan, outfit, undefined, brief.visual_anchors)),
+      wrapStage("captions", () => runCaptions(plan, subjectType)),
+      wrapStage("scenes", () => runScenes(plan, outfit, subjectType, undefined, brief.visual_anchors)),
     ]);
     console.log("[pack-multiagent] captions + scenes (parallel) done in", Date.now() - t2, "ms");
     await onProgress?.("captions");
@@ -948,30 +1119,30 @@ export async function runPackGenerationPipeline(
         previousSpec: spec,
       };
       const { captionIndices, sceneIndices } = parseCriticIndices(critic.reasons, critic.suggestions);
-      const usePartialCaptions = captionIndices.length > 0 && captionIndices.length <= 6;
-      const usePartialScenes = sceneIndices.length > 0 && sceneIndices.length <= 6;
+      const usePartialCaptions = captionIndices.length > 0 && captionIndices.length <= 10;
+      const usePartialScenes = sceneIndices.length > 0 && sceneIndices.length <= 10;
       const tRework = Date.now();
       const [captionsRework, scenesRework] = await Promise.all([
         usePartialCaptions
-          ? wrapStage("captions_rework", () => runCaptionsForIndices(plan, criticContext, captionIndices)).then((partial) => {
+          ? wrapStage("captions_rework", () => runCaptionsForIndices(plan, subjectType, criticContext, captionIndices)).then((partial) => {
               const nextLabels = [...(spec.labels ?? [])];
               const nextLabelsEn = [...(spec.labels_en ?? [])];
               captionIndices.forEach((idx, j) => {
                 if (partial.labels[j] != null) nextLabels[idx] = partial.labels[j];
                 if (partial.labels_en[j] != null) nextLabelsEn[idx] = partial.labels_en[j];
               });
-              return { labels: nextLabels.slice(0, 9), labels_en: nextLabelsEn.slice(0, 9) };
+              return { labels: nextLabels.slice(0, PACK_STICKER_COUNT), labels_en: nextLabelsEn.slice(0, PACK_STICKER_COUNT) };
             })
-          : wrapStage("captions_rework", () => runCaptions(plan, criticContext)),
+          : wrapStage("captions_rework", () => runCaptions(plan, subjectType, criticContext)),
         usePartialScenes
-          ? wrapStage("scenes_rework", () => runScenesForIndices(plan, outfit, criticContext, sceneIndices, brief.visual_anchors)).then((partial) => {
+          ? wrapStage("scenes_rework", () => runScenesForIndices(plan, outfit, subjectType, criticContext, sceneIndices, brief.visual_anchors)).then((partial) => {
               const nextScenes = [...(spec.scene_descriptions ?? [])];
               sceneIndices.forEach((idx, j) => {
                 if (partial.scene_descriptions[j] != null) nextScenes[idx] = partial.scene_descriptions[j];
               });
-              return { scene_descriptions: nextScenes.slice(0, 9), scene_descriptions_ru: spec.scene_descriptions_ru ? spec.scene_descriptions_ru.slice(0, 9) : [] };
+              return { scene_descriptions: nextScenes.slice(0, PACK_STICKER_COUNT), scene_descriptions_ru: spec.scene_descriptions_ru ? spec.scene_descriptions_ru.slice(0, PACK_STICKER_COUNT) : [] };
             })
-          : wrapStage("scenes_rework", () => runScenes(plan, outfit, criticContext, brief.visual_anchors)),
+          : wrapStage("scenes_rework", () => runScenes(plan, outfit, subjectType, criticContext, brief.visual_anchors)),
       ]);
       captions = captionsRework as CaptionsOutput;
       scenes = scenesRework as ScenesOutput;
@@ -1005,6 +1176,7 @@ export async function runPackGenerationPipeline(
  */
 export async function reworkOneIteration(
   plan: BossPlan,
+  subjectType: SubjectType,
   suggestions: string[],
   previousSpec?: PackSpecRow | null,
   reasons?: string[] | null
@@ -1020,8 +1192,8 @@ export async function reworkOneIteration(
     !!criticContext.previousSpec;
   const outfit = "none";
   const [captions, scenes] = await Promise.all([
-    runCaptions(plan, hasContext ? criticContext : undefined),
-    runScenes(plan, outfit, hasContext ? criticContext : undefined),
+    runCaptions(plan, subjectType, hasContext ? criticContext : undefined),
+    runScenes(plan, outfit, subjectType, hasContext ? criticContext : undefined),
   ]);
   const spec = assembleSpec(plan, captions, scenes);
   const critic = await runCritic(spec);
@@ -1044,9 +1216,9 @@ export function specToMinimalPlan(spec: PackSpecRow): BossPlan {
     segment_id: spec.segment_id || "home",
     story_arc: "",
     tone: "",
-    moments: Array.isArray(spec.labels) && spec.labels.length >= 9
-      ? spec.labels.slice(0, 9)
-      : Array(9).fill("moment"),
+    moments: Array.isArray(spec.labels) && spec.labels.length >= PACK_STICKER_COUNT
+      ? spec.labels.slice(0, PACK_STICKER_COUNT)
+      : Array(PACK_STICKER_COUNT).fill("moment"),
   };
 }
 

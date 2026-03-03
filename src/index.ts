@@ -50,6 +50,7 @@ import {
   runPackGenerationPipeline,
   reworkOneIteration,
   specToMinimalPlan,
+  parseSubjectTypeFromThemeRequest,
   subjectTypeFromSession,
   type PackSpecRow,
   type BossPlan,
@@ -57,7 +58,9 @@ import {
 } from "./lib/pack-multiagent";
 
 const bot = new Telegraf(config.telegramBotToken, {
-  handlerTimeout: 180_000, // 3 min — pack ideas generation with GPT-4o vision can be slow
+  // Multi-agent pack generation can include several LLM passes (critic + rework).
+  // Keep handler alive long enough so admin flow does not crash mid-iteration.
+  handlerTimeout: 600_000, // 10 min
 });
 
 // Global error handler — catch all unhandled errors from handlers
@@ -76,7 +79,7 @@ const pendingAdminReplies = new Map<number, {
   username: string;
 }>();
 
-// Admin flow: «Сделать примером» — выбор набора из pack_content_sets, затем ссылка на стикерпак → sticker_pack_example/{id}/1..9.webp (не pack/content — тот для лендинга)
+// Admin flow: «Сделать примером» — выбор набора из pack_content_sets, затем ссылка на стикерпак → sticker_pack_example/{id}/example.webp (4x4 grid, не pack/content — тот для лендинга)
 const adminPackContentExampleFlow = new Map<number, { step: 2; contentSetId: string }>();
 
 const app = express();
@@ -208,12 +211,17 @@ async function translateLabelsEnToRu(labelsEn: string[]): Promise<string[]> {
   }
 }
 
-/** Ensure spec has Russian labels for pack_content_sets; if missing, translate from labels_en. */
+/** Ensure spec has Russian labels for pack_content_sets; if missing or same as EN, translate from labels_en. */
 async function ensureSpecLabelsRu(spec: PackSpecRow): Promise<PackSpecRow> {
   const en = spec.labels_en ?? [];
   const ru = spec.labels ?? [];
-  if (Array.isArray(ru) && ru.length >= en.length && ru.every((s) => s?.trim())) return spec;
   if (en.length === 0) return spec;
+  const ruMissingOrShort = !Array.isArray(ru) || ru.length < en.length;
+  const ruSameAsEn =
+    ru.length === en.length &&
+    en.every((e, i) => (ru[i] ?? "").trim().toLowerCase() === (e ?? "").trim().toLowerCase());
+  const ruHasBlanks = ru.length > 0 && !ru.every((s) => String(s ?? "").trim());
+  if (!ruMissingOrShort && !ruSameAsEn && !ruHasBlanks) return spec;
   const translated = await translateLabelsEnToRu(en);
   if (translated.length === 0) return spec;
   return { ...spec, labels: translated };
@@ -595,6 +603,9 @@ const PACK_EXAMPLE_STORAGE_PREFIX = "sticker_pack_example/";
 
 /** Имя файла примера набора: одна сетка 1024×1024 из стикеров пака. */
 const PACK_EXAMPLE_FILENAME = "example.webp";
+const PACK_EXAMPLE_GRID_COLS = 4;
+const PACK_EXAMPLE_GRID_ROWS = 4;
+const PACK_EXAMPLE_GRID_STICKERS = PACK_EXAMPLE_GRID_COLS * PACK_EXAMPLE_GRID_ROWS;
 
 /** Путь в бакете: sticker_pack_example/{contentSetId}/example.webp (сетка из стикеров). Совпадает с публичным URL Storage. */
 function getPackContentSetExampleStoragePath(contentSetId: string): string {
@@ -1574,7 +1585,7 @@ async function getUser(telegramId: number) {
   return data;
 }
 
-// Helper: get persistent menu keyboard (2 rows). Admin on test sees "Сгенерировать пак" in row1 (docs/20-02-admin-generate-pack-menu-button.md).
+// Helper: get persistent menu keyboard (2 rows). Single-sticker entry is always visible in row1.
 function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const isAdmin = telegramId != null && config.adminIds.includes(telegramId);
   const showAdminGenerate = isAdmin;
@@ -1582,15 +1593,15 @@ function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const row1 =
     lang === "ru"
       ? showAdminMakeExample
-        ? ["📦 Создать пак", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
+        ? ["✨ Создать стикер", "📦 Создать пак", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
         : showAdminGenerate
-          ? ["📦 Создать пак", "🔄 Сгенерировать пак"]
-          : ["📦 Создать пак"]
+          ? ["✨ Создать стикер", "📦 Создать пак", "🔄 Сгенерировать пак"]
+          : ["✨ Создать стикер", "📦 Создать пак"]
       : showAdminMakeExample
-        ? ["📦 Create pack", "🔄 Generate pack", "⭐ Make as example"]
+        ? ["✨ Create sticker", "📦 Create pack", "🔄 Generate pack", "⭐ Make as example"]
         : showAdminGenerate
-          ? ["📦 Create pack", "🔄 Generate pack"]
-          : ["📦 Create pack"];
+          ? ["✨ Create sticker", "📦 Create pack", "🔄 Generate pack"]
+          : ["✨ Create sticker", "📦 Create pack"];
   const row2 =
     lang === "ru"
       ? ["💰 Ваш баланс", "💬 Поддержка"]
@@ -1639,7 +1650,27 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     .neq("state", "canceled");
 
   // Create new session with assistant state
-  const lastPhoto = user.last_photo_file_id || null;
+  const lastPhotoFromSessions = await getLatestSessionPhotoFileId(user.id);
+  const lastPhotoFromUser = user.last_photo_file_id || null;
+  const lastPhoto = lastPhotoFromSessions || lastPhotoFromUser || null;
+  console.log("startAssistantDialog: photo source", {
+    userId: user.id,
+    source: lastPhotoFromSessions ? "sessions" : (lastPhotoFromUser ? "users.last_photo_file_id" : "none"),
+    hasPhoto: !!lastPhoto,
+  });
+  // Keep users.last_photo_file_id in sync with the latest session photo to avoid stale ideas.
+  if (lastPhotoFromSessions && lastPhotoFromSessions !== lastPhotoFromUser) {
+    const { error: syncErr } = await supabase
+      .from("users")
+      .update({ last_photo_file_id: lastPhotoFromSessions })
+      .eq("id", user.id);
+    if (syncErr) {
+      console.warn("startAssistantDialog: failed to sync users.last_photo_file_id:", syncErr.message);
+    } else {
+      user.last_photo_file_id = lastPhotoFromSessions;
+      console.log("startAssistantDialog: synced users.last_photo_file_id from latest session photo");
+    }
+  }
   const { data: newSession, error: sessionError } = await supabase
     .from("sessions")
     .insert({
@@ -3170,19 +3201,61 @@ bot.command("support", async (ctx) => {
  * If found from user, copies it into the session for generation to work.
  */
 function getUserPhotoFileId(user: any, session: any): string | null {
-  return session?.current_photo_file_id || user?.last_photo_file_id || null;
+  const sessionCurrent = session?.current_photo_file_id || null;
+  const sessionPhotos = Array.isArray(session?.photos) ? session.photos : [];
+  const sessionLast = sessionPhotos.length > 0 ? sessionPhotos[sessionPhotos.length - 1] : null;
+  return sessionCurrent || sessionLast || user?.last_photo_file_id || null;
 }
 
 /**
  * Resolve authoritative "working photo" for any flow.
- * Priority: session.current_photo_file_id -> user.last_photo_file_id.
+ * Priority: session.current_photo_file_id -> session.photos[last] -> user.last_photo_file_id.
  */
 function resolveWorkingPhoto(session: any, user: any): { hasWorkingPhoto: boolean; workingPhotoFileId: string | null } {
-  const workingPhotoFileId = session?.current_photo_file_id || user?.last_photo_file_id || null;
+  const sessionCurrent = session?.current_photo_file_id || null;
+  const sessionPhotos = Array.isArray(session?.photos) ? session.photos : [];
+  const sessionLast = sessionPhotos.length > 0 ? sessionPhotos[sessionPhotos.length - 1] : null;
+  const workingPhotoFileId = sessionCurrent || sessionLast || user?.last_photo_file_id || null;
   return {
     hasWorkingPhoto: !!workingPhotoFileId,
     workingPhotoFileId,
   };
+}
+
+/**
+ * Latest known photo for the user from recent sessions.
+ * Used as a fallback source-of-truth when users.last_photo_file_id lags behind.
+ */
+async function getLatestSessionPhotoFileId(userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("sessions")
+    .select("id, state, current_photo_file_id, photos, updated_at")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(12);
+  if (error) {
+    console.warn("[photo_source] getLatestSessionPhotoFileId query error:", error.message);
+    return null;
+  }
+  const rows = Array.isArray(data) ? data : [];
+  for (const row of rows) {
+    const current = row?.current_photo_file_id || null;
+    const photos = Array.isArray(row?.photos) ? row.photos : [];
+    const tail = photos.length > 0 ? photos[photos.length - 1] : null;
+    const candidate = current || tail;
+    if (candidate) {
+      console.log("[photo_source] latest session photo selected", {
+        userId,
+        sessionId: row?.id ?? null,
+        sessionState: row?.state ?? null,
+        source: current ? "current_photo_file_id" : "photos_tail",
+      });
+      return candidate;
+    }
+  }
+  return null;
 }
 
 // Photo handler
@@ -3878,7 +3951,16 @@ async function handlePackMenuEntry(
     // Source of truth for pack catalog in current DB: pack_content_sets.
     const contentSets = await getActivePackContentSets();
     if (!contentSets?.length) {
-      await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang, ctx?.from?.id));
+      const isAdmin = config.adminIds.includes(telegramId);
+      const msg =
+        lang === "ru"
+          ? isAdmin
+            ? "Наборов пока нет. Используйте «Сгенерировать пак» в меню, чтобы создать первый."
+            : "Наборы пока не готовы."
+          : isAdmin
+            ? "No sets yet. Use «Generate pack» in the menu to create the first one."
+            : "Sets not ready yet.";
+      await ctx.reply(msg, getMainMenuKeyboard(lang, ctx?.from?.id));
       return;
     }
     const templateId = String(contentSets[0].pack_template_id || "couple_v1");
@@ -4007,6 +4089,7 @@ bot.hears(["📦 Создать пак", "📦 Create pack", "📦 Пак сти
 });
 
 // Menu: 🔄 Сгенерировать пак (admin only, test) — create session wait_pack_generate_request, ask for theme (docs/20-02-admin-generate-pack-menu-button.md)
+// When no content sets exist yet, admin can still generate the first pack (template_id default, pack_content_set_id null).
 bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId || !config.adminIds.includes(telegramId)) return;
@@ -4016,15 +4099,10 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
   const lang = user.lang || "en";
 
   const contentSets = await getActivePackContentSets();
-  if (!contentSets?.length) {
-    await ctx.reply(
-      lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.",
-      getMainMenuKeyboard(lang, telegramId)
-    );
-    return;
-  }
-  const templateId = String(contentSets[0].pack_template_id || "couple_v1");
-  const contentSetId = contentSets[0].id;
+  const templateId = contentSets?.length
+    ? String(contentSets[0].pack_template_id || "couple_v1")
+    : "couple_v1";
+  const contentSetId = contentSets?.length ? contentSets[0].id : null;
 
   await supabase
     .from("sessions")
@@ -4042,7 +4120,7 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
       flow_kind: "pack",
       session_rev: 1,
       pack_template_id: templateId,
-      pack_content_set_id: contentSetId,
+      ...(contentSetId != null && { pack_content_set_id: contentSetId }),
       subject_mode: "single",
       subject_gender: "female",
       env: config.appEnv,
@@ -4064,7 +4142,7 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
   );
 });
 
-// Menu: ⭐ Сделать примером (admin only) — выбор набора, ссылка на стикерпак → sticker_pack_example/{id}/1..9.webp (карусель бота; pack/content — для лендинга)
+// Menu: ⭐ Сделать примером (admin only) — выбор набора, ссылка на стикерпак → sticker_pack_example/{id}/example.webp (карусель бота; pack/content — для лендинга)
 bot.hears(["⭐ Сделать примером", "⭐ Make as example"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId || !config.adminIds.includes(telegramId)) return;
@@ -4668,14 +4746,15 @@ bot.action(/^pack_admin_pack_rework(:.+)?$/, async (ctx) => {
     let previousSpec: PackSpecRow | null = (session.pending_rejected_pack_spec as PackSpecRow | null) ?? null;
     let reworkSuggestions = suggestions;
     let reworkReasons = (reasons?.length ?? 0) > 0 ? reasons : undefined;
-    let result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons);
+    const reworkSubjectType = subjectTypeFromSession(session);
+    let result = await reworkOneIteration(reworkPlan, reworkSubjectType, reworkSuggestions, previousSpec, reworkReasons);
     let spec = result.spec;
     let critic = result.critic;
     if (!critic.pass) {
       previousSpec = spec;
       reworkSuggestions = critic.suggestions ?? [];
       reworkReasons = critic.reasons ?? [];
-      result = await reworkOneIteration(reworkPlan, reworkSuggestions, previousSpec, reworkReasons.length ? reworkReasons : undefined);
+      result = await reworkOneIteration(reworkPlan, reworkSubjectType, reworkSuggestions, previousSpec, reworkReasons.length ? reworkReasons : undefined);
       spec = result.spec;
       critic = result.critic;
     }
@@ -5921,7 +6000,7 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
   await ctx.reply(lang === "ru" ? "Оставляем текущее фото." : "Keeping current photo.");
 });
 
-/** Admin flow «Сделать примером»: набор выбран кнопкой (step 2), обрабатываем ссылку → sticker_pack_example/{id}/1..9.webp */
+/** Admin flow «Сделать примером»: набор выбран кнопкой (step 2), обрабатываем ссылку → sticker_pack_example/{id}/example.webp (4x4). */
 async function handleAdminPackContentExampleText(ctx: any, telegramId: number, text: string): Promise<void> {
   const flow = adminPackContentExampleFlow.get(telegramId)!;
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
@@ -5945,7 +6024,9 @@ async function handleAdminPackContentExampleText(ctx: any, telegramId: number, t
     }
     const set = await getStickerSet(shortName);
     const stickersRaw = (set as { stickers: { file_id: string; is_animated?: boolean; is_video?: boolean }[] }).stickers;
-    const stickers = stickersRaw.filter((s: any) => !s.is_animated && !s.is_video).slice(0, 9);
+    const stickers = stickersRaw
+      .filter((s: any) => !s.is_animated && !s.is_video)
+      .slice(0, PACK_EXAMPLE_GRID_STICKERS);
     if (stickers.length === 0) {
       await ctx.reply(isRu ? "В наборе нет статичных стикеров или набор пуст." : "No static stickers in set or set is empty.");
       adminPackContentExampleFlow.delete(telegramId);
@@ -5957,7 +6038,7 @@ async function handleAdminPackContentExampleText(ctx: any, telegramId: number, t
       const buf = await downloadFile(filePath);
       buffers.push(buf);
     }
-    const grid = await assembleGridTo1024(buffers, 3, 3);
+    const grid = await assembleGridTo1024(buffers, PACK_EXAMPLE_GRID_COLS, PACK_EXAMPLE_GRID_ROWS);
     const storagePath = getPackContentSetExampleStoragePath(contentSetId);
     const { error: uploadErr } = await supabase.storage.from(bucket).upload(storagePath, grid, { contentType: "image/webp", upsert: true });
     if (uploadErr) {
@@ -6045,7 +6126,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // === Admin: «Сделать примером» flow (pack_content_sets → pack link → sticker_pack_example/{id}/1..9.webp) ===
+  // === Admin: «Сделать примером» flow (pack_content_sets → pack link → sticker_pack_example/{id}/example.webp) ===
   if (config.adminIds.includes(telegramId) && adminPackContentExampleFlow.has(telegramId)) {
     const text = ctx.message?.text?.trim() ?? "";
     console.log("[admin_pack_content_example] text in flow", { telegramId, textPreview: text.slice(0, 50) });
@@ -6157,7 +6238,7 @@ bot.on("text", async (ctx) => {
     }
     const statusMsg = await ctx.reply(lang === "ru" ? "⏳ Переделываю по твоему фидбеку…" : "⏳ Reworking with your feedback…").catch(() => null);
     try {
-      const result = await reworkOneIteration(plan, [userFeedback], undefined, undefined);
+      const result = await reworkOneIteration(plan, subjectTypeFromSession(session), [userFeedback], undefined, undefined);
       const spec = result.spec;
       const critic = result.critic;
       await supabase
@@ -6287,8 +6368,9 @@ bot.on("text", async (ctx) => {
     };
     let result: Awaited<ReturnType<typeof runPackGenerationPipeline>>;
     try {
-      const subjectType = subjectTypeFromSession(session);
-      result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2, onProgress });
+      const subjectType = parseSubjectTypeFromThemeRequest(request) ?? subjectTypeFromSession(session);
+      // Keep the initial pipeline bounded: one Critic pass in-handler, then optional manual rework by button.
+      result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 1, onProgress });
     } finally {
       await supabase
         .from("sessions")
@@ -11063,7 +11145,7 @@ async function showStickerIdeaCard(ctx: any, opts: {
 
   rows.push([Markup.button.callback(
     isRu ? `🎨 Сгенерить (1💎)` : `🎨 Generate (1💎)`,
-    sessionRef ? `asst_idea_gen:${ideaIndex}:${sessionRef}` : `asst_idea_gen:${ideaIndex}`
+    appendSessionRefIfFits(`asst_idea_gen:${ideaIndex}`, sessionRef)
   )]);
 
   // Holiday button + Next idea
@@ -11077,29 +11159,29 @@ async function showStickerIdeaCard(ctx: any, opts: {
       ? `${holiday.emoji} ${holidayName}: on`
       : `${holiday.emoji} ${holidayName}: off`;
     const holidayCallback = isHolidayActive
-      ? (sessionRef ? `asst_idea_holiday_off:${ideaIndex}:${sessionRef}` : `asst_idea_holiday_off:${ideaIndex}`)
-      : (sessionRef ? `asst_idea_holiday:${holiday.id}:${ideaIndex}:${sessionRef}` : `asst_idea_holiday:${holiday.id}:${ideaIndex}`);
+      ? appendSessionRefIfFits(`asst_idea_holiday_off:${ideaIndex}`, sessionRef)
+      : appendSessionRefIfFits(`asst_idea_holiday:${holiday.id}:${ideaIndex}`, sessionRef);
     holidayNextRow.push(Markup.button.callback(holidayLabel, holidayCallback));
   }
   holidayNextRow.push(Markup.button.callback(
     isRu ? "➡️ Другая" : "➡️ Next",
-    sessionRef ? `asst_idea_next:${ideaIndex}:${sessionRef}` : `asst_idea_next:${ideaIndex}`
+    appendSessionRefIfFits(`asst_idea_next:${ideaIndex}`, sessionRef)
   ));
   rows.push(holidayNextRow);
 
   rows.push([Markup.button.callback(
     isRu ? "🔄 Другой стиль" : "🔄 Change style",
-    sessionRef ? `asst_idea_style:${ideaIndex}:${sessionRef}` : `asst_idea_style:${ideaIndex}`
+    appendSessionRefIfFits(`asst_idea_style:${ideaIndex}`, sessionRef)
   )]);
 
   rows.push([Markup.button.callback(
     isRu ? "✏️ Своя идея" : "✏️ Custom idea",
-    sessionRef ? `asst_idea_custom:${sessionRef}` : "asst_idea_custom"
+    appendSessionRefIfFits("asst_idea_custom", sessionRef)
   )]);
 
   rows.push([Markup.button.callback(
     isRu ? "⏭️ Пропустить" : "⏭️ Skip",
-    sessionRef ? `asst_idea_skip:${sessionRef}` : "asst_idea_skip"
+    appendSessionRefIfFits("asst_idea_skip", sessionRef)
   )]);
 
   await ctx.reply(text, Markup.inlineKeyboard(rows));
