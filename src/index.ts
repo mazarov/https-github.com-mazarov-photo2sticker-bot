@@ -1650,7 +1650,27 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     .neq("state", "canceled");
 
   // Create new session with assistant state
-  const lastPhoto = user.last_photo_file_id || null;
+  const lastPhotoFromSessions = await getLatestSessionPhotoFileId(user.id);
+  const lastPhotoFromUser = user.last_photo_file_id || null;
+  const lastPhoto = lastPhotoFromSessions || lastPhotoFromUser || null;
+  console.log("startAssistantDialog: photo source", {
+    userId: user.id,
+    source: lastPhotoFromSessions ? "sessions" : (lastPhotoFromUser ? "users.last_photo_file_id" : "none"),
+    hasPhoto: !!lastPhoto,
+  });
+  // Keep users.last_photo_file_id in sync with the latest session photo to avoid stale ideas.
+  if (lastPhotoFromSessions && lastPhotoFromSessions !== lastPhotoFromUser) {
+    const { error: syncErr } = await supabase
+      .from("users")
+      .update({ last_photo_file_id: lastPhotoFromSessions })
+      .eq("id", user.id);
+    if (syncErr) {
+      console.warn("startAssistantDialog: failed to sync users.last_photo_file_id:", syncErr.message);
+    } else {
+      user.last_photo_file_id = lastPhotoFromSessions;
+      console.log("startAssistantDialog: synced users.last_photo_file_id from latest session photo");
+    }
+  }
   const { data: newSession, error: sessionError } = await supabase
     .from("sessions")
     .insert({
@@ -3181,19 +3201,61 @@ bot.command("support", async (ctx) => {
  * If found from user, copies it into the session for generation to work.
  */
 function getUserPhotoFileId(user: any, session: any): string | null {
-  return session?.current_photo_file_id || user?.last_photo_file_id || null;
+  const sessionCurrent = session?.current_photo_file_id || null;
+  const sessionPhotos = Array.isArray(session?.photos) ? session.photos : [];
+  const sessionLast = sessionPhotos.length > 0 ? sessionPhotos[sessionPhotos.length - 1] : null;
+  return sessionCurrent || sessionLast || user?.last_photo_file_id || null;
 }
 
 /**
  * Resolve authoritative "working photo" for any flow.
- * Priority: session.current_photo_file_id -> user.last_photo_file_id.
+ * Priority: session.current_photo_file_id -> session.photos[last] -> user.last_photo_file_id.
  */
 function resolveWorkingPhoto(session: any, user: any): { hasWorkingPhoto: boolean; workingPhotoFileId: string | null } {
-  const workingPhotoFileId = session?.current_photo_file_id || user?.last_photo_file_id || null;
+  const sessionCurrent = session?.current_photo_file_id || null;
+  const sessionPhotos = Array.isArray(session?.photos) ? session.photos : [];
+  const sessionLast = sessionPhotos.length > 0 ? sessionPhotos[sessionPhotos.length - 1] : null;
+  const workingPhotoFileId = sessionCurrent || sessionLast || user?.last_photo_file_id || null;
   return {
     hasWorkingPhoto: !!workingPhotoFileId,
     workingPhotoFileId,
   };
+}
+
+/**
+ * Latest known photo for the user from recent sessions.
+ * Used as a fallback source-of-truth when users.last_photo_file_id lags behind.
+ */
+async function getLatestSessionPhotoFileId(userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("sessions")
+    .select("id, state, current_photo_file_id, photos, updated_at")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(12);
+  if (error) {
+    console.warn("[photo_source] getLatestSessionPhotoFileId query error:", error.message);
+    return null;
+  }
+  const rows = Array.isArray(data) ? data : [];
+  for (const row of rows) {
+    const current = row?.current_photo_file_id || null;
+    const photos = Array.isArray(row?.photos) ? row.photos : [];
+    const tail = photos.length > 0 ? photos[photos.length - 1] : null;
+    const candidate = current || tail;
+    if (candidate) {
+      console.log("[photo_source] latest session photo selected", {
+        userId,
+        sessionId: row?.id ?? null,
+        sessionState: row?.state ?? null,
+        source: current ? "current_photo_file_id" : "photos_tail",
+      });
+      return candidate;
+    }
+  }
+  return null;
 }
 
 // Photo handler
