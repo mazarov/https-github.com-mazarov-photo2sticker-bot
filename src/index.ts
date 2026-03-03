@@ -11083,7 +11083,7 @@ async function showStickerIdeaCard(ctx: any, opts: {
 
   rows.push([Markup.button.callback(
     isRu ? `🎨 Сгенерить (1💎)` : `🎨 Generate (1💎)`,
-    sessionRef ? `asst_idea_gen:${ideaIndex}:${sessionRef}` : `asst_idea_gen:${ideaIndex}`
+    appendSessionRefIfFits(`asst_idea_gen:${ideaIndex}`, sessionRef)
   )]);
 
   // Holiday button + Next idea
@@ -11097,29 +11097,29 @@ async function showStickerIdeaCard(ctx: any, opts: {
       ? `${holiday.emoji} ${holidayName}: on`
       : `${holiday.emoji} ${holidayName}: off`;
     const holidayCallback = isHolidayActive
-      ? (sessionRef ? `asst_idea_holiday_off:${ideaIndex}:${sessionRef}` : `asst_idea_holiday_off:${ideaIndex}`)
-      : (sessionRef ? `asst_idea_holiday:${holiday.id}:${ideaIndex}:${sessionRef}` : `asst_idea_holiday:${holiday.id}:${ideaIndex}`);
+      ? appendSessionRefIfFits(`asst_idea_holiday_off:${ideaIndex}`, sessionRef)
+      : appendSessionRefIfFits(`asst_idea_holiday:${holiday.id}:${ideaIndex}`, sessionRef);
     holidayNextRow.push(Markup.button.callback(holidayLabel, holidayCallback));
   }
   holidayNextRow.push(Markup.button.callback(
     isRu ? "➡️ Другая" : "➡️ Next",
-    sessionRef ? `asst_idea_next:${ideaIndex}:${sessionRef}` : `asst_idea_next:${ideaIndex}`
+    appendSessionRefIfFits(`asst_idea_next:${ideaIndex}`, sessionRef)
   ));
   rows.push(holidayNextRow);
 
   rows.push([Markup.button.callback(
     isRu ? "🔄 Другой стиль" : "🔄 Change style",
-    sessionRef ? `asst_idea_style:${ideaIndex}:${sessionRef}` : `asst_idea_style:${ideaIndex}`
+    appendSessionRefIfFits(`asst_idea_style:${ideaIndex}`, sessionRef)
   )]);
 
   rows.push([Markup.button.callback(
     isRu ? "✏️ Своя идея" : "✏️ Custom idea",
-    sessionRef ? `asst_idea_custom:${sessionRef}` : "asst_idea_custom"
+    appendSessionRefIfFits("asst_idea_custom", sessionRef)
   )]);
 
   rows.push([Markup.button.callback(
     isRu ? "⏭️ Пропустить" : "⏭️ Skip",
-    sessionRef ? `asst_idea_skip:${sessionRef}` : "asst_idea_skip"
+    appendSessionRefIfFits("asst_idea_skip", sessionRef)
   )]);
 
   await ctx.reply(text, Markup.inlineKeyboard(rows));
