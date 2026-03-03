@@ -1481,32 +1481,33 @@ async function startGeneration(
 }
 
 // Credit packages: { credits, bonus_credits?, price_in_stars, label_ru, label_en, price_rub, adminOnly?, trialOnly?, hidden? }
+// 1 pack = 16 credits (1 preview + 15 approve). Credits aligned to pack count.
 const CREDIT_PACKS = [
   { credits: 1, price: 1, price_rub: 1, label_ru: "🔧 Тест", label_en: "🔧 Test", adminOnly: true },
-  { credits: 5, bonus_credits: 5, price: 49, price_rub: 51, label_ru: "🎁 Попробуй", label_en: "🎁 Try", trialOnly: true },
-  { credits: 10, price: 75, price_rub: 78, label_ru: "⭐ Старт", label_en: "⭐ Start" },
-  { credits: 30, price: 175, price_rub: 182, label_ru: "💎 Поп", label_en: "💎 Pop" },
-  { credits: 100, price: 500, price_rub: 520, label_ru: "👑 Про", label_en: "👑 Pro" },
-  { credits: 250, price: 1125, price_rub: 1170, label_ru: "🚀 Макс", label_en: "🚀 Max" },
+  { credits: 9, bonus_credits: 8, price: 98, price_rub: 102, label_ru: "🎁 Попробуй", label_en: "🎁 Try", trialOnly: true },
+  { credits: 17, price: 150, price_rub: 156, label_ru: "⭐ Старт", label_en: "⭐ Start" },
+  { credits: 32, price: 350, price_rub: 364, label_ru: "💎 Поп", label_en: "💎 Pop" },
+  { credits: 112, price: 1000, price_rub: 1040, label_ru: "👑 Про", label_en: "👑 Pro" },
+  { credits: 256, price: 2250, price_rub: 2340, label_ru: "🚀 Макс", label_en: "🚀 Max" },
   // Hidden discount packs (not shown in UI, used via direct callback for promos, abandoned carts, admin discounts)
   // -10%
-  { credits: 5, bonus_credits: 5, price: 44, price_rub: 46, label_ru: "🎁 Попробуй -10%", label_en: "🎁 Try -10%", hidden: true, trialOnly: true },
-  { credits: 10, price: 68, price_rub: 71, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
-  { credits: 30, price: 158, price_rub: 164, label_ru: "💎 Поп -10%", label_en: "💎 Pop -10%", hidden: true },
-  { credits: 100, price: 450, price_rub: 468, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true },
-  { credits: 250, price: 1013, price_rub: 1054, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true },
+  { credits: 9, bonus_credits: 8, price: 88, price_rub: 92, label_ru: "🎁 Попробуй -10%", label_en: "🎁 Try -10%", hidden: true, trialOnly: true },
+  { credits: 17, price: 135, price_rub: 140, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
+  { credits: 32, price: 315, price_rub: 328, label_ru: "💎 Поп -10%", label_en: "💎 Pop -10%", hidden: true },
+  { credits: 112, price: 900, price_rub: 936, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true },
+  { credits: 256, price: 2025, price_rub: 2106, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true },
   // -15%
-  { credits: 5, bonus_credits: 5, price: 42, price_rub: 44, label_ru: "🎁 Попробуй -15%", label_en: "🎁 Try -15%", hidden: true, trialOnly: true },
-  { credits: 10, price: 64, price_rub: 67, label_ru: "⭐ Старт -15%", label_en: "⭐ Start -15%", hidden: true },
-  { credits: 30, price: 149, price_rub: 155, label_ru: "💎 Поп -15%", label_en: "💎 Pop -15%", hidden: true },
-  { credits: 100, price: 425, price_rub: 442, label_ru: "👑 Про -15%", label_en: "👑 Pro -15%", hidden: true },
-  { credits: 250, price: 956, price_rub: 994, label_ru: "🚀 Макс -15%", label_en: "🚀 Max -15%", hidden: true },
+  { credits: 9, bonus_credits: 8, price: 83, price_rub: 87, label_ru: "🎁 Попробуй -15%", label_en: "🎁 Try -15%", hidden: true, trialOnly: true },
+  { credits: 17, price: 128, price_rub: 133, label_ru: "⭐ Старт -15%", label_en: "⭐ Start -15%", hidden: true },
+  { credits: 32, price: 298, price_rub: 309, label_ru: "💎 Поп -15%", label_en: "💎 Pop -15%", hidden: true },
+  { credits: 112, price: 850, price_rub: 884, label_ru: "👑 Про -15%", label_en: "👑 Pro -15%", hidden: true },
+  { credits: 256, price: 1913, price_rub: 1989, label_ru: "🚀 Макс -15%", label_en: "🚀 Max -15%", hidden: true },
   // -25%
-  { credits: 5, bonus_credits: 5, price: 37, price_rub: 38, label_ru: "🎁 Попробуй -25%", label_en: "🎁 Try -25%", hidden: true, trialOnly: true },
-  { credits: 10, price: 56, price_rub: 58, label_ru: "⭐ Старт -25%", label_en: "⭐ Start -25%", hidden: true },
-  { credits: 30, price: 131, price_rub: 136, label_ru: "💎 Поп -25%", label_en: "💎 Pop -25%", hidden: true },
-  { credits: 100, price: 375, price_rub: 390, label_ru: "👑 Про -25%", label_en: "👑 Pro -25%", hidden: true },
-  { credits: 250, price: 844, price_rub: 878, label_ru: "🚀 Макс -25%", label_en: "🚀 Max -25%", hidden: true },
+  { credits: 9, bonus_credits: 8, price: 74, price_rub: 77, label_ru: "🎁 Попробуй -25%", label_en: "🎁 Try -25%", hidden: true, trialOnly: true },
+  { credits: 17, price: 113, price_rub: 117, label_ru: "⭐ Старт -25%", label_en: "⭐ Start -25%", hidden: true },
+  { credits: 32, price: 263, price_rub: 273, label_ru: "💎 Поп -25%", label_en: "💎 Pop -25%", hidden: true },
+  { credits: 112, price: 750, price_rub: 780, label_ru: "👑 Про -25%", label_en: "👑 Pro -25%", hidden: true },
+  { credits: 256, price: 1688, price_rub: 1755, label_ru: "🚀 Макс -25%", label_en: "🚀 Max -25%", hidden: true },
 ];
 
 function getPackTotalCredits(pack: any): number {
