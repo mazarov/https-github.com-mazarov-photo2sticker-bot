@@ -58,7 +58,9 @@ import {
 } from "./lib/pack-multiagent";
 
 const bot = new Telegraf(config.telegramBotToken, {
-  handlerTimeout: 180_000, // 3 min — pack ideas generation with GPT-4o vision can be slow
+  // Multi-agent pack generation can include several LLM passes (critic + rework).
+  // Keep handler alive long enough so admin flow does not crash mid-iteration.
+  handlerTimeout: 600_000, // 10 min
 });
 
 // Global error handler — catch all unhandled errors from handlers
@@ -77,7 +79,7 @@ const pendingAdminReplies = new Map<number, {
   username: string;
 }>();
 
-// Admin flow: «Сделать примером» — выбор набора из pack_content_sets, затем ссылка на стикерпак → sticker_pack_example/{id}/1..9.webp (не pack/content — тот для лендинга)
+// Admin flow: «Сделать примером» — выбор набора из pack_content_sets, затем ссылка на стикерпак → sticker_pack_example/{id}/example.webp (4x4 grid, не pack/content — тот для лендинга)
 const adminPackContentExampleFlow = new Map<number, { step: 2; contentSetId: string }>();
 
 const app = express();
@@ -601,6 +603,9 @@ const PACK_EXAMPLE_STORAGE_PREFIX = "sticker_pack_example/";
 
 /** Имя файла примера набора: одна сетка 1024×1024 из стикеров пака. */
 const PACK_EXAMPLE_FILENAME = "example.webp";
+const PACK_EXAMPLE_GRID_COLS = 4;
+const PACK_EXAMPLE_GRID_ROWS = 4;
+const PACK_EXAMPLE_GRID_STICKERS = PACK_EXAMPLE_GRID_COLS * PACK_EXAMPLE_GRID_ROWS;
 
 /** Путь в бакете: sticker_pack_example/{contentSetId}/example.webp (сетка из стикеров). Совпадает с публичным URL Storage. */
 function getPackContentSetExampleStoragePath(contentSetId: string): string {
@@ -1580,7 +1585,7 @@ async function getUser(telegramId: number) {
   return data;
 }
 
-// Helper: get persistent menu keyboard (2 rows). Admin on test sees "Сгенерировать пак" in row1 (docs/20-02-admin-generate-pack-menu-button.md).
+// Helper: get persistent menu keyboard (2 rows). Single-sticker entry is always visible in row1.
 function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const isAdmin = telegramId != null && config.adminIds.includes(telegramId);
   const showAdminGenerate = isAdmin;
@@ -1588,15 +1593,15 @@ function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const row1 =
     lang === "ru"
       ? showAdminMakeExample
-        ? ["📦 Создать пак", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
+        ? ["✨ Создать стикер", "📦 Создать пак", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
         : showAdminGenerate
-          ? ["📦 Создать пак", "🔄 Сгенерировать пак"]
-          : ["📦 Создать пак"]
+          ? ["✨ Создать стикер", "📦 Создать пак", "🔄 Сгенерировать пак"]
+          : ["✨ Создать стикер", "📦 Создать пак"]
       : showAdminMakeExample
-        ? ["📦 Create pack", "🔄 Generate pack", "⭐ Make as example"]
+        ? ["✨ Create sticker", "📦 Create pack", "🔄 Generate pack", "⭐ Make as example"]
         : showAdminGenerate
-          ? ["📦 Create pack", "🔄 Generate pack"]
-          : ["📦 Create pack"];
+          ? ["✨ Create sticker", "📦 Create pack", "🔄 Generate pack"]
+          : ["✨ Create sticker", "📦 Create pack"];
   const row2 =
     lang === "ru"
       ? ["💰 Ваш баланс", "💬 Поддержка"]
@@ -4075,7 +4080,7 @@ bot.hears(["🔄 Сгенерировать пак", "🔄 Generate pack"], asyn
   );
 });
 
-// Menu: ⭐ Сделать примером (admin only) — выбор набора, ссылка на стикерпак → sticker_pack_example/{id}/1..9.webp (карусель бота; pack/content — для лендинга)
+// Menu: ⭐ Сделать примером (admin only) — выбор набора, ссылка на стикерпак → sticker_pack_example/{id}/example.webp (карусель бота; pack/content — для лендинга)
 bot.hears(["⭐ Сделать примером", "⭐ Make as example"], async (ctx) => {
   const telegramId = ctx.from?.id;
   if (!telegramId || !config.adminIds.includes(telegramId)) return;
@@ -5933,7 +5938,7 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
   await ctx.reply(lang === "ru" ? "Оставляем текущее фото." : "Keeping current photo.");
 });
 
-/** Admin flow «Сделать примером»: набор выбран кнопкой (step 2), обрабатываем ссылку → sticker_pack_example/{id}/1..9.webp */
+/** Admin flow «Сделать примером»: набор выбран кнопкой (step 2), обрабатываем ссылку → sticker_pack_example/{id}/example.webp (4x4). */
 async function handleAdminPackContentExampleText(ctx: any, telegramId: number, text: string): Promise<void> {
   const flow = adminPackContentExampleFlow.get(telegramId)!;
   const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
@@ -5957,7 +5962,9 @@ async function handleAdminPackContentExampleText(ctx: any, telegramId: number, t
     }
     const set = await getStickerSet(shortName);
     const stickersRaw = (set as { stickers: { file_id: string; is_animated?: boolean; is_video?: boolean }[] }).stickers;
-    const stickers = stickersRaw.filter((s: any) => !s.is_animated && !s.is_video).slice(0, 9);
+    const stickers = stickersRaw
+      .filter((s: any) => !s.is_animated && !s.is_video)
+      .slice(0, PACK_EXAMPLE_GRID_STICKERS);
     if (stickers.length === 0) {
       await ctx.reply(isRu ? "В наборе нет статичных стикеров или набор пуст." : "No static stickers in set or set is empty.");
       adminPackContentExampleFlow.delete(telegramId);
@@ -5969,7 +5976,7 @@ async function handleAdminPackContentExampleText(ctx: any, telegramId: number, t
       const buf = await downloadFile(filePath);
       buffers.push(buf);
     }
-    const grid = await assembleGridTo1024(buffers, 3, 3);
+    const grid = await assembleGridTo1024(buffers, PACK_EXAMPLE_GRID_COLS, PACK_EXAMPLE_GRID_ROWS);
     const storagePath = getPackContentSetExampleStoragePath(contentSetId);
     const { error: uploadErr } = await supabase.storage.from(bucket).upload(storagePath, grid, { contentType: "image/webp", upsert: true });
     if (uploadErr) {
@@ -6057,7 +6064,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // === Admin: «Сделать примером» flow (pack_content_sets → pack link → sticker_pack_example/{id}/1..9.webp) ===
+  // === Admin: «Сделать примером» flow (pack_content_sets → pack link → sticker_pack_example/{id}/example.webp) ===
   if (config.adminIds.includes(telegramId) && adminPackContentExampleFlow.has(telegramId)) {
     const text = ctx.message?.text?.trim() ?? "";
     console.log("[admin_pack_content_example] text in flow", { telegramId, textPreview: text.slice(0, 50) });
@@ -6300,7 +6307,8 @@ bot.on("text", async (ctx) => {
     let result: Awaited<ReturnType<typeof runPackGenerationPipeline>>;
     try {
       const subjectType = parseSubjectTypeFromThemeRequest(request) ?? subjectTypeFromSession(session);
-      result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 2, onProgress });
+      // Keep the initial pipeline bounded: one Critic pass in-handler, then optional manual rework by button.
+      result = await runPackGenerationPipeline(request, subjectType, { maxCriticIterations: 1, onProgress });
     } finally {
       await supabase
         .from("sessions")

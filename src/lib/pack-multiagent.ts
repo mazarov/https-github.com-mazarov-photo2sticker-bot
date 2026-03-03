@@ -158,7 +158,7 @@ export const PACK_AGENT_APP_CONFIG_KEYS = {
   critic: "pack_openai_model_critic",
 } as const;
 
-const OPENAI_TIMEOUT_MS = 180_000;
+const OPENAI_TIMEOUT_MS = 300_000;
 
 /** Модель берётся только из app_config (ключи PACK_AGENT_APP_CONFIG_KEYS). Дефолтов в коде нет. */
 async function getModelForAgent(agent: keyof typeof PACK_AGENT_APP_CONFIG_KEYS): Promise<string> {
@@ -178,7 +178,7 @@ async function openAiChatJson<T>(
   model: string,
   systemPrompt: string,
   userMessage: string,
-  options?: { temperature?: number; agentLabel?: string }
+  options?: { temperature?: number; agentLabel?: string; maxCompletionTokens?: number }
 ): Promise<T> {
   if (!config.openaiApiKey) {
     throw new Error("OPENAI_API_KEY is not set; pack pipeline requires OpenAI.");
@@ -202,6 +202,9 @@ async function openAiChatJson<T>(
     response_format: { type: "json_object" },
     temperature: options?.temperature ?? 1,
   };
+  if (typeof options?.maxCompletionTokens === "number" && options.maxCompletionTokens > 0) {
+    body.max_completion_tokens = options.maxCompletionTokens;
+  }
   const response = await axios.post(
     "https://api.openai.com/v1/chat/completions",
     body,
@@ -338,7 +341,10 @@ function mapRawToBriefAndPlan(raw: BriefAndPlanRaw): { brief: ConceptBrief; plan
 async function runConceptAndPlan(request: string, subjectType: SubjectType): Promise<{ brief: ConceptBrief; plan: BossPlan }> {
   const model = await getModelForAgent("brief_and_plan");
   const userMessage = `User request: ${request}\n\nPhoto context (subject_type): ${subjectType}\n\nOutput the combined brief and plan as a single JSON.`;
-  const raw = await openAiChatJson<BriefAndPlanRaw | { brief: ConceptBrief; plan: BossPlan }>(model, BRIEF_AND_PLAN_SYSTEM, userMessage, { agentLabel: "brief_and_plan" });
+  const raw = await openAiChatJson<BriefAndPlanRaw | { brief: ConceptBrief; plan: BossPlan }>(model, BRIEF_AND_PLAN_SYSTEM, userMessage, {
+    agentLabel: "brief_and_plan",
+    maxCompletionTokens: 2200,
+  });
   // Модель может вернуть вложенный { brief, plan } или плоский объект со всеми полями
   if (raw && typeof raw === "object" && "plan" in raw && raw.plan && typeof raw.plan === "object" && "moments" in raw.plan) {
     const plan = raw.plan as BossPlan;
@@ -399,6 +405,8 @@ Risk > safety.
 - chat-like, first-person
 - broken grammar allowed
 - ellipses and unfinished thoughts encouraged
+- RU captions: 2-15 characters max
+- EN captions: 2-18 characters max
 
 ---
 
@@ -554,9 +562,11 @@ function formatScenesUserMessage(
       parts.push("Critic reasons (what was wrong):\n" + criticFeedback.reasons.join("\n"));
     }
     if (criticFeedback.previousSpec?.scene_descriptions?.length) {
-      parts.push(
-        "Previous version (rejected — improve this):\nscene_descriptions: " + JSON.stringify(criticFeedback.previousSpec.scene_descriptions)
-      );
+      const compactPrevious = criticFeedback.previousSpec.scene_descriptions
+        .slice(0, PACK_STICKER_COUNT)
+        .map((s, i) => `${i + 1}. ${String(s).slice(0, 120)}`)
+        .join("\n");
+      parts.push("Previous version (rejected — improve this):\n" + compactPrevious);
     }
     if (criticFeedback.suggestions?.length) {
       parts.push("Critic suggestions (apply these fixes):\n" + criticFeedback.suggestions.join("\n"));
@@ -592,7 +602,10 @@ function formatCriticUserMessage(spec: PackSpecRow): string {
 async function runCaptions(plan: BossPlan, subjectType: SubjectType, criticFeedback?: CriticFeedbackContext): Promise<CaptionsOutput> {
   const model = await getModelForAgent("captions");
   const userMessage = formatCaptionsUserMessage(plan, subjectType, criticFeedback);
-  return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions" });
+  return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, {
+    agentLabel: "captions",
+    maxCompletionTokens: 900,
+  });
 }
 
 // --- Scenes — visual "WOW" engine, executes plan ---
@@ -713,7 +726,10 @@ async function runScenes(
 ): Promise<ScenesOutput> {
   const model = await getModelForAgent("scenes");
   const userMessage = formatScenesUserMessage(plan, outfit, subjectType, criticFeedback, visualAnchors);
-  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes" });
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, {
+    agentLabel: "scenes",
+    maxCompletionTokens: 1800,
+  });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, PACK_STICKER_COUNT) : [];
   return { scene_descriptions: sceneDescriptions };
 }
@@ -754,6 +770,7 @@ over approving boring ones.
 ## TECHNICAL CHECK
 - Each scene must work as an isolated chest-up (or waist-up) sticker; no background-dependent staging (rooms, doors, large furniture).
 - No more than 3 scenes with the same body posture (e.g. arms crossed, hands on hips).
+- Do NOT fail by "too many chest-up scenes": chest-up is the default framing in this pipeline.
 
 ---
 
@@ -781,7 +798,11 @@ JSON only: pass (boolean), reasons (array, max 3 items, max 12 words each), sugg
 async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
   const model = await getModelForAgent("critic");
   const userMessage = formatCriticUserMessage(spec);
-  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, { temperature: 1, agentLabel: "critic" });
+  return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, {
+    temperature: 1,
+    agentLabel: "critic",
+    maxCompletionTokens: 600,
+  });
 }
 
 // --- Partial rework: parse indices from Critic feedback ---
@@ -822,7 +843,8 @@ async function runCaptionsForIndices(
   const prev = criticContext.previousSpec;
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
   const gender = subjectGenderFromType(subjectType);
-  let flatPlan = "MOMENTS:\n" + moments.map((m, i) => `${i + 1}. ${m}`).join("\n") + "\n\nTONE: " + (plan.tone ?? "");
+  const selectedMoments = indices.map((idx) => `${idx}: ${moments[idx] ?? ""}`).join("\n");
+  let flatPlan = "REJECTED_MOMENTS_BY_INDEX:\n" + selectedMoments + "\n\nTONE: " + (plan.tone ?? "");
   if (gender === "male") flatPlan += "\n\nSUBJECT: male. Russian labels MUST use masculine forms (видел, понял), NOT feminine (видела, поняла).";
   else if (gender === "female") flatPlan += "\n\nSUBJECT: female. Russian labels MUST use feminine forms (видела, поняла).";
   const userMessage =
@@ -832,8 +854,11 @@ async function runCaptionsForIndices(
       ? `Previous labels (RU): ${JSON.stringify(prev.labels)}\nPrevious labels_en (EN): ${JSON.stringify(prev.labels_en)}\n\n`
       : "") +
     `Critic reasons: ${(criticContext.reasons ?? []).join(" ")}\nCritic suggestions: ${criticContext.suggestions.join(" ")}\n\n` +
-    `Output JSON with keys: labels (array of ${indices.length} strings, RU, in order of indices), labels_en (array of ${indices.length} strings, EN). Each caption 15–20 characters.`;
-  const raw = await openAiChatJson<{ labels: string[]; labels_en: string[] }>(model, CAPTIONS_SYSTEM, userMessage, { agentLabel: "captions_rework" });
+    `Output JSON with keys: labels (array of ${indices.length} strings, RU, in order of indices), labels_en (array of ${indices.length} strings, EN). RU: 2-15 chars each, EN: 2-18 chars each.`;
+  const raw = await openAiChatJson<{ labels: string[]; labels_en: string[] }>(model, CAPTIONS_SYSTEM, userMessage, {
+    agentLabel: "captions_rework",
+    maxCompletionTokens: 500,
+  });
   const labels = Array.isArray(raw.labels) ? raw.labels.slice(0, indices.length) : [];
   const labels_en = Array.isArray(raw.labels_en) ? raw.labels_en.slice(0, indices.length) : [];
   return { labels, labels_en };
@@ -853,9 +878,13 @@ async function runScenesForIndices(
   const prev = criticContext.previousSpec;
   const moments = Array.isArray(plan.moments) ? plan.moments : [];
   const gender = subjectGenderFromType(subjectType);
+  const selectedMoments = indices.map((idx) => `${idx}: ${moments[idx] ?? ""}`).join("\n");
+  const previousSelectedScenes = prev?.scene_descriptions?.length
+    ? indices.map((idx) => `${idx}: ${prev.scene_descriptions[idx] ?? ""}`).join("\n")
+    : "";
   let flatPlan =
-    "MOMENTS:\n" +
-    moments.map((m, i) => `${i + 1}. ${m}`).join("\n") +
+    "REJECTED_MOMENTS_BY_INDEX:\n" +
+    selectedMoments +
     "\n\nSUBJECT_MODE: " +
     (plan.subject_mode ?? "single");
   if (gender !== "neutral") {
@@ -868,20 +897,24 @@ async function runScenesForIndices(
   const userMessage =
     `The critic rejected specific scenes. Regenerate ONLY the scene_descriptions at 0-based indices: ${JSON.stringify(indices)}.\n\n` +
     `${flatPlan}\n\n` +
-    (prev?.scene_descriptions?.length
-      ? `Previous scene_descriptions: ${JSON.stringify(prev.scene_descriptions)}\n\n`
+    (previousSelectedScenes
+      ? `Previous scene_descriptions by same indices:\n${previousSelectedScenes}\n\n`
       : "") +
     `Critic reasons: ${(criticContext.reasons ?? []).join(" ")}\nCritic suggestions: ${criticContext.suggestions.join(" ")}\n\n` +
     `Output JSON with one key: scene_descriptions (array of ${indices.length} strings, in order of indices). Each sentence 12–18 words, start with {subject}. No subordinate clauses.`;
-  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, { agentLabel: "scenes_rework" });
+  const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, {
+    agentLabel: "scenes_rework",
+    maxCompletionTokens: 700,
+  });
   const scene_descriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, indices.length) : [];
   return { scene_descriptions };
 }
 
 // --- Validation (docs/pack-batch-flow-9-scenes-rules.md, 16 in docs/final-promt-16.md) ---
-/** Allow 2–5 word captions (~2–25 chars). */
+/** Caption hard limits for sticker readability in Telegram. */
 const CAPTION_MIN_CHARS = 2;
-const CAPTION_MAX_CHARS = 30;
+const CAPTION_MAX_CHARS_RU = 15;
+const CAPTION_MAX_CHARS_EN = 18;
 const SCENE_MIN_WORDS = 12;
 const SCENE_MAX_WORDS = 18;
 
@@ -893,6 +926,40 @@ function countSubjectOccurrences(s: string): number {
   return (s.match(/\{subject\}/g) ?? []).length;
 }
 
+function normalizeCaptionLength(text: string, maxChars: number): string {
+  const raw = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  if (raw.length <= maxChars) return raw;
+
+  // First, try truncating by words while preserving readability.
+  const words = raw.split(" ");
+  let best = "";
+  for (const w of words) {
+    const candidate = best ? `${best} ${w}` : w;
+    if (candidate.length > maxChars) break;
+    best = candidate;
+  }
+  if (best.length >= CAPTION_MIN_CHARS) {
+    return best.replace(/[.,;:!?…-]+$/g, "").trim();
+  }
+
+  // Fallback: hard cut.
+  return raw.slice(0, maxChars).replace(/[.,;:!?…-]+$/g, "").trim();
+}
+
+function normalizeCaptions(captions: CaptionsOutput): CaptionsOutput {
+  return {
+    labels: (captions.labels ?? [])
+      .slice(0, PACK_STICKER_COUNT)
+      .map((c) => normalizeCaptionLength(c, CAPTION_MAX_CHARS_RU))
+      .map((c) => (c.length < CAPTION_MIN_CHARS ? c.slice(0, CAPTION_MIN_CHARS) : c)),
+    labels_en: (captions.labels_en ?? [])
+      .slice(0, PACK_STICKER_COUNT)
+      .map((c) => normalizeCaptionLength(c, CAPTION_MAX_CHARS_EN))
+      .map((c) => (c.length < CAPTION_MIN_CHARS ? c.slice(0, CAPTION_MIN_CHARS) : c)),
+  };
+}
+
 export function validateBatchSpec(spec: PackSpecRow): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
   const labels = spec.labels ?? [];
@@ -900,14 +967,14 @@ export function validateBatchSpec(spec: PackSpecRow): { ok: boolean; errors: str
   const scenes = spec.scene_descriptions ?? [];
   labels.forEach((l, i) => {
     const len = String(l).length;
-    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS) {
-      errors.push(`Caption[${i}] RU length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS})`);
+    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS_RU) {
+      errors.push(`Caption[${i}] RU length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS_RU})`);
     }
   });
   labelsEn.forEach((l, i) => {
     const len = String(l).length;
-    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS) {
-      errors.push(`Caption[${i}] EN length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS})`);
+    if (len < CAPTION_MIN_CHARS || len > CAPTION_MAX_CHARS_EN) {
+      errors.push(`Caption[${i}] EN length ${len} (expected ${CAPTION_MIN_CHARS}-${CAPTION_MAX_CHARS_EN})`);
     }
   });
   scenes.forEach((s, i) => {
@@ -925,6 +992,7 @@ export function validateBatchSpec(spec: PackSpecRow): { ok: boolean; errors: str
 
 // --- Assembly: plan + captions + scenes → row ---
 function assembleSpec(plan: BossPlan, captions: CaptionsOutput, scenes: ScenesOutput): PackSpecRow {
+  const normalizedCaptions = normalizeCaptions(captions);
   return {
     id: plan.id,
     pack_template_id: plan.pack_template_id,
@@ -932,8 +1000,8 @@ function assembleSpec(plan: BossPlan, captions: CaptionsOutput, scenes: ScenesOu
     name_en: plan.name_en,
     carousel_description_ru: plan.carousel_description_ru,
     carousel_description_en: plan.carousel_description_en,
-    labels: Array.isArray(captions.labels) ? captions.labels.slice(0, PACK_STICKER_COUNT) : [],
-    labels_en: Array.isArray(captions.labels_en) ? captions.labels_en.slice(0, PACK_STICKER_COUNT) : [],
+    labels: Array.isArray(normalizedCaptions.labels) ? normalizedCaptions.labels.slice(0, PACK_STICKER_COUNT) : [],
+    labels_en: Array.isArray(normalizedCaptions.labels_en) ? normalizedCaptions.labels_en.slice(0, PACK_STICKER_COUNT) : [],
     scene_descriptions: Array.isArray(scenes.scene_descriptions) ? scenes.scene_descriptions.slice(0, PACK_STICKER_COUNT) : [],
     scene_descriptions_ru: Array.isArray(scenes.scene_descriptions_ru) ? scenes.scene_descriptions_ru.slice(0, PACK_STICKER_COUNT) : undefined,
     sort_order: Number(plan.sort_order) || 200,
