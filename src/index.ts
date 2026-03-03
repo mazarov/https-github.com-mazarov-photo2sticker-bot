@@ -12227,8 +12227,7 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
   const startTime = Date.now();
   console.log("=== PAYMENT: pack_select START ===");
   console.log("timestamp:", new Date().toISOString());
-  
-  safeAnswerCbQuery(ctx);
+
   const telegramId = ctx.from?.id;
   console.log("telegramId:", telegramId);
   if (!telegramId) {
@@ -12289,9 +12288,16 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
       const lockMsg = lang === "ru"
         ? "У тебя уже открыта другая оплата. Заверши её или подожди 15 минут."
         : "You already have another payment in progress. Complete it or wait 15 minutes.";
-      // Callback query is already acknowledged at handler start via safeAnswerCbQuery(),
-      // so sending a second answerCbQuery silently fails. Use chat message for visibility.
-      await ctx.reply(lockMsg).catch(() => {});
+      console.log("PAYMENT LOCK: fresh active tx with different pack", {
+        activeTxId: activeCreatedTx.id,
+        activeAmount: activeCreatedTx.amount,
+        activePrice: activeCreatedTx.price,
+        requestedAmount: credits,
+        requestedPrice: price,
+      });
+      await ctx.answerCbQuery(lockMsg, { show_alert: true }).catch(async () => {
+        await ctx.reply(lockMsg).catch(() => {});
+      });
       return;
     }
     if (!isFresh) {
