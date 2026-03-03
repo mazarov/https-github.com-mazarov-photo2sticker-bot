@@ -4358,12 +4358,6 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const carouselCaption = `*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(telegramId, session.id);
-  const packHolidayEntry = await getPackHolidayTheme();
-  const holidayRowEntry: { text: string; callback_data: string }[] = [];
-  if (packHolidayEntry) {
-    const holidayLabel = (lang === "ru" ? `${packHolidayEntry.emoji} ${packHolidayEntry.name_ru}` : `${packHolidayEntry.emoji} ${packHolidayEntry.name_en}`) + ": off";
-    holidayRowEntry.push({ text: holidayLabel, callback_data: `pack_holiday:${packHolidayEntry.id}` });
-  }
   const keyboard = {
     inline_keyboard: [
       [
@@ -4372,7 +4366,6 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
-      ...(holidayRowEntry.length ? [holidayRowEntry] : []),
       ...(adminRow.length ? [adminRow] : []),
     ],
   };
@@ -4825,13 +4818,6 @@ async function buildPackCarouselCard(
   const carouselCaption = `*${escapeMarkdownForTelegram(setName)}*\n${escapeMarkdownForTelegram(setDesc)}`;
   const tryBtn = await getText(lang, "pack.carousel_try_btn", { name: setName });
   const adminRow = getPackCarouselAdminRow(opts.telegramId ?? 0, session.id);
-  const packHoliday = await getPackHolidayTheme();
-  const holidayRow: { text: string; callback_data: string }[] = [];
-  if (packHoliday) {
-    const isOn = session.pack_holiday_id === packHoliday.id;
-    const holidayLabel = (lang === "ru" ? `${packHoliday.emoji} ${packHoliday.name_ru}` : `${packHoliday.emoji} ${packHoliday.name_en}`) + (isOn ? ": on" : ": off");
-    holidayRow.push({ text: holidayLabel, callback_data: isOn ? "pack_holiday_off" : `pack_holiday:${packHoliday.id}` });
-  }
   const keyboard = {
     inline_keyboard: [
       [
@@ -4840,7 +4826,6 @@ async function buildPackCarouselCard(
         { text: "▶️", callback_data: "pack_carousel_next" },
       ],
       [{ text: tryBtn, callback_data: `pack_try:${set.id}` }],
-      ...(holidayRow.length ? [holidayRow] : []),
       ...(adminRow.length ? [adminRow] : []),
     ],
   };
@@ -5005,14 +4990,6 @@ async function renderPackCarouselForSession(
       ? (lang === "ru" ? "Нет наборов для этого праздника. Выключите праздник или выберите другой раздел." : "No sets for this holiday. Turn off holiday or choose another section.")
       : (lang === "ru" ? "Список наборов обновился. Нажмите «Создать пак» ещё раз." : "Pack list was updated. Tap «Create pack» again.");
     await ctx.reply(msg, getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
-    if (isHolidayEmpty) {
-      const packHoliday = await getPackHolidayTheme();
-      if (packHoliday) {
-        const holidayLabel = (lang === "ru" ? `${packHoliday.emoji} ${packHoliday.name_ru}: on` : `${packHoliday.emoji} ${packHoliday.name_en}: on`);
-        const keyboard = { inline_keyboard: [[{ text: holidayLabel, callback_data: "pack_holiday_off" }]] };
-        await ctx.reply(lang === "ru" ? "Нажмите, чтобы вернуться к обычным наборам:" : "Tap to return to regular sets:", { reply_markup: keyboard }).catch(() => {});
-      }
-    }
     return;
   }
 
@@ -11128,7 +11105,7 @@ async function showStickerIdeaCard(ctx: any, opts: {
   sessionId?: string | null;
   sessionRev?: number | null;
 }) {
-  const { idea, ideaIndex, totalIdeas, style, lang, currentHolidayId, sessionId, sessionRev } = opts;
+  const { idea, ideaIndex, totalIdeas, style, lang, sessionId, sessionRev } = opts;
   const isRu = lang === "ru";
   const sessionRef = formatCallbackSessionRef(sessionId, sessionRev);
 
@@ -11148,26 +11125,10 @@ async function showStickerIdeaCard(ctx: any, opts: {
     appendSessionRefIfFits(`asst_idea_gen:${ideaIndex}`, sessionRef)
   )]);
 
-  // Holiday button + Next idea
-  const holiday = await getActiveHoliday();
-  console.log("[showStickerIdeaCard] holiday:", holiday?.id, "currentHolidayId:", currentHolidayId);
-  const holidayNextRow: any[] = [];
-  if (holiday) {
-    const isHolidayActive = currentHolidayId === holiday.id;
-    const holidayName = isRu ? holiday.name_ru : holiday.name_en;
-    const holidayLabel = isHolidayActive
-      ? `${holiday.emoji} ${holidayName}: on`
-      : `${holiday.emoji} ${holidayName}: off`;
-    const holidayCallback = isHolidayActive
-      ? appendSessionRefIfFits(`asst_idea_holiday_off:${ideaIndex}`, sessionRef)
-      : appendSessionRefIfFits(`asst_idea_holiday:${holiday.id}:${ideaIndex}`, sessionRef);
-    holidayNextRow.push(Markup.button.callback(holidayLabel, holidayCallback));
-  }
-  holidayNextRow.push(Markup.button.callback(
+  rows.push([Markup.button.callback(
     isRu ? "➡️ Другая" : "➡️ Next",
     appendSessionRefIfFits(`asst_idea_next:${ideaIndex}`, sessionRef)
-  ));
-  rows.push(holidayNextRow);
+  )]);
 
   rows.push([Markup.button.callback(
     isRu ? "🔄 Другой стиль" : "🔄 Change style",
