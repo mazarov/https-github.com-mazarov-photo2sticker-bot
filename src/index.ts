@@ -12289,7 +12289,9 @@ bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
       const lockMsg = lang === "ru"
         ? "У тебя уже открыта другая оплата. Заверши её или подожди 15 минут."
         : "You already have another payment in progress. Complete it or wait 15 minutes.";
-      await ctx.answerCbQuery(lockMsg, { show_alert: true }).catch(() => {});
+      // Callback query is already acknowledged at handler start via safeAnswerCbQuery(),
+      // so sending a second answerCbQuery silently fails. Use chat message for visibility.
+      await ctx.reply(lockMsg).catch(() => {});
       return;
     }
     if (!isFresh) {
