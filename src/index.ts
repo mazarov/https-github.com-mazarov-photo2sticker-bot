@@ -8209,16 +8209,13 @@ bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
-  // Get or create active session (legacy fallback only when router is disabled)
-  const routerEnabled = await isSessionRouterEnabled();
+  // Get or create active session.
+  // For sticker-targeted callbacks we can recover safely without explicit session_id,
+  // because sticker ownership is already validated above.
   let session = explicitSessionId
     ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : (routerEnabled ? null : await getActiveSession(user.id));
+    : await getActiveSession(user.id);
   if (!session?.id) {
-    if (routerEnabled) {
-      await rejectSessionEvent(ctx, lang, "change_emotion", "session_not_found");
-      return;
-    }
     const { data: newSession } = await supabase
       .from("sessions")
       .insert({ user_id: user.id, state: "wait_emotion", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
@@ -8382,16 +8379,13 @@ bot.action(/^change_motion:([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
-  // Get or create active session (legacy fallback only when router is disabled)
-  const routerEnabled = await isSessionRouterEnabled();
+  // Get or create active session.
+  // For sticker-targeted callbacks we can recover safely without explicit session_id,
+  // because sticker ownership is already validated above.
   let session = explicitSessionId
     ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : (routerEnabled ? null : await getActiveSession(user.id));
+    : await getActiveSession(user.id);
   if (!session?.id) {
-    if (routerEnabled) {
-      await rejectSessionEvent(ctx, lang, "change_motion", "session_not_found");
-      return;
-    }
     const { data: newSession } = await supabase
       .from("sessions")
       .insert({ user_id: user.id, state: "wait_motion", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
