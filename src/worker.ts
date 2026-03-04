@@ -114,6 +114,18 @@ function getMimeTypeByTelegramPath(filePath: string): string {
   return "image/jpeg";
 }
 
+function extractGeminiImageBase64(responseData: any): string | null {
+  const candidates = Array.isArray(responseData?.candidates) ? responseData.candidates : [];
+  for (const candidate of candidates) {
+    const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+    for (const part of parts) {
+      const data = part?.inlineData?.data;
+      if (typeof data === "string" && data.length > 0) return data;
+    }
+  }
+  return null;
+}
+
 function normalizePackSetSubjectMode(value: any): "single" | "multi" | "any" {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "single") return "single";
@@ -782,7 +794,39 @@ ${packTaskBlock}`
   }
 
   // Extract image
-  const imageBase64 = geminiRes.data?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data || null;
+  let imageBase64 = extractGeminiImageBase64(geminiRes.data);
+  if (!imageBase64) {
+    const finishReason = geminiRes.data?.candidates?.[0]?.finishReason || "unknown";
+    console.warn("[PackPreview] Gemini returned no image on first attempt, retrying once. finishReason:", finishReason);
+    try {
+      const retryRes = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          contents: [{
+            role: "user",
+            parts: [
+              { text: `${prompt}\n\n[RETRY]\nPrevious response had no image bytes. Return IMAGE output.` },
+              ...imageParts,
+            ],
+          }],
+          generationConfig: {
+            responseModalities: ["IMAGE"],
+            imageConfig: { aspectRatio: "1:1", imageSize },
+          },
+        },
+        {
+          headers: { "x-goog-api-key": config.geminiApiKey },
+          timeout: 120000,
+        }
+      );
+      imageBase64 = extractGeminiImageBase64(retryRes.data);
+      if (!imageBase64) {
+        console.error("[PackPreview] Retry also returned no image. Response:", JSON.stringify(retryRes.data, null, 2));
+      }
+    } catch (retryErr: any) {
+      console.error("[PackPreview] Retry failed:", retryErr?.response?.data || retryErr?.message || retryErr);
+    }
+  }
   if (!imageBase64) {
     console.error("[PackPreview] Gemini returned no image");
     await supabase.from("users").update({ credits: (user.credits || 0) + 1 }).eq("id", session.user_id);
@@ -1518,27 +1562,52 @@ async function runJob(job: any) {
     return;
   }
 
-  let imageBase64 =
-    geminiRes.data?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data || null;
+  let imageBase64 = extractGeminiImageBase64(geminiRes.data);
   let finalPromptUsed = promptForGeneration;
 
   if (!imageBase64) {
-    console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
-    const geminiText = geminiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No text response";
-    await sendAlert({
-      type: "generation_failed",
-      message: "Gemini returned no image",
-      details: { 
-        user: `@${user?.username || telegramId}`,
-        sessionId: session.id, 
-        generationType,
-        styleGroup: session.selected_style_group || "-",
-        styleId: session.selected_style_id || "-",
-        userInput: (session.user_input || "").slice(0, 100),
-        geminiResponse: geminiText.slice(0, 200),
-      },
-    });
-    throw new Error("Gemini returned no image");
+    const firstFinishReason = geminiRes.data?.candidates?.[0]?.finishReason || "unknown";
+    const noImageRetryPrompt =
+      `${promptForGeneration}\n\n[RETRY]\nPrevious response had no image bytes. Return IMAGE output (inlineData).`;
+    console.warn("[Generation] No image from Gemini, retrying once. finishReason:", firstFinishReason);
+    try {
+      const retryNoImageRes = await callGeminiImage(noImageRetryPrompt);
+      const retryBlockReason = retryNoImageRes.data?.promptFeedback?.blockReason;
+      if (!retryBlockReason) {
+        const retryImageBase64 = extractGeminiImageBase64(retryNoImageRes.data);
+        if (retryImageBase64) {
+          imageBase64 = retryImageBase64;
+          finalPromptUsed = noImageRetryPrompt;
+          console.log("[Generation] No-image retry succeeded");
+        } else {
+          console.error("[Generation] No-image retry still has no image. Response:", JSON.stringify(retryNoImageRes.data, null, 2));
+        }
+      } else {
+        console.warn("[Generation] No-image retry blocked:", retryBlockReason);
+      }
+    } catch (retryNoImageErr: any) {
+      console.error("[Generation] No-image retry failed:", retryNoImageErr?.response?.data || retryNoImageErr?.message || retryNoImageErr);
+    }
+
+    if (!imageBase64) {
+      console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
+      const geminiText = geminiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No text response";
+      await sendAlert({
+        type: "generation_failed",
+        message: "Gemini returned no image",
+        details: { 
+          user: `@${user?.username || telegramId}`,
+          sessionId: session.id, 
+          generationType,
+          styleGroup: session.selected_style_group || "-",
+          styleId: session.selected_style_id || "-",
+          userInput: (session.user_input || "").slice(0, 100),
+          finishReason: firstFinishReason,
+          geminiResponse: geminiText.slice(0, 200),
+        },
+      });
+      throw new Error("Gemini returned no image");
+    }
   }
 
   const postcheckEnabled = await isSubjectPostcheckEnabled();
@@ -1586,8 +1655,7 @@ async function runJob(job: any) {
         throw new Error(`Subject postcheck retry blocked: ${retryBlockReason}`);
       }
 
-      const retryImageBase64 =
-        retryRes.data?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data || null;
+      const retryImageBase64 = extractGeminiImageBase64(retryRes.data);
       if (!retryImageBase64) {
         throw new Error("Subject postcheck retry returned no image");
       }
