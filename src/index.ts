@@ -2191,6 +2191,7 @@ async function getActiveSession(userId: string) {
     .eq("is_active", true)
     .eq("env", config.appEnv)
     .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
   if (error) {
     console.log("getActiveSession error:", error.message, error.code);
@@ -2269,6 +2270,60 @@ async function getPackFlowSession(userId: string) {
   return data;
 }
 
+const ASSISTANT_FLOW_RECOVERY_STATES = [
+  "assistant_wait_photo",
+  "assistant_wait_idea",
+  "assistant_chat",
+  "wait_photo",
+  "wait_style",
+  "wait_custom_style",
+  "wait_custom_style_v2",
+] as const;
+
+async function getSessionByIdForUser(userId: string, sessionId?: string | null) {
+  if (!sessionId) return null;
+  const { data } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .maybeSingle();
+  return data;
+}
+
+async function getAssistantFlowRecoverySession(userId: string) {
+  const activeAssistant = await getActiveAssistantSession(userId);
+  if (activeAssistant?.session_id) {
+    const linkedSession = await getSessionByIdForUser(userId, activeAssistant.session_id);
+    if (linkedSession?.id) {
+      return linkedSession;
+    }
+  }
+
+  const recentAssistant = await getRecentAssistantSession(userId, 30 * 60 * 1000);
+  if (recentAssistant?.session_id) {
+    const linkedRecentSession = await getSessionByIdForUser(userId, recentAssistant.session_id);
+    if (linkedRecentSession?.id) {
+      return linkedRecentSession;
+    }
+  }
+
+  const recentCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const { data } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .in("state", ASSISTANT_FLOW_RECOVERY_STATES as unknown as string[])
+    .gte("updated_at", recentCutoff)
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data;
+}
+
 /**
  * Resolve session for inbound photo messages.
  * First use generic active-session resolution, then fallback to latest pack-flow session.
@@ -2286,6 +2341,17 @@ async function resolveSessionForIncomingPhoto(userId: string) {
       packSession.state
     );
     return packSession;
+  }
+
+  const assistantSession = await getAssistantFlowRecoverySession(userId);
+  if (assistantSession?.id) {
+    console.log(
+      "Photo router fallback: using assistant recovery session:",
+      assistantSession.id,
+      "state:",
+      assistantSession.state
+    );
+    return assistantSession;
   }
 
   return null;
