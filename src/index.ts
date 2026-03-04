@@ -1833,12 +1833,14 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
 
     // Save ideas state with photoDescription
     const ideasState = { styleId: pickedStyle.id, ideaIndex: 0, ideas: [idea], photoDescription, holidayId: null };
+    const nextIdeaRev = (newSession.session_rev || 1) + 1;
     const { error: ideasErr } = await supabase
       .from("sessions")
       .update({
         sticker_ideas_state: ideasState,
         state: "assistant_wait_idea",
         is_active: true,
+        session_rev: nextIdeaRev,
       })
       .eq("id", newSession.id);
     if (ideasErr) console.error("[startAssistant_ideas] save error:", ideasErr.message);
@@ -1865,7 +1867,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
       style: pickedStyle,
       lang,
       sessionId: newSession.id,
-      sessionRev: newSession.session_rev,
+      sessionRev: nextIdeaRev,
     });
   }
 }
@@ -3552,6 +3554,7 @@ bot.on("photo", async (ctx) => {
     const randomStyle = await pickStyleForIdeas(user);
 
     // Save photo and move to assistant_wait_idea
+    const step1Rev = (session.session_rev || 1) + 1;
     const { error: updateErr1 } = await supabase
       .from("sessions")
       .update({
@@ -3559,6 +3562,7 @@ bot.on("photo", async (ctx) => {
         current_photo_file_id: photo.file_id,
         state: "assistant_wait_idea",
         is_active: true,
+        session_rev: step1Rev,
       })
       .eq("id", session.id);
     if (updateErr1) console.error("[assistant_ideas] session update error:", updateErr1.message);
@@ -3593,12 +3597,14 @@ bot.on("photo", async (ctx) => {
       photoDescription,
       holidayId: null,
     };
+    const step2Rev = step1Rev + 1;
     const { error: updateErr2 } = await supabase
       .from("sessions")
       .update({
         sticker_ideas_state: ideasState,
         state: "assistant_wait_idea",
         is_active: true,
+        session_rev: step2Rev,
       })
       .eq("id", session.id);
     if (updateErr2) console.error("[assistant_ideas] ideas state save error:", updateErr2.message);
@@ -3627,7 +3633,7 @@ bot.on("photo", async (ctx) => {
       style: randomStyle,
       lang,
       sessionId: session.id,
-      sessionRev: session.session_rev,
+      sessionRev: step2Rev,
     });
     return;
   }

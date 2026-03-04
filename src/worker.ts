@@ -1457,10 +1457,16 @@ async function runJob(job: any) {
     generationType === "emotion" ? await getAppConfig("gemini_model_emotion", "gemini-2.5-flash-image") :
     generationType === "motion"  ? await getAppConfig("gemini_model_motion",  "gemini-2.5-flash-image") :
     await getAppConfig("gemini_model_style", "gemini-3-pro-image-preview");
-  const fallbackModel =
-    generationType === "style"
-      ? null
-      : await getAppConfig("gemini_model_style", "gemini-3-pro-image-preview");
+  const fallbackModel = (() => {
+    // Style must also have a fallback because gemini-2.5-flash-image can return finishReason=OTHER with no inlineData.
+    const styleFallback = "gemini-3-pro-image-preview";
+    const altFallback = "gemini-2.5-flash-image";
+    if (generationType === "style") {
+      if (primaryModel !== styleFallback) return styleFallback;
+      return primaryModel !== altFallback ? altFallback : null;
+    }
+    return primaryModel !== styleFallback ? styleFallback : (primaryModel !== altFallback ? altFallback : null);
+  })();
   let activeModel = primaryModel;
   console.log("Using model:", activeModel, "generationType:", generationType);
 
