@@ -1453,15 +1453,20 @@ async function runJob(job: any) {
   console.log("text_prompt:", session.text_prompt);
 
   // Model selection from app_config (changeable at runtime via Supabase, cached 60s)
-  const model = 
+  const primaryModel =
     generationType === "emotion" ? await getAppConfig("gemini_model_emotion", "gemini-2.5-flash-image") :
     generationType === "motion"  ? await getAppConfig("gemini_model_motion",  "gemini-2.5-flash-image") :
     await getAppConfig("gemini_model_style", "gemini-3-pro-image-preview");
-  console.log("Using model:", model, "generationType:", generationType);
+  const fallbackModel =
+    generationType === "style"
+      ? null
+      : await getAppConfig("gemini_model_style", "gemini-3-pro-image-preview");
+  let activeModel = primaryModel;
+  console.log("Using model:", activeModel, "generationType:", generationType);
 
-  const callGeminiImage = async (promptText: string) =>
+  const callGeminiImage = async (promptText: string, modelName: string) =>
     axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`,
       {
         contents: [
           {
@@ -1489,7 +1494,7 @@ async function runJob(job: any) {
 
   let geminiRes;
   try {
-    geminiRes = await callGeminiImage(promptForGeneration);
+    geminiRes = await callGeminiImage(promptForGeneration, activeModel);
   } catch (err: any) {
     const errorData = err.response?.data;
     const errorMessage = errorData?.error?.message || err.message || err.code || "Unknown error";
@@ -1571,7 +1576,7 @@ async function runJob(job: any) {
       `${promptForGeneration}\n\n[RETRY]\nPrevious response had no image bytes. Return IMAGE output (inlineData).`;
     console.warn("[Generation] No image from Gemini, retrying once. finishReason:", firstFinishReason);
     try {
-      const retryNoImageRes = await callGeminiImage(noImageRetryPrompt);
+      const retryNoImageRes = await callGeminiImage(noImageRetryPrompt, activeModel);
       const retryBlockReason = retryNoImageRes.data?.promptFeedback?.blockReason;
       if (!retryBlockReason) {
         const retryImageBase64 = extractGeminiImageBase64(retryNoImageRes.data);
@@ -1587,6 +1592,33 @@ async function runJob(job: any) {
       }
     } catch (retryNoImageErr: any) {
       console.error("[Generation] No-image retry failed:", retryNoImageErr?.response?.data || retryNoImageErr?.message || retryNoImageErr);
+    }
+
+    // Fallback model for emotion/motion/text when primary model repeatedly returns finishReason OTHER with no image.
+    if (!imageBase64 && fallbackModel && fallbackModel !== activeModel) {
+      console.warn("[Generation] Switching to fallback model after no-image retries:", {
+        generationType,
+        primaryModel: activeModel,
+        fallbackModel,
+      });
+      activeModel = fallbackModel;
+      try {
+        const fallbackRes = await callGeminiImage(promptForGeneration, activeModel);
+        const fallbackBlockReason = fallbackRes.data?.promptFeedback?.blockReason;
+        if (!fallbackBlockReason) {
+          const fallbackImageBase64 = extractGeminiImageBase64(fallbackRes.data);
+          if (fallbackImageBase64) {
+            imageBase64 = fallbackImageBase64;
+            console.log("[Generation] Fallback model produced image");
+          } else {
+            console.error("[Generation] Fallback model still returned no image. Response:", JSON.stringify(fallbackRes.data, null, 2));
+          }
+        } else {
+          console.warn("[Generation] Fallback model blocked:", fallbackBlockReason);
+        }
+      } catch (fallbackErr: any) {
+        console.error("[Generation] Fallback model request failed:", fallbackErr?.response?.data || fallbackErr?.message || fallbackErr);
+      }
     }
 
     if (!imageBase64) {
@@ -1644,7 +1676,7 @@ async function runJob(job: any) {
       const retryPrompt = `${promptForGeneration}\n\n[SUBJECT POSTCHECK RETRY]\nCRITICAL: Previous output had subject-count mismatch. Keep EXACT source subject count. Do NOT add or remove people.`;
       let retryRes: any;
       try {
-        retryRes = await callGeminiImage(retryPrompt);
+        retryRes = await callGeminiImage(retryPrompt, activeModel);
       } catch (retryErr: any) {
         const retryMsg = retryErr.response?.data?.error?.message || retryErr.message || "retry_failed";
         throw new Error(`Subject postcheck retry failed: ${retryMsg}`);

@@ -805,17 +805,19 @@ async function sendEmotionKeyboard(
   const buttons: ReturnType<typeof Markup.button.callback>[][] = [];
   for (let i = 0; i < presets.length; i += 2) {
     const row: ReturnType<typeof Markup.button.callback>[] = [];
+    const emotionCbLeft = appendSessionRefIfFits(`emotion_${presets[i].id}`, sessionRef);
     row.push(
       Markup.button.callback(
         `${presets[i].emoji} ${lang === "ru" ? presets[i].name_ru : presets[i].name_en}`,
-        sessionRef ? `emotion_${presets[i].id}:${sessionRef}` : `emotion_${presets[i].id}`
+        emotionCbLeft
       )
     );
     if (presets[i + 1]) {
+      const emotionCbRight = appendSessionRefIfFits(`emotion_${presets[i + 1].id}`, sessionRef);
       row.push(
         Markup.button.callback(
           `${presets[i + 1].emoji} ${lang === "ru" ? presets[i + 1].name_ru : presets[i + 1].name_en}`,
-          sessionRef ? `emotion_${presets[i + 1].id}:${sessionRef}` : `emotion_${presets[i + 1].id}`
+          emotionCbRight
         )
       );
     }
@@ -869,17 +871,19 @@ async function sendMotionKeyboard(
   const buttons: ReturnType<typeof Markup.button.callback>[][] = [];
   for (let i = 0; i < presets.length; i += 2) {
     const row: ReturnType<typeof Markup.button.callback>[] = [];
+    const motionCbLeft = appendSessionRefIfFits(`motion_${presets[i].id}`, sessionRef);
     row.push(
       Markup.button.callback(
         `${presets[i].emoji} ${lang === "ru" ? presets[i].name_ru : presets[i].name_en}`,
-        sessionRef ? `motion_${presets[i].id}:${sessionRef}` : `motion_${presets[i].id}`
+        motionCbLeft
       )
     );
     if (presets[i + 1]) {
+      const motionCbRight = appendSessionRefIfFits(`motion_${presets[i + 1].id}`, sessionRef);
       row.push(
         Markup.button.callback(
           `${presets[i + 1].emoji} ${lang === "ru" ? presets[i + 1].name_ru : presets[i + 1].name_en}`,
-          sessionRef ? `motion_${presets[i + 1].id}:${sessionRef}` : `motion_${presets[i + 1].id}`
+          motionCbRight
         )
       );
     }
@@ -1292,6 +1296,49 @@ async function startGeneration(
   }
 ) {
   const creditsNeeded = 1;
+  const processingStates = new Set(["processing", "processing_emotion", "processing_motion", "processing_text"]);
+
+  if (processingStates.has(String(session?.state || ""))) {
+    await ctx.reply(lang === "ru"
+      ? "⏳ Генерация уже запущена. Подожди несколько секунд."
+      : "⏳ Generation is already running. Please wait a few seconds.");
+    return;
+  }
+
+  const expectedRevRaw = Number(session?.session_rev || 1);
+  const expectedRev = Number.isFinite(expectedRevRaw) && expectedRevRaw > 0 ? expectedRevRaw : 1;
+  const { data: claimedSession, error: claimErr } = await supabase
+    .from("sessions")
+    .update({
+      session_rev: expectedRev + 1,
+      is_active: true,
+    })
+    .eq("id", session.id)
+    .eq("session_rev", expectedRev)
+    .select("*")
+    .maybeSingle();
+
+  if (claimErr) {
+    console.error("[startGeneration] claim failed:", claimErr.message);
+    await ctx.reply(lang === "ru"
+      ? "⚠️ Не удалось запустить генерацию. Попробуй ещё раз."
+      : "⚠️ Failed to start generation. Please try again.");
+    return;
+  }
+  if (!claimedSession) {
+    const freshSession = await getSessionByIdForUser(user.id, session.id);
+    if (processingStates.has(String(freshSession?.state || ""))) {
+      await ctx.reply(lang === "ru"
+        ? "⏳ Генерация уже запущена. Подожди несколько секунд."
+        : "⏳ Generation is already running. Please wait a few seconds.");
+      return;
+    }
+    await ctx.reply(lang === "ru"
+      ? "⚠️ Сессия обновилась, нажми кнопку ещё раз."
+      : "⚠️ Session was updated, please tap again.");
+    return;
+  }
+  session = claimedSession;
 
   options.promptFinal = await applySubjectLockToPrompt(session, options.generationType, options.promptFinal);
   options.promptFinal = options.promptFinal + COMPOSITION_SUFFIX;
