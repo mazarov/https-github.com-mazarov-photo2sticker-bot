@@ -2280,18 +2280,6 @@ const ASSISTANT_FLOW_RECOVERY_STATES = [
   "wait_custom_style_v2",
 ] as const;
 
-async function getSessionByIdForUser(userId: string, sessionId?: string | null) {
-  if (!sessionId) return null;
-  const { data } = await supabase
-    .from("sessions")
-    .select("*")
-    .eq("id", sessionId)
-    .eq("user_id", userId)
-    .eq("env", config.appEnv)
-    .maybeSingle();
-  return data;
-}
-
 async function getAssistantFlowRecoverySession(userId: string) {
   const activeAssistant = await getActiveAssistantSession(userId);
   if (activeAssistant?.session_id) {
