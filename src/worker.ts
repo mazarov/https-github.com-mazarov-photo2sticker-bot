@@ -1390,6 +1390,22 @@ async function runJob(job: any) {
     session.state === "processing_motion" ? "motion" :
     session.state === "processing_text" ? "text" :
     session.generation_type || "style";
+  const isSingleFlowGeneration =
+    !job.pack_batch_id
+    && session?.flow_kind !== "pack"
+    && !String(session?.state || "").startsWith("wait_pack_")
+    && !["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(String(session?.state || ""));
+  const singleTrace = {
+    jobId: job?.id,
+    sessionId: session?.id,
+    userId: session?.user_id,
+    generationType,
+    flowKind: session?.flow_kind || "unknown",
+    state: session?.state || null,
+  };
+  if (isSingleFlowGeneration) {
+    console.log("[single.gen.worker] job_start", singleTrace);
+  }
 
   const sourceFileId =
     generationType === "emotion" || generationType === "motion" || generationType === "text"
@@ -1470,8 +1486,16 @@ async function runJob(job: any) {
   let activeModel = primaryModel;
   console.log("Using model:", activeModel, "generationType:", generationType);
 
-  const callGeminiImage = async (promptText: string, modelName: string) =>
-    axios.post(
+  const callGeminiImage = async (promptText: string, modelName: string, stage: string) => {
+    if (isSingleFlowGeneration) {
+      console.log("[single.gen.worker] model_call", {
+        ...singleTrace,
+        stage,
+        model: modelName,
+        promptLen: promptText.length,
+      });
+    }
+    const res = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`,
       {
         contents: [
@@ -1497,10 +1521,26 @@ async function runJob(job: any) {
         headers: { "x-goog-api-key": config.geminiApiKey },
       }
     );
+    if (isSingleFlowGeneration) {
+      const candidate = res.data?.candidates?.[0];
+      const usage = res.data?.usageMetadata;
+      const hasImage = Boolean(extractGeminiImageBase64(res.data));
+      console.log("[single.gen.worker] model_result", {
+        ...singleTrace,
+        stage,
+        model: modelName,
+        finishReason: candidate?.finishReason || null,
+        hasImage,
+        promptTokens: usage?.promptTokenCount ?? null,
+        totalTokens: usage?.totalTokenCount ?? null,
+      });
+    }
+    return res;
+  };
 
   let geminiRes;
   try {
-    geminiRes = await callGeminiImage(promptForGeneration, activeModel);
+    geminiRes = await callGeminiImage(promptForGeneration, activeModel, "primary");
   } catch (err: any) {
     const errorData = err.response?.data;
     const errorMessage = errorData?.error?.message || err.message || err.code || "Unknown error";
@@ -1511,6 +1551,16 @@ async function runJob(job: any) {
     console.error("Message:", errorMessage);
     console.error("Code:", err.code);
     console.error("Full response:", JSON.stringify(errorData || {}, null, 2));
+    if (isSingleFlowGeneration) {
+      console.error("[single.gen.worker] model_error", {
+        ...singleTrace,
+        stage: "primary",
+        model: activeModel,
+        status: errorStatus || null,
+        code: err.code || null,
+        message: errorMessage,
+      });
+    }
     
     await sendAlert({
       type: "gemini_error",
@@ -1582,7 +1632,7 @@ async function runJob(job: any) {
       `${promptForGeneration}\n\n[RETRY]\nPrevious response had no image bytes. Return IMAGE output (inlineData).`;
     console.warn("[Generation] No image from Gemini, retrying once. finishReason:", firstFinishReason);
     try {
-      const retryNoImageRes = await callGeminiImage(noImageRetryPrompt, activeModel);
+      const retryNoImageRes = await callGeminiImage(noImageRetryPrompt, activeModel, "no_image_retry");
       const retryBlockReason = retryNoImageRes.data?.promptFeedback?.blockReason;
       if (!retryBlockReason) {
         const retryImageBase64 = extractGeminiImageBase64(retryNoImageRes.data);
@@ -1609,7 +1659,7 @@ async function runJob(job: any) {
       });
       activeModel = fallbackModel;
       try {
-        const fallbackRes = await callGeminiImage(promptForGeneration, activeModel);
+        const fallbackRes = await callGeminiImage(promptForGeneration, activeModel, "fallback_primary_prompt");
         const fallbackBlockReason = fallbackRes.data?.promptFeedback?.blockReason;
         if (!fallbackBlockReason) {
           const fallbackImageBase64 = extractGeminiImageBase64(fallbackRes.data);
@@ -1624,6 +1674,15 @@ async function runJob(job: any) {
         }
       } catch (fallbackErr: any) {
         console.error("[Generation] Fallback model request failed:", fallbackErr?.response?.data || fallbackErr?.message || fallbackErr);
+        if (isSingleFlowGeneration) {
+          console.error("[single.gen.worker] model_error", {
+            ...singleTrace,
+            stage: "fallback",
+            model: activeModel,
+            status: fallbackErr?.response?.status || null,
+            message: fallbackErr?.message || "unknown_error",
+          });
+        }
       }
     }
 
@@ -1682,7 +1741,7 @@ async function runJob(job: any) {
       const retryPrompt = `${promptForGeneration}\n\n[SUBJECT POSTCHECK RETRY]\nCRITICAL: Previous output had subject-count mismatch. Keep EXACT source subject count. Do NOT add or remove people.`;
       let retryRes: any;
       try {
-        retryRes = await callGeminiImage(retryPrompt, activeModel);
+        retryRes = await callGeminiImage(retryPrompt, activeModel, "postcheck_retry");
       } catch (retryErr: any) {
         const retryMsg = retryErr.response?.data?.error?.message || retryErr.message || "retry_failed";
         throw new Error(`Subject postcheck retry failed: ${retryMsg}`);

@@ -1296,6 +1296,10 @@ async function startGeneration(
   }
 ) {
   const creditsNeeded = 1;
+  const isPackFlowState =
+    String(session?.state || "").startsWith("wait_pack_")
+    || ["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(String(session?.state || ""));
+  const isSingleFlowGeneration = !isPackFlowState;
   const processingStates = new Set(["processing", "processing_emotion", "processing_motion", "processing_text"]);
 
   if (processingStates.has(String(session?.state || ""))) {
@@ -1339,6 +1343,16 @@ async function startGeneration(
     return;
   }
   session = claimedSession;
+  if (isSingleFlowGeneration) {
+    console.log("[single.gen.api] claim_ok", {
+      sessionId: session.id,
+      userId: user?.id,
+      state: session.state,
+      generationType: options.generationType,
+      sessionRev: session.session_rev,
+      flowKind: session.flow_kind || "unknown",
+    });
+  }
 
   options.promptFinal = await applySubjectLockToPrompt(session, options.generationType, options.promptFinal);
   options.promptFinal = options.promptFinal + COMPOSITION_SUFFIX;
@@ -1438,6 +1452,17 @@ async function startGeneration(
         });
       }
     }
+    if (isSingleFlowGeneration) {
+      console.log("[single.gen.api] paywall_or_insufficient", {
+        sessionId: session.id,
+        userId: user?.id,
+        generationType: options.generationType,
+        targetState,
+        credits: user.credits,
+        needed: creditsNeeded,
+        hasPurchased: user.has_purchased,
+      });
+    }
     return;
   }
 
@@ -1452,7 +1477,23 @@ async function startGeneration(
       balance: 0,
     }));
     await sendBuyCreditsMenu(ctx, user);
+    if (isSingleFlowGeneration) {
+      console.log("[single.gen.api] deduct_failed", {
+        sessionId: session.id,
+        userId: user?.id,
+        generationType: options.generationType,
+        error: deductError?.message || "not_enough_credits",
+      });
+    }
     return;
+  }
+  if (isSingleFlowGeneration) {
+    console.log("[single.gen.api] deduct_ok", {
+      sessionId: session.id,
+      userId: user?.id,
+      generationType: options.generationType,
+      amount: creditsNeeded,
+    });
   }
 
   // Increment total_generations
@@ -1478,8 +1519,27 @@ async function startGeneration(
       is_active: true,
     })
     .eq("id", session.id);
+  if (isSingleFlowGeneration) {
+    console.log("[single.gen.api] session_updated_processing", {
+      sessionId: session.id,
+      userId: user?.id,
+      generationType: options.generationType,
+      nextState,
+      selectedStyleId: options.selectedStyleId || session.selected_style_id || null,
+      selectedEmotion: options.selectedEmotion || null,
+      hasTextPrompt: Boolean(options.textPrompt),
+      promptLen: (options.promptFinal || "").length,
+    });
+  }
 
   await enqueueJob(session.id, user.id, false);
+  if (isSingleFlowGeneration) {
+    console.log("[single.gen.api] enqueue_ok", {
+      sessionId: session.id,
+      userId: user?.id,
+      generationType: options.generationType,
+    });
+  }
 
   // Alert: generation started with all parameters
   const isAssistant = !!options.assistantParams;
