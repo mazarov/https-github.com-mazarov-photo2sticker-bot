@@ -6195,6 +6195,39 @@ bot.on("text", async (ctx) => {
   console.log("[pack_text_resolve] after getActiveSession", { userId: user.id, telegramId, sessionId: session?.id ?? null, sessionState: session?.state ?? null, isTest: config.appEnv === "test", isAdmin: config.adminIds.includes(telegramId) });
   // #endregion
   if (!session?.id) {
+    // Generic fallback for text-input states (single/assistant/manual text steps),
+    // because some environments occasionally flip is_active=false unexpectedly.
+    const recentCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const { data: textFlowSession } = await supabase
+      .from("sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .in("state", [
+        "wait_text_overlay",
+        "wait_text",
+        "wait_custom_emotion",
+        "wait_custom_motion",
+        "wait_custom_style",
+        "wait_custom_style_v2",
+      ])
+      .gte("updated_at", recentCutoff)
+      .order("updated_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (textFlowSession?.id) {
+      session = textFlowSession;
+      console.log("[pack_text_resolve] recovered text-flow session", {
+        userId: user.id,
+        telegramId,
+        sessionId: session.id,
+        sessionState: session.state,
+        isActive: session.is_active,
+      });
+    }
+  }
+  if (!session?.id) {
     if (config.adminIds.includes(telegramId)) {
       // Include wait_pack_carousel: after "Сгенерировать пак" session is in carousel until user taps "Сгенерировать" (then wait_pack_generate_request). Theme can be sent from carousel in some flows.
       const { data: packSession, error: packSessionErr } = await supabase
