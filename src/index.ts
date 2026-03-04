@@ -1548,11 +1548,11 @@ async function buildStickerButtons(
   options?: { sessionId?: string | null; sessionRev?: number | null }
 ) {
   const addToPackText = await getText(lang, "btn.add_to_pack");
-  const changeEmotionText = await getText(lang, "btn.change_emotion");
-  const changeMotionText = await getText(lang, "btn.change_motion");
-  const addTextText = await getText(lang, "btn.add_text");
-  const toggleBorderText = await getText(lang, "btn.toggle_border");
-  const packIdeasText = lang === "ru" ? "💡 Идеи для пака" : "💡 Pack ideas";
+  const changeEmotionText = lang === "ru" ? "😊 Эмоция" : await getText(lang, "btn.change_emotion");
+  const changeMotionText = lang === "ru" ? "🏃 Движение" : await getText(lang, "btn.change_motion");
+  const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
+  const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
+  const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
   const emotionCb = sessionRef ? `change_emotion:${stickerId}:${sessionRef}` : `change_emotion:${stickerId}`;
@@ -11381,16 +11381,22 @@ function formatIdeaMessage(idea: StickerIdea, index: number, total: number, lang
     + `${desc}${textHint}`;
 }
 
-function getIdeaKeyboard(index: number, total: number, lang: string) {
+function getIdeaKeyboard(
+  index: number,
+  total: number,
+  lang: string,
+  options?: { sessionId?: string | null; sessionRev?: number | null }
+) {
   const generateText = lang === "ru" ? "🎨 Сгенерить (1💎)" : "🎨 Generate (1💎)";
   const nextText = lang === "ru" ? "➡️ Следующая" : "➡️ Next";
   const customText = lang === "ru" ? "✏️ Своя идея" : "✏️ Custom idea";
   const doneText = lang === "ru" ? "✅ Хватит" : "✅ Done";
+  const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
 
   const buttons: any[][] = [
     [
-      { text: generateText, callback_data: `idea_generate:${index}` },
-      { text: nextText, callback_data: "idea_next" },
+      { text: generateText, callback_data: appendSessionRefIfFits(`idea_generate:${index}`, sessionRef) },
+      { text: nextText, callback_data: appendSessionRefIfFits("idea_next", sessionRef) },
     ],
     [{ text: customText, callback_data: "custom_idea" }],
     [{ text: doneText, callback_data: "idea_done" }],
@@ -11415,7 +11421,7 @@ bot.action(/^pack_ideas:(.+)$/, async (ctx) => {
   // Get sticker info
   const { data: sticker } = await supabase
     .from("stickers")
-    .select("telegram_file_id, style_preset_id, user_id")
+    .select("telegram_file_id, source_photo_file_id, style_preset_id, user_id")
     .eq("id", stickerId)
     .maybeSingle();
 
@@ -11480,6 +11486,8 @@ bot.action(/^pack_ideas:(.+)$/, async (ctx) => {
   const { error: updateErr } = await supabase.from("sessions").update({
     pack_ideas: ideas,
     current_idea_index: 0,
+    last_sticker_file_id: sticker.telegram_file_id,
+    current_photo_file_id: session.current_photo_file_id || sticker.source_photo_file_id || null,
     is_active: true,
   }).eq("id", session.id);
 
@@ -11496,12 +11504,15 @@ bot.action(/^pack_ideas:(.+)$/, async (ctx) => {
 
   // Show first idea — embed idea data in callback_data for resilience
   const text = formatIdeaMessage(ideas[0], 0, ideas.length, lang);
-  const keyboard = getIdeaKeyboard(0, ideas.length, lang);
+  const keyboard = getIdeaKeyboard(0, ideas.length, lang, {
+    sessionId: session.id,
+    sessionRev: session.session_rev,
+  });
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
 });
 
 // Callback: Generate sticker from idea
-bot.action(/^idea_generate:(\d+)$/, async (ctx) => {
+bot.action(/^idea_generate:(\d+)(?::(.+))?$/, async (ctx) => {
   console.log("=== idea_generate callback ===");
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -11511,7 +11522,8 @@ bot.action(/^idea_generate:(\d+)$/, async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
+  const { sessionId: explicitSessionId } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   console.log("[idea_generate] session:", session?.id, "state:", session?.state, "pack_ideas:", !!session?.pack_ideas, "pack_ideas type:", typeof session?.pack_ideas);
 
   if (!session?.pack_ideas) {
@@ -11609,7 +11621,7 @@ bot.action(/^idea_generate:(\d+)$/, async (ctx) => {
 });
 
 // Callback: Next idea
-bot.action("idea_next", async (ctx) => {
+bot.action(/^idea_next(?::(.+))?$/, async (ctx) => {
   console.log("=== idea_next callback ===");
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -11619,7 +11631,8 @@ bot.action("idea_next", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
+  const { sessionId: explicitSessionId } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   console.log("[idea_next] session:", session?.id, "pack_ideas:", !!session?.pack_ideas, "current_idea_index:", session?.current_idea_index);
 
   if (!session?.pack_ideas) {
@@ -11632,6 +11645,7 @@ bot.action("idea_next", async (ctx) => {
   console.log("[idea_next] nextIndex:", nextIndex, "total:", ideas.length);
 
   if (nextIndex >= ideas.length) {
+    const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
     // All ideas shown
     const generated = ideas.filter((i: StickerIdea) => i.generated).length;
     const text = lang === "ru"
@@ -11643,7 +11657,7 @@ bot.action("idea_next", async (ctx) => {
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
-            [{ text: lang === "ru" ? "🔄 Новые идеи" : "🔄 More ideas", callback_data: "idea_more" }],
+            [{ text: lang === "ru" ? "🔄 Новые идеи" : "🔄 More ideas", callback_data: appendSessionRefIfFits("idea_more", sessionRef) }],
             [{ text: lang === "ru" ? "📷 Новое фото" : "📷 New photo", callback_data: "new_photo" }],
           ],
         },
@@ -11661,7 +11675,10 @@ bot.action("idea_next", async (ctx) => {
 
   // Edit current message with next idea
   const text = formatIdeaMessage(ideas[nextIndex], nextIndex, ideas.length, lang);
-  const keyboard = getIdeaKeyboard(nextIndex, ideas.length, lang);
+  const keyboard = getIdeaKeyboard(nextIndex, ideas.length, lang, {
+    sessionId: session.id,
+    sessionRev: session.session_rev,
+  });
   console.log("[idea_next] Editing message with idea", nextIndex);
   try {
     await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: keyboard });
@@ -11708,7 +11725,7 @@ bot.action("idea_done", async (ctx) => {
 });
 
 // Callback: Generate more ideas
-bot.action("idea_more", async (ctx) => {
+bot.action(/^idea_more(?::(.+))?$/, async (ctx) => {
   console.log("=== idea_more callback ===");
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
@@ -11718,7 +11735,8 @@ bot.action("idea_more", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
-  const session = await getActiveSession(user.id);
+  const { sessionId: explicitSessionId } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) return;
 
   // Need a sticker to analyze — use last_sticker_file_id
@@ -11766,7 +11784,10 @@ bot.action("idea_more", async (ctx) => {
 
   // Show first new idea
   const text = formatIdeaMessage(ideas[0], 0, ideas.length, lang);
-  const keyboard = getIdeaKeyboard(0, ideas.length, lang);
+  const keyboard = getIdeaKeyboard(0, ideas.length, lang, {
+    sessionId: session.id,
+    sessionRev: session.session_rev,
+  });
   try {
     await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: keyboard });
   } catch (editErr: any) {

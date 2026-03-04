@@ -1835,11 +1835,11 @@ async function runJob(job: any) {
   console.log("onboarding_step:", onboardingStep, "isOnboardingFirstSticker:", isOnboardingFirstSticker, "isOnboardingEmotion:", isOnboardingEmotion);
 
   const addToPackText = await getText(lang, "btn.add_to_pack");
-  const changeEmotionText = await getText(lang, "btn.change_emotion");
-  const changeMotionText = await getText(lang, "btn.change_motion");
-  const addTextText = await getText(lang, "btn.add_text");
-  const toggleBorderText = await getText(lang, "btn.toggle_border");
-  const packIdeasText = lang === "ru" ? "💡 Идеи для пака" : "💡 Pack ideas";
+  const changeEmotionText = lang === "ru" ? "😊 Эмоция" : await getText(lang, "btn.change_emotion");
+  const changeMotionText = lang === "ru" ? "🏃 Движение" : await getText(lang, "btn.change_motion");
+  const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
+  const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
+  const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   // Use sticker ID in callback_data for message binding
   const replyMarkup = {
