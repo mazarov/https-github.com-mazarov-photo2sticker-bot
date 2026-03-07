@@ -9031,8 +9031,7 @@ bot.action(/^remove_bg:([^:]+)(?::(.+))?$/, async (ctx) => {
       .toBuffer();
 
     const nextRev = (session.session_rev || 1) + 1;
-    const stickerMsg = await sendSticker(ctx.chat!.id, stickerBuffer);
-    const newFileId = stickerMsg?.sticker?.file_id;
+    const newFileId = await sendSticker(ctx.chat!.id, stickerBuffer);
 
     const { data: newSticker } = await supabase
       .from("stickers")
