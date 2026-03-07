@@ -35,7 +35,28 @@ async function sleep(ms: number) {
 }
 
 function isConfigEnabled(value: string | null | undefined): boolean {
-  return String(value || "").trim().toLowerCase() === "true";
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+
+  // Support plain text values: true/false/1/0/yes/no.
+  const normalized = raw.toLowerCase();
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
+
+  // Support quoted/json values in app_config: "true", "false", true, false.
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "boolean") return parsed;
+    if (typeof parsed === "number") return parsed !== 0;
+    if (typeof parsed === "string") {
+      const v = parsed.trim().toLowerCase();
+      return ["true", "1", "yes", "y", "on"].includes(v);
+    }
+  } catch {
+    // Not JSON — fall back to strict false.
+  }
+
+  return false;
 }
 
 /** Supabase Storage 500 / fetch failed / timeout — retry once after delay. */
@@ -1501,6 +1522,12 @@ async function runJob(job: any) {
   const facemintReplaceFaceEnabled = generationType === "replace_subject"
     ? isConfigEnabled(await getAppConfig("facemint_replace_face_enabled", "false"))
     : false;
+  if (generationType === "replace_subject") {
+    console.log("[ReplaceSubject] facemint flag:", {
+      facemintReplaceFaceEnabled,
+      hasApiKey: Boolean(config.facemintApiKey),
+    });
+  }
   const lockEnabled = await isSubjectLockEnabled();
   let subjectProfile = getSessionSubjectProfileForSource(session, sourceFileId, sourceKind);
   if (!subjectProfile) {
