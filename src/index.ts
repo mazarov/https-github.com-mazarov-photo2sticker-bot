@@ -3946,6 +3946,14 @@ bot.hears(["🎨 Изменить стикер", "🎨 Edit sticker"], async (ct
   }
 
   const lang = user.lang || "en";
+  // Edit flow must start from a single source of truth session.
+  // Deactivate all active sessions to avoid picking pack/assistant session in routers.
+  await supabase
+    .from("sessions")
+    .update({ is_active: false })
+    .eq("user_id", user.id)
+    .eq("env", config.appEnv)
+    .eq("is_active", true);
   await closeAllActiveAssistantSessions(user.id, "abandoned");
 
   const { data: session, error } = await supabase
