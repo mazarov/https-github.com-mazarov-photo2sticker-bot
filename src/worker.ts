@@ -1542,36 +1542,35 @@ async function runJob(job: any) {
       : "";
 
     promptForGeneration =
-      `You are an image editor performing identity replacement with strict style preservation. You are given two images:\n` +
-      `Image 1 — ORIGINAL STICKER/IMAGE to reproduce.\n` +
-      `Image 2 — REFERENCE PHOTO of a real person.\n\n` +
-      `YOUR TASK: Redraw Image 1 exactly as it is, but REDRAW the character's face ` +
-      `so it RESEMBLES the person from Image 2 — while keeping the SAME ART STYLE as Image 1.${bgBlock}\n\n` +
+      `You are a creative illustrator specializing in character reinterpretation. You are given two images.\n` +
+      `Image 1 — the ARTWORK to reproduce (sticker, illustration, or photo).\n` +
+      `Image 2 — an APPEARANCE REFERENCE showing how the character should look.\n\n` +
+      `YOUR TASK: Recreate Image 1 as closely as possible, but adjust the character's appearance ` +
+      `(facial features, hair style, hair color, skin tone) to match the person shown in Image 2. ` +
+      `Everything else must stay identical to Image 1.${bgBlock}\n\n` +
       `STYLE LOCK (strict):\n` +
-      `- First infer the EXACT style of Image 1 and keep it unchanged.\n` +
-      `- If Image 1 is photorealistic, output MUST stay photorealistic (real skin texture, real lighting, natural details).\n` +
-      `- If Image 1 is anime/cartoon/illustration, output MUST stay in that same stylized style.\n` +
-      `- NEVER switch style families (photoreal <-> anime/cartoon).\n` +
-      `- Do NOT beautify, simplify, or stylize beyond what Image 1 already has.\n\n` +
-      `FACE RULES (most important):\n` +
-      `- Do NOT paste a photo-realistic face onto a cartoon body, and do NOT paste a cartoon face onto a photorealistic body.\n` +
-      `- REDRAW the face IN THE EXACT ART STYLE of Image 1 (photoreal -> photoreal, anime -> anime, cartoon -> cartoon).\n` +
-      `- The redrawn face should capture the person's KEY FEATURES from Image 2: face shape, eye shape, nose shape, hair style, hair color, skin tone.\n` +
-      `- Keep identity realism level equal to Image 1 (do not make it more stylized than source).\n` +
-      `- Keep the same facial expression/emotion as in Image 1.\n\n` +
+      `- Detect the EXACT visual style of Image 1 and preserve it in the output.\n` +
+      `- Photorealistic input → photorealistic output (real skin texture, natural lighting, no simplification).\n` +
+      `- Cartoon/anime/illustration input → same stylized output.\n` +
+      `- NEVER change the style family. Do NOT beautify or simplify beyond what Image 1 already has.\n\n` +
+      `APPEARANCE ADJUSTMENT RULES:\n` +
+      `- Draw the character's face IN THE SAME VISUAL STYLE as Image 1.\n` +
+      `- Borrow KEY FEATURES from Image 2: face shape, eye shape, nose shape, hair style, hair color, skin tone.\n` +
+      `- Keep the same facial expression and emotion as in Image 1.\n` +
+      `- The result must look like a natural part of Image 1, not a collage or cutout.\n\n` +
       `PRESERVATION CHECKLIST (every item MUST match Image 1):\n` +
-      `✓ Background: same color, same shapes, same patterns, same text/labels, same logos\n` +
-      `✓ Character body: same pose, same limbs, same clothing, same accessories\n` +
-      `✓ Art style: same line work, same coloring technique, same shading — INCLUDING the face\n` +
-      `✓ Composition: same layout, same framing, same dimensions\n` +
-      `✓ All text/labels in the image must appear EXACTLY as in Image 1\n\n` +
+      `✓ Background: same color, shapes, patterns, text/labels, logos — pixel-accurate\n` +
+      `✓ Character body: same pose, limbs, clothing, accessories\n` +
+      `✓ Art style: same line work, coloring technique, shading — INCLUDING the character\n` +
+      `✓ Composition: same layout, framing, dimensions\n` +
+      `✓ All text/labels must appear EXACTLY as in Image 1\n\n` +
       `ONLY CHANGE:\n` +
-      `✗ The face/head → redraw with features inspired by Image 2, IN THE SAME ART STYLE\n` +
-      `✗ Hair style/color → take from Image 2, drawn in the same art style\n\n` +
+      `✗ Character's facial features → adjust to match Image 2, in the same art style\n` +
+      `✗ Hair style/color → take from Image 2, rendered in the same art style\n\n` +
       `CRITICAL:\n` +
-      `- The output must be a UNIFIED artwork — same style everywhere, face included.\n` +
-      `- If Image 1 is photorealistic, the new face must remain photorealistic. If cartoon/anime, keep that style. NEVER mix styles.\n` +
-      `- If Image 1 has a complex background — reproduce that exact background.`;
+      `- Output must be a UNIFIED artwork — consistent style everywhere.\n` +
+      `- If Image 1 has a complex background, reproduce that exact background.\n` +
+      `- This is a creative illustration task. Produce the final image directly.`;
   }
 
   await updateProgress(3);
