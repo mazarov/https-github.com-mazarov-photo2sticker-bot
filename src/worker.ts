@@ -1500,28 +1500,60 @@ async function runJob(job: any) {
       `- Keep the character fully visible with margins.`;
   }
   if (generationType === "replace_subject") {
+    let bgDescription = "";
+    try {
+      console.log("[ReplaceSubject] Analyzing sticker background...");
+      const analyzeRes = await axios.post(
+        getGeminiGenerateContentUrl("gemini-2.0-flash"),
+        {
+          contents: [{
+            role: "user",
+            parts: [
+              {
+                text: `Describe this image in detail for reproduction. Focus on:\n` +
+                  `1. BACKGROUND: color, patterns, shapes, gradients, textures, decorative elements\n` +
+                  `2. TEXT/LABELS: exact text content, font style, position, color\n` +
+                  `3. LOGOS/ICONS: shapes, colors, position\n` +
+                  `4. CHARACTER: art style (cartoon/anime/realistic/pixel), pose, clothing, accessories\n` +
+                  `5. COMPOSITION: layout, framing, aspect ratio\n\n` +
+                  `Be very specific about colors (use hex if possible), positions (top/bottom/left/right), and sizes.\n` +
+                  `Output a concise but complete description in 3-5 sentences.`,
+              },
+              { inlineData: { mimeType, data: base64 } },
+            ],
+          }],
+        },
+        { headers: { "x-goog-api-key": config.geminiApiKey } }
+      );
+      bgDescription = analyzeRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      console.log("[ReplaceSubject] Background analysis:", bgDescription.substring(0, 200));
+    } catch (err: any) {
+      console.warn("[ReplaceSubject] Background analysis failed, proceeding without:", err?.message);
+    }
+
+    const bgBlock = bgDescription
+      ? `\n\nDETAILED DESCRIPTION OF IMAGE 1 (you MUST reproduce all of this exactly):\n${bgDescription}`
+      : "";
+
     promptForGeneration =
-      `You are an image editor. You are given two images:\n` +
-      `Image 1 — ORIGINAL STICKER/IMAGE that must be preserved as closely as possible.\n` +
+      `You are an image editor performing a face-swap. You are given two images:\n` +
+      `Image 1 — ORIGINAL IMAGE that must be preserved as closely as possible.\n` +
       `Image 2 — IDENTITY PHOTO of a real person (face reference).\n\n` +
-      `YOUR TASK: Edit Image 1 by replacing ONLY the face/head of the character ` +
-      `with the face from Image 2. EVERYTHING else MUST remain pixel-perfect identical:\n` +
-      `- Same body, same pose, same limbs position\n` +
-      `- Same clothing, accessories, props\n` +
-      `- Same art style, line work, coloring technique\n` +
-      `- Same background — preserve ALL background elements: shapes, patterns, text/labels, logos, decorations, colors\n` +
-      `- Same proportions, framing, and overall layout\n` +
-      `- Same image dimensions and aspect ratio\n\n` +
-      `CRITICAL RULES:\n` +
-      `- Do NOT regenerate the image from scratch. Make a MINIMAL edit — only the face area.\n` +
-      `- The background is sacred: if Image 1 has text, logos, geometric shapes, gradients, or any decorative elements in the background — they MUST appear in the output EXACTLY as they are.\n` +
-      `- The new face must match the art style of Image 1 (cartoon → cartoon face, anime → anime face, realistic → realistic face).\n` +
-      `- Adapt the face from Image 2 to fit the head shape, angle, and size in Image 1.\n` +
-      `- Preserve the facial expression/emotion from Image 1 but with the new person's features.\n` +
-      `- Hair style and color should come from Image 2 (the real person).\n` +
-      `- Do NOT remove, add, or modify ANY text that exists in Image 1.\n` +
-      `- Do NOT change the body, outfit, pose, hands, legs, or any element outside the head/face area.\n` +
-      `- Think of it as a face-swap: paste a new face onto the existing image, nothing else changes.`;
+      `YOUR TASK: Reproduce Image 1 pixel-for-pixel, changing ONLY the face/head of the character ` +
+      `to match the person from Image 2.${bgBlock}\n\n` +
+      `PRESERVATION CHECKLIST (every item MUST match Image 1):\n` +
+      `✓ Background: same color, same shapes, same patterns, same text/labels, same logos\n` +
+      `✓ Character body: same pose, same limbs, same clothing, same accessories\n` +
+      `✓ Art style: same line work, same coloring technique, same shading\n` +
+      `✓ Composition: same layout, same framing, same dimensions\n` +
+      `✓ All text/labels in the image must appear EXACTLY as in Image 1\n\n` +
+      `ONLY CHANGE:\n` +
+      `✗ The face/head → replace with features from Image 2\n` +
+      `✗ Hair style/color → take from Image 2\n\n` +
+      `CRITICAL:\n` +
+      `- The new face must match the art style of Image 1.\n` +
+      `- If Image 1 has a complex background (not transparent/solid) — you MUST reproduce that exact background.\n` +
+      `- Think of it as Photoshop face-swap: only the head changes, everything else is untouched.`;
   }
 
   await updateProgress(3);
