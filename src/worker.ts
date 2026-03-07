@@ -1411,7 +1411,7 @@ async function runJob(job: any) {
   }
 
   const sourceFileId =
-    generationType === "emotion" || generationType === "motion" || generationType === "text"
+    generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject"
       ? session.last_sticker_file_id
       : session.current_photo_file_id || photos[photos.length - 1];
 
@@ -1899,7 +1899,7 @@ async function runJob(job: any) {
 
   await updateProgress(5);
 
-  const skipBgRemoval = generationType === "replace_subject" && isImportedSticker;
+  const skipBgRemoval = generationType === "replace_subject";
   let noBgBuffer: Buffer | undefined;
 
   if (skipBgRemoval) {
