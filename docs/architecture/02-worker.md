@@ -175,6 +175,7 @@ flowchart TD
 | `style` | Оригинальное фото (AgAC) | Оригинальное фото (AgAC) | style preset prompt_hint |
 | `emotion` | Предыдущий стикер (CAAC) | Этот же стикер (CAAC) | emotion preset + стикер |
 | `motion` | Предыдущий стикер (CAAC) | Этот же стикер (CAAC) | motion preset + стикер |
+| `replace_subject` | Фото пользователя (identity) + стикер-референс (pose/style) | Фото пользователя (AgAC) | identity from photo + pose/style from sticker |
 | `text` | Нет генерации | — | текстовый оверлей |
 
 ### Код определения источника
@@ -184,11 +185,17 @@ flowchart TD
 const sourceFileId =
   generationType === "emotion" || generationType === "motion" || generationType === "text"
     ? session.last_sticker_file_id    // стикер (CAAC)
-    : session.current_photo_file_id;  // оригинальное фото (AgAC)
+    : session.current_photo_file_id;  // оригинальное фото (AgAC) или identity photo для replace_subject
 
 // source_photo_file_id в БД = всегда sourceFileId
 const savedSourcePhotoFileId = sourceFileId;
 ```
+
+### replace_subject (двойной image input)
+
+- `sourceFileId` = `session.current_photo_file_id` (identity source).
+- Дополнительно worker догружает `session.last_sticker_file_id` как sticker-reference и передаёт во 2-й `inlineData` к Gemini.
+- Prompt режим: "identity from photo + pose/expression/style from sticker reference".
 
 ## Конфигурация
 

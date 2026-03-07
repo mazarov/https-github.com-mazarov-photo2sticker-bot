@@ -290,3 +290,13 @@ flowchart TD
 | Emotion presets | 5 мин | `getEmotionPresets()` |
 | Motion presets | 5 мин | `getMotionPresets()` |
 | Bot texts (i18n) | 5 мин | `getText()` |
+
+## Edit Sticker Flow (menu: "🎨 Изменить стикер")
+
+- Новый entrypoint из persistent menu: `🎨 Изменить стикер` / `🎨 Edit sticker`.
+- API создаёт новую single-session в состоянии `wait_edit_sticker`.
+- Отдельный `bot.on("sticker")` handler принимает статичный Telegram sticker, сохраняет его как импортированный record в `stickers` и переводит session в `wait_edit_action`.
+- Под импортированным стикером показываются стандартные кнопки (`change_emotion`, `change_motion`, `toggle_border`, `add_text`) + новая `replace_face`.
+- Callback `replace_face:<stickerId>`:
+  - если в сессии/пользователе нет рабочего фото -> state `wait_edit_photo` и запросить фото;
+  - если фото есть -> выставить `current_photo_file_id` (identity), `last_sticker_file_id` (pose/style reference) и запустить `startGeneration(..., generationType="replace_subject")`.

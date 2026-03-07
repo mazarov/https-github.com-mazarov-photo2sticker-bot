@@ -1435,6 +1435,23 @@ async function runJob(job: any) {
 
   const base64 = fileBuffer.toString("base64");
   const mimeType = getMimeTypeByTelegramPath(filePath);
+  let replaceReferenceBase64: string | null = null;
+  let replaceReferenceMimeType: string | null = null;
+  if (generationType === "replace_subject" && session.last_sticker_file_id) {
+    try {
+      const refPath = await getFilePath(session.last_sticker_file_id);
+      const refBuffer = await downloadFile(refPath);
+      replaceReferenceBase64 = refBuffer.toString("base64");
+      replaceReferenceMimeType = getMimeTypeByTelegramPath(refPath);
+      console.log("[ReplaceSubject] loaded sticker reference:", {
+        hasRef: true,
+        refMime: replaceReferenceMimeType,
+        refBytes: refBuffer.length,
+      });
+    } catch (err: any) {
+      console.warn("[ReplaceSubject] failed to load sticker reference, fallback to single input:", err?.message || err);
+    }
+  }
   const sourceKind: SubjectSourceKind =
     generationType === "emotion" || generationType === "motion" || generationType === "text"
       ? "sticker"
@@ -1458,6 +1475,18 @@ async function runJob(job: any) {
       promptForGeneration +=
         "\n\nOutput MUST be a photograph, not a drawing, illustration, or stylized art.";
     }
+  }
+  if (generationType === "replace_subject") {
+    promptForGeneration =
+      `You are given two reference images.\n` +
+      `Image 1 is IDENTITY PHOTO (face and identity source).\n` +
+      `Image 2 is STICKER REFERENCE (pose, expression, composition, style source).\n\n` +
+      `Generate one sticker with identity from Image 1 and pose/expression/style from Image 2.\n` +
+      `Keep one subject only. Do not add text.\n` +
+      `Background MUST be flat bright magenta (#FF00FF).\n` +
+      `No borders, outlines, or decorative strokes around subject.\n` +
+      `Keep full subject visible with margins.\n\n` +
+      promptForGeneration;
   }
 
   await updateProgress(3);
@@ -1512,6 +1541,14 @@ async function runJob(job: any) {
                   data: base64,
                 },
               },
+              ...(generationType === "replace_subject" && replaceReferenceBase64
+                ? [{
+                    inlineData: {
+                      mimeType: replaceReferenceMimeType || "image/webp",
+                      data: replaceReferenceBase64,
+                    },
+                  }]
+                : []),
             ],
           },
         ],
@@ -1902,22 +1939,41 @@ async function runJob(job: any) {
     return null;
   })();
 
-  const { data: stickerRecord } = await supabase
+  const insertPayload: any = {
+    user_id: session.user_id,
+    session_id: session.id,
+    source_photo_file_id: savedSourcePhotoFileId,
+    user_input: session.user_input || null,
+    generated_prompt: finalPromptUsed || null,
+    result_storage_path: filePathStorage,
+    sticker_set_name: user?.sticker_set_name || null,
+    style_preset_id: session.selected_style_id || null,  // For style examples
+    idea_source: ideaSource,
+    env: config.appEnv,
+    generation_type: generationType,
+  };
+  let stickerRecord: any = null;
+  let insertError: any = null;
+  const firstInsert = await supabase
     .from("stickers")
-    .insert({
-      user_id: session.user_id,
-      session_id: session.id,
-      source_photo_file_id: savedSourcePhotoFileId,
-      user_input: session.user_input || null,
-      generated_prompt: finalPromptUsed || null,
-      result_storage_path: filePathStorage,
-      sticker_set_name: user?.sticker_set_name || null,
-      style_preset_id: session.selected_style_id || null,  // For style examples
-      idea_source: ideaSource,
-      env: config.appEnv,
-    })
+    .insert(insertPayload)
     .select("id")
     .single();
+  stickerRecord = firstInsert.data;
+  insertError = firstInsert.error;
+  if (insertError && (String(insertError.message || "").toLowerCase().includes("generation_type") || insertError.code === "42703")) {
+    delete insertPayload.generation_type;
+    const fallbackInsert = await supabase
+      .from("stickers")
+      .insert(insertPayload)
+      .select("id")
+      .single();
+    stickerRecord = fallbackInsert.data;
+    insertError = fallbackInsert.error;
+  }
+  if (insertError) {
+    throw new Error(`Failed to insert sticker: ${insertError.message || insertError}`);
+  }
   console.timeEnd(timerLabel("step7_insert"));
 
   const stickerId = stickerRecord?.id;
@@ -1940,6 +1996,7 @@ async function runJob(job: any) {
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
+  const replaceFaceText = await getText(lang, "btn.replace_face");
 
   // Use sticker ID in callback_data for message binding
   const replyMarkup = {
@@ -1952,6 +2009,9 @@ async function runJob(job: any) {
       [
         { text: toggleBorderText, callback_data: stickerId ? `toggle_border:${stickerId}` : "toggle_border" },
         { text: addTextText, callback_data: stickerId ? `add_text:${stickerId}` : "add_text" },
+      ],
+      [
+        { text: replaceFaceText, callback_data: stickerId ? `replace_face:${stickerId}` : "replace_face" },
       ],
       [
         { text: packIdeasText, callback_data: stickerId ? `pack_ideas:${stickerId}` : "pack_ideas" },

@@ -1137,7 +1137,7 @@ async function persistSubjectAndObjectProfile(sessionId: string, profile: Subjec
 
 async function ensureSubjectProfileForGeneration(
   session: any,
-  generationType: "style" | "emotion" | "motion" | "text"
+  generationType: "style" | "emotion" | "motion" | "text" | "replace_subject"
 ): Promise<SubjectProfile | null> {
   const profileEnabled = await isSubjectProfileEnabled();
   if (!profileEnabled) {
@@ -1233,7 +1233,7 @@ async function ensureSubjectProfileForGeneration(
 
 async function applySubjectLockToPrompt(
   session: any,
-  generationType: "style" | "emotion" | "motion" | "text",
+  generationType: "style" | "emotion" | "motion" | "text" | "replace_subject",
   prompt: string
 ): Promise<string> {
   const ensuredProfile = await ensureSubjectProfileForGeneration(session, generationType);
@@ -1288,7 +1288,7 @@ async function startGeneration(
   session: any,
   lang: string,
   options: {
-    generationType: "style" | "emotion" | "motion" | "text";
+    generationType: "style" | "emotion" | "motion" | "text" | "replace_subject";
     promptFinal: string;
     userInput?: string | null;
     emotionPrompt?: string | null;
@@ -1557,6 +1557,7 @@ async function startGeneration(
       case "emotion": return `Эмоция: ${options.emotionPrompt || "?"}`;
       case "motion": return `Движение: ${options.emotionPrompt || "?"}`;
       case "text": return `Текст: ${options.textPrompt || "?"}`;
+      case "replace_subject": return lang === "ru" ? "Заменить лицо в стикере" : "Replace face in sticker";
       default: return options.generationType;
     }
   })();
@@ -1662,11 +1663,13 @@ async function buildStickerButtons(
   const changeMotionText = lang === "ru" ? "🏃 Движение" : await getText(lang, "btn.change_motion");
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
+  const replaceFaceText = await getText(lang, "btn.replace_face");
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
   const emotionCb = sessionRef ? `change_emotion:${stickerId}:${sessionRef}` : `change_emotion:${stickerId}`;
   const motionCb = sessionRef ? `change_motion:${stickerId}:${sessionRef}` : `change_motion:${stickerId}`;
+  const replaceFaceCb = sessionRef ? `replace_face:${stickerId}:${sessionRef}` : `replace_face:${stickerId}`;
 
   return {
     inline_keyboard: [
@@ -1678,6 +1681,9 @@ async function buildStickerButtons(
       [
         { text: toggleBorderText, callback_data: `toggle_border:${stickerId}` },
         { text: addTextText, callback_data: `add_text:${stickerId}` },
+      ],
+      [
+        { text: replaceFaceText, callback_data: replaceFaceCb },
       ],
       [
         { text: packIdeasText, callback_data: `pack_ideas:${stickerId}` },
@@ -1704,15 +1710,15 @@ function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const row1 =
     lang === "ru"
       ? showAdminMakeExample
-        ? ["✨ Создать стикер", "📦 Создать пак", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
+        ? ["✨ Создать стикер", "🎨 Изменить стикер", "📦 Создать пак", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
         : showAdminGenerate
-          ? ["✨ Создать стикер", "📦 Создать пак", "🔄 Сгенерировать пак"]
-          : ["✨ Создать стикер", "📦 Создать пак"]
+          ? ["✨ Создать стикер", "🎨 Изменить стикер", "📦 Создать пак", "🔄 Сгенерировать пак"]
+          : ["✨ Создать стикер", "🎨 Изменить стикер", "📦 Создать пак"]
       : showAdminMakeExample
-        ? ["✨ Create sticker", "📦 Create pack", "🔄 Generate pack", "⭐ Make as example"]
+        ? ["✨ Create sticker", "🎨 Edit sticker", "📦 Create pack", "🔄 Generate pack", "⭐ Make as example"]
         : showAdminGenerate
-          ? ["✨ Create sticker", "📦 Create pack", "🔄 Generate pack"]
-          : ["✨ Create sticker", "📦 Create pack"];
+          ? ["✨ Create sticker", "🎨 Edit sticker", "📦 Create pack", "🔄 Generate pack"]
+          : ["✨ Create sticker", "🎨 Edit sticker", "📦 Create pack"];
   const row2 =
     lang === "ru"
       ? ["💰 Ваш баланс", "💬 Поддержка"]
@@ -3498,6 +3504,41 @@ bot.on("photo", async (ctx) => {
     }
   }
 
+  // === Edit sticker flow: waiting for replacement face photo ===
+  if (session.state === "wait_edit_photo") {
+    const photos = Array.isArray(session.photos) ? session.photos : [];
+    photos.push(photo.file_id);
+    const nextRev = (session.session_rev || 1) + 1;
+    await supabase
+      .from("sessions")
+      .update({
+        photos,
+        current_photo_file_id: photo.file_id,
+        state: "wait_edit_action",
+        is_active: true,
+        session_rev: nextRev,
+      })
+      .eq("id", session.id);
+
+    const stickerId = session.edit_replace_sticker_id || null;
+    const sessionRef = formatCallbackSessionRef(session.id, nextRev);
+    if (stickerId) {
+      await ctx.reply(
+        await getText(lang, "edit.photo_received"),
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: await getText(lang, "btn.replace_face"), callback_data: appendSessionRefIfFits(`replace_face:${stickerId}`, sessionRef) }],
+            ],
+          },
+        }
+      );
+    } else {
+      await ctx.reply(lang === "ru" ? "Фото сохранено. Теперь пришли стикер для редактирования." : "Photo saved. Now send a sticker to edit.");
+    }
+    return;
+  }
+
   // === Global replacement photo router (all user flows) ===
   // Rule: if a working photo already exists in the current flow, ask whether to use new or keep current.
   const hardProcessingStates = [
@@ -3890,6 +3931,43 @@ bot.hears(["✨ Создать стикер", "✨ Create sticker"], async (ctx)
   // Always start a fresh assistant dialog.
   // startAssistantDialog cancels all previous sessions before creating a new one.
   await startAssistantDialog(ctx, user, lang);
+});
+
+// Menu: 🎨 Изменить стикер — separate flow for editing an existing sticker
+bot.hears(["🎨 Изменить стикер", "🎨 Edit sticker"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) {
+    const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
+    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    return;
+  }
+
+  const lang = user.lang || "en";
+  await closeAllActiveSessions(user.id);
+
+  const { data: session, error } = await supabase
+    .from("sessions")
+    .insert({
+      user_id: user.id,
+      state: "wait_edit_sticker",
+      flow_kind: "single",
+      is_active: true,
+      session_rev: 1,
+      env: config.appEnv,
+    })
+    .select("*")
+    .single();
+
+  if (error || !session?.id) {
+    console.error("edit_sticker: failed to create session:", error?.message);
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    return;
+  }
+
+  await ctx.reply(await getText(lang, "edit.send_sticker"), getMainMenuKeyboard(lang, ctx?.from?.id));
 });
 
 // Menu: 🎨 Стили — manual style selection mode
@@ -6206,6 +6284,86 @@ async function handleAdminPackContentExampleText(ctx: any, telegramId: number, t
   }
 }
 
+// Sticker handler (edit existing sticker flow)
+bot.on("sticker", async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const session = await getActiveSession(user.id);
+  if (!session?.id || session.state !== "wait_edit_sticker") return;
+
+  const sticker = (ctx.message as any)?.sticker;
+  const stickerFileId = sticker?.file_id as string | undefined;
+  if (!stickerFileId) return;
+
+  if (sticker?.is_animated || sticker?.is_video) {
+    await ctx.reply(
+      lang === "ru"
+        ? "Пока поддерживаются только статичные стикеры (не animated/video)."
+        : "Only static stickers are supported for now (no animated/video)."
+    );
+    return;
+  }
+
+  const nextRev = (session.session_rev || 1) + 1;
+  await supabase
+    .from("sessions")
+    .update({
+      state: "wait_edit_action",
+      is_active: true,
+      flow_kind: "single",
+      session_rev: nextRev,
+      last_sticker_file_id: stickerFileId,
+      edit_sticker_file_id: stickerFileId,
+      // Keep for replace_face recovery after asking user for photo.
+      edit_replace_sticker_id: null,
+    })
+    .eq("id", session.id);
+
+  const insertPayload: any = {
+    user_id: user.id,
+    session_id: session.id,
+    source_photo_file_id: stickerFileId,
+    user_input: null,
+    generated_prompt: null,
+    result_storage_path: null,
+    sticker_set_name: user.sticker_set_name || null,
+    telegram_file_id: stickerFileId,
+    env: config.appEnv,
+    generation_type: "imported",
+  };
+  // Backward-compat: DB may not have generation_type yet.
+  let importedSticker: any = null;
+  let insertErr: any = null;
+  const firstInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
+  importedSticker = firstInsert.data;
+  insertErr = firstInsert.error;
+  if (insertErr && (String(insertErr.message || "").toLowerCase().includes("generation_type") || insertErr.code === "42703")) {
+    delete insertPayload.generation_type;
+    const fallbackInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
+    importedSticker = fallbackInsert.data;
+    insertErr = fallbackInsert.error;
+  }
+  if (insertErr || !importedSticker?.id) {
+    console.error("[edit_sticker] failed to insert imported sticker:", insertErr?.message || insertErr);
+    await ctx.reply(await getText(lang, "error.technical"));
+    return;
+  }
+
+  const stickerId = importedSticker.id as string;
+  await supabase
+    .from("sessions")
+    .update({ edit_replace_sticker_id: stickerId })
+    .eq("id", session.id);
+
+  const replyMarkup = await buildStickerButtons(lang, stickerId, { sessionId: session.id, sessionRev: nextRev });
+  await ctx.reply(await getText(lang, "edit.what_to_do"), { reply_markup: replyMarkup });
+});
+
 // Text handler (style description)
 bot.on("text", async (ctx) => {
   const telegramId = ctx.from?.id;
@@ -6292,6 +6450,7 @@ bot.on("text", async (ctx) => {
   // Skip menu button texts — they are handled by bot.hears() above
   const menuButtons = [
     "✨ Создать стикер", "✨ Create sticker",
+    "🎨 Изменить стикер", "🎨 Edit sticker",
     "🎨 Стили", "🎨 Styles", // legacy, button hidden
     "📦 Создать пак", "📦 Create pack",
     "🔄 Сгенерировать пак", "🔄 Generate pack",
@@ -8658,6 +8817,97 @@ bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
     promptFinal,
     emotionPrompt: preset.prompt_hint,
     selectedEmotion: preset.id,
+  });
+});
+
+// Callback: replace face in sticker (use user's latest photo as identity source)
+bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const stickerId = ctx.match[1];
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+
+  const { data: sticker } = await supabase
+    .from("stickers")
+    .select("telegram_file_id, source_photo_file_id, user_id, style_preset_id")
+    .eq("id", stickerId)
+    .maybeSingle();
+  if (!sticker?.telegram_file_id) {
+    await ctx.reply(await getText(lang, "error.no_stickers_added"));
+    return;
+  }
+  if (sticker.user_id !== user.id) return;
+
+  let session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+  if (!session?.id) {
+    const { data: newSession } = await supabase
+      .from("sessions")
+      .insert({ user_id: user.id, state: "wait_edit_action", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
+      .select()
+      .single();
+    session = newSession;
+  }
+  if (!session?.id) return;
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "replace_face", "stale_callback");
+    return;
+  }
+
+  const identityPhotoFileId = session.current_photo_file_id || user.last_photo_file_id || null;
+  if (!identityPhotoFileId) {
+    const nextRev = (session.session_rev || 1) + 1;
+    await supabase
+      .from("sessions")
+      .update({
+        state: "wait_edit_photo",
+        is_active: true,
+        flow_kind: "single",
+        edit_replace_sticker_id: stickerId,
+        session_rev: nextRev,
+      })
+      .eq("id", session.id);
+    await ctx.reply(await getText(lang, "edit.need_photo"));
+    return;
+  }
+
+  const replacePrompt =
+    "You are given two references: (1) identity photo, (2) sticker reference. " +
+    "Generate one sticker with identity from photo and pose/expression/style from sticker reference. " +
+    "Keep one subject only, preserve the same vibe and composition, no text, no borders or outlines.";
+
+  await supabase
+    .from("sessions")
+    .update({
+      current_photo_file_id: identityPhotoFileId,
+      last_sticker_file_id: sticker.telegram_file_id,
+      edit_replace_sticker_id: stickerId,
+      flow_kind: "single",
+      is_active: true,
+      selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
+    })
+    .eq("id", session.id);
+
+  const patchedSession = {
+    ...session,
+    current_photo_file_id: identityPhotoFileId,
+    last_sticker_file_id: sticker.telegram_file_id,
+    selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
+  };
+
+  await startGeneration(ctx, user, patchedSession, lang, {
+    generationType: "replace_subject",
+    promptFinal: replacePrompt,
+    selectedStyleId: sticker.style_preset_id || session.selected_style_id || null,
+    userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
   });
 });
 
@@ -12430,7 +12680,8 @@ bot.action("cancel", async (ctx) => {
     const nextState = 
       session.pending_generation_type === "emotion" ? "wait_emotion" :
       session.pending_generation_type === "motion" ? "wait_motion" :
-      session.pending_generation_type === "text" ? "wait_text_overlay" : "wait_style";
+      session.pending_generation_type === "text" ? "wait_text_overlay" :
+      session.pending_generation_type === "replace_subject" ? "wait_edit_action" : "wait_style";
     await supabase
       .from("sessions")
       .update({ state: nextState, is_active: true })

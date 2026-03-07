@@ -92,7 +92,7 @@ export function getSubjectWordForPrompt(profile: Pick<SubjectProfile, "subjectMo
 
 export function resolveGenerationSource(
   session: any,
-  generationType: "style" | "emotion" | "motion" | "text"
+  generationType: "style" | "emotion" | "motion" | "text" | "replace_subject"
 ): { sourceFileId: string | null; sourceKind: SubjectSourceKind } {
   if (generationType === "emotion" || generationType === "motion" || generationType === "text") {
     return {
