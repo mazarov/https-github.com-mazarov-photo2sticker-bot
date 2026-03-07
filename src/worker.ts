@@ -1542,30 +1542,34 @@ async function runJob(job: any) {
       : "";
 
     promptForGeneration =
-      `You are an artist redrawing a character. You are given two images:\n` +
-      `Image 1 — ORIGINAL STICKER/IMAGE to reproduce.\n` +
-      `Image 2 — REFERENCE PHOTO of a real person.\n\n` +
-      `YOUR TASK: Redraw Image 1 exactly as it is, but REDRAW the character's face ` +
-      `so it RESEMBLES the person from Image 2 — while keeping the SAME ART STYLE as Image 1.${bgBlock}\n\n` +
-      `FACE RULES (most important):\n` +
-      `- Do NOT paste a photo-realistic face onto a cartoon body. That looks terrible.\n` +
-      `- REDRAW the face IN THE ART STYLE of Image 1 (cartoon → cartoon face, anime → anime face, etc.)\n` +
-      `- The redrawn face should capture the person's KEY FEATURES from Image 2: face shape, eye shape, nose shape, hair style, hair color, skin tone.\n` +
-      `- The face must look like a STYLIZED PORTRAIT of the person, not a photo cutout.\n` +
-      `- Keep the same facial expression/emotion as in Image 1.\n\n` +
-      `PRESERVATION CHECKLIST (every item MUST match Image 1):\n` +
-      `✓ Background: same color, same shapes, same patterns, same text/labels, same logos\n` +
-      `✓ Character body: same pose, same limbs, same clothing, same accessories\n` +
-      `✓ Art style: same line work, same coloring technique, same shading — INCLUDING the face\n` +
-      `✓ Composition: same layout, same framing, same dimensions\n` +
-      `✓ All text/labels in the image must appear EXACTLY as in Image 1\n\n` +
-      `ONLY CHANGE:\n` +
-      `✗ The face/head → redraw with features inspired by Image 2, IN THE SAME ART STYLE\n` +
-      `✗ Hair style/color → take from Image 2, drawn in the same art style\n\n` +
+      `You are an illustrator recreating an existing image. You are given two images:\n` +
+      `Image 1 — the original artwork to recreate.\n` +
+      `Image 2 — a visual character reference.\n\n` +
+      `TASK:\n` +
+      `Recreate Image 1 while updating the main character so the character design is clearly inspired by Image 2. ` +
+      `The result should feel recognizable as based on Image 2 when viewed side by side, while remaining fully rendered in the visual style of Image 1.${bgBlock}\n\n` +
+      `STYLE RULES:\n` +
+      `- Preserve the EXACT visual style of Image 1.\n` +
+      `- If Image 1 is photorealistic, keep the result photorealistic.\n` +
+      `- If Image 1 is cartoon, anime, illustration, or other stylized art, keep that same stylized rendering.\n` +
+      `- Never switch style families and never create a pasted or collage-like result.\n\n` +
+      `CHARACTER UPDATE RULES:\n` +
+      `- Use Image 2 as the appearance reference for the main character.\n` +
+      `- Transfer the most recognizable visual cues from Image 2: overall look, silhouette, hairstyle, hair color, age impression, and general proportions.\n` +
+      `- Keep the same expression, emotion, pose, and body position from Image 1.\n` +
+      `- The character should look like a natural redraw of Image 1, not a separate inserted element.\n\n` +
+      `KEEP UNCHANGED FROM IMAGE 1:\n` +
+      `- Background, colors, patterns, decorative elements, logos\n` +
+      `- All text and labels\n` +
+      `- Clothing, accessories, props\n` +
+      `- Composition, framing, layout, dimensions\n` +
+      `- Line work, coloring technique, shading style\n\n` +
+      `CHANGE ONLY:\n` +
+      `- The main character's appearance, guided by Image 2\n\n` +
       `CRITICAL:\n` +
-      `- The output must be a UNIFIED artwork — same style everywhere, face included.\n` +
-      `- If Image 1 is cartoon — the new face must be cartoon. NEVER mix photo-realistic face with cartoon body.\n` +
-      `- If Image 1 has a complex background — reproduce that exact background.`;
+      `- Output one single cohesive artwork with a consistent style everywhere.\n` +
+      `- Keep the character clearly recognizable as inspired by Image 2.\n` +
+      `- If Image 1 has a complex background, reproduce that background closely.`;
   }
 
   await updateProgress(3);
