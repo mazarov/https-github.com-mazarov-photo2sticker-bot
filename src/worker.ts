@@ -1681,7 +1681,7 @@ async function runJob(job: any) {
     });
     console.log("[ReplaceSubject][Facemint] task created", { taskId, price });
 
-    const task = await waitForFaceSwapTask(taskId, { timeoutMs: 60_000, pollIntervalMs: 2_000 });
+    const task = await waitForFaceSwapTask(taskId, { timeoutMs: 120_000, pollIntervalMs: 2_000 });
     const resultUrl = task.result?.file_url;
     if (!resultUrl) {
       throw new Error("Facemint replace_subject failed: task completed without result file URL");

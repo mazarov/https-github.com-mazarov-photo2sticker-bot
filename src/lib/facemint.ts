@@ -131,18 +131,30 @@ export async function waitForFaceSwapTask(
   taskId: string,
   options: { timeoutMs?: number; pollIntervalMs?: number } = {}
 ): Promise<FacemintTaskInfo> {
-  const timeoutMs = options.timeoutMs ?? 60_000;
+  const timeoutMs = options.timeoutMs ?? 120_000;
   const pollIntervalMs = options.pollIntervalMs ?? 2_000;
   const deadline = Date.now() + timeoutMs;
+  let lastState = 0;
+  let pollCount = 0;
 
   while (Date.now() < deadline) {
     const task = await getFaceSwapTaskInfo(taskId);
+    lastState = task.state;
+    pollCount++;
+
     if (task.state === 3) return task;
     if (task.state === -1 || task.state === 2) {
       throw new Error(`Facemint task finished with non-success state=${task.state}`);
     }
+
+    if (pollCount % 10 === 0) {
+      console.log("[Facemint] polling", { taskId, state: task.state, process: task.process, pollCount });
+    }
+
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 
-  throw new Error(`Facemint task timeout after ${timeoutMs}ms`);
+  const finalTask = await getFaceSwapTaskInfo(taskId).catch(() => null);
+  const stateInfo = finalTask ? ` lastState=${finalTask.state} process=${finalTask.process}` : "";
+  throw new Error(`Facemint task timeout after ${timeoutMs}ms${stateInfo}`);
 }
