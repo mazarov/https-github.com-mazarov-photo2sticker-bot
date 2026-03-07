@@ -1435,8 +1435,25 @@ async function runJob(job: any) {
 
   const base64 = fileBuffer.toString("base64");
   const mimeType = getMimeTypeByTelegramPath(filePath);
+  let replaceReferenceBase64: string | null = null;
+  let replaceReferenceMimeType: string | null = null;
+  if (generationType === "replace_subject" && session.current_photo_file_id) {
+    try {
+      const refPath = await getFilePath(session.current_photo_file_id);
+      const refBuffer = await downloadFile(refPath);
+      replaceReferenceBase64 = refBuffer.toString("base64");
+      replaceReferenceMimeType = getMimeTypeByTelegramPath(refPath);
+      console.log("[ReplaceSubject] loaded identity photo reference:", {
+        hasRef: true,
+        refMime: replaceReferenceMimeType,
+        refBytes: refBuffer.length,
+      });
+    } catch (err: any) {
+      console.warn("[ReplaceSubject] failed to load identity photo, fallback to single input:", err?.message || err);
+    }
+  }
   const sourceKind: SubjectSourceKind =
-    generationType === "emotion" || generationType === "motion" || generationType === "text"
+    generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject"
       ? "sticker"
       : "photo";
   const lockEnabled = await isSubjectLockEnabled();
@@ -1458,6 +1475,83 @@ async function runJob(job: any) {
       promptForGeneration +=
         "\n\nOutput MUST be a photograph, not a drawing, illustration, or stylized art.";
     }
+  }
+  const isImportedSticker = Boolean(session.edit_sticker_file_id);
+  if (isImportedSticker && (generationType === "emotion" || generationType === "motion")) {
+    const changeType = generationType === "emotion" ? "emotion/facial expression" : "motion/body pose";
+    const changeHint = session.selected_emotion || session.emotion_prompt || "";
+    promptForGeneration =
+      `You are an image editor. You are given an existing sticker.\n\n` +
+      `YOUR TASK: Edit this sticker by changing ONLY the ${changeType} to: "${changeHint}".\n\n` +
+      `EVERYTHING else MUST remain EXACTLY the same:\n` +
+      `- Same character identity, face features, hair\n` +
+      `- Same art style, line work, coloring technique (cartoon, anime, realistic, pixel art — whatever the input uses)\n` +
+      `- Same clothing, accessories, props\n` +
+      `- Same background and composition\n` +
+      `- Same proportions and framing\n\n` +
+      `CRITICAL RULES:\n` +
+      `- Do NOT regenerate the sticker from scratch. Make a MINIMAL edit.\n` +
+      `- Do NOT change the art style. If the input is photo-realistic — output must be photo-realistic. If cartoon — cartoon.\n` +
+      `- Do NOT add any text or watermarks.\n` +
+      `- The output must look like it belongs to the same sticker set as the input.\n` +
+      `- Background MUST be flat bright magenta (#FF00FF).\n` +
+      `- Keep the character fully visible with margins.`;
+  }
+  if (generationType === "replace_subject") {
+    let bgDescription = "";
+    try {
+      console.log("[ReplaceSubject] Analyzing sticker background...");
+      const analyzeRes = await axios.post(
+        getGeminiGenerateContentUrl("gemini-2.0-flash"),
+        {
+          contents: [{
+            role: "user",
+            parts: [
+              {
+                text: `Describe this image in detail for reproduction. Focus on:\n` +
+                  `1. BACKGROUND: color, patterns, shapes, gradients, textures, decorative elements\n` +
+                  `2. TEXT/LABELS: exact text content, font style, position, color\n` +
+                  `3. LOGOS/ICONS: shapes, colors, position\n` +
+                  `4. CHARACTER: art style (cartoon/anime/realistic/pixel), pose, clothing, accessories\n` +
+                  `5. COMPOSITION: layout, framing, aspect ratio\n\n` +
+                  `Be very specific about colors (use hex if possible), positions (top/bottom/left/right), and sizes.\n` +
+                  `Output a concise but complete description in 3-5 sentences.`,
+              },
+              { inlineData: { mimeType, data: base64 } },
+            ],
+          }],
+        },
+        { headers: { "x-goog-api-key": config.geminiApiKey } }
+      );
+      bgDescription = analyzeRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      console.log("[ReplaceSubject] Background analysis:", bgDescription.substring(0, 200));
+    } catch (err: any) {
+      console.warn("[ReplaceSubject] Background analysis failed, proceeding without:", err?.message);
+    }
+
+    const bgBlock = bgDescription
+      ? `\n\nDETAILED DESCRIPTION OF IMAGE 1 (you MUST reproduce all of this exactly):\n${bgDescription}`
+      : "";
+
+    promptForGeneration =
+      `You are an image editor performing a face-swap. You are given two images:\n` +
+      `Image 1 — ORIGINAL IMAGE that must be preserved as closely as possible.\n` +
+      `Image 2 — IDENTITY PHOTO of a real person (face reference).\n\n` +
+      `YOUR TASK: Reproduce Image 1 pixel-for-pixel, changing ONLY the face/head of the character ` +
+      `to match the person from Image 2.${bgBlock}\n\n` +
+      `PRESERVATION CHECKLIST (every item MUST match Image 1):\n` +
+      `✓ Background: same color, same shapes, same patterns, same text/labels, same logos\n` +
+      `✓ Character body: same pose, same limbs, same clothing, same accessories\n` +
+      `✓ Art style: same line work, same coloring technique, same shading\n` +
+      `✓ Composition: same layout, same framing, same dimensions\n` +
+      `✓ All text/labels in the image must appear EXACTLY as in Image 1\n\n` +
+      `ONLY CHANGE:\n` +
+      `✗ The face/head → replace with features from Image 2\n` +
+      `✗ Hair style/color → take from Image 2\n\n` +
+      `CRITICAL:\n` +
+      `- The new face must match the art style of Image 1.\n` +
+      `- If Image 1 has a complex background (not transparent/solid) — you MUST reproduce that exact background.\n` +
+      `- Think of it as Photoshop face-swap: only the head changes, everything else is untouched.`;
   }
 
   await updateProgress(3);
@@ -1512,6 +1606,14 @@ async function runJob(job: any) {
                   data: base64,
                 },
               },
+              ...(generationType === "replace_subject" && replaceReferenceBase64
+                ? [{
+                    inlineData: {
+                      mimeType: replaceReferenceMimeType || "image/jpeg",
+                      data: replaceReferenceBase64,
+                    },
+                  }]
+                : []),
             ],
           },
         ],
@@ -1790,91 +1892,102 @@ async function runJob(job: any) {
   const generatedBuffer = Buffer.from(imageBase64, "base64");
 
   await updateProgress(5);
-  // ============================================================
-  // Background removal — configurable primary service
-  // app_config key: bg_removal_primary (prod) / bg_removal_primary_test (test)
-  // Values: "rembg" | "pixian"
-  // ============================================================
-  const imageSizeKb = Math.round(generatedBuffer.length / 1024);
-  const rembgUrl = process.env.REMBG_URL;
-  const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
-  const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
-  
+
+  const skipBgRemoval = generationType === "replace_subject" && isImportedSticker;
   let noBgBuffer: Buffer | undefined;
-  const startTime = Date.now();
 
-  console.log(`[bgRemoval] Primary service: ${bgPrimary}, image size: ${imageSizeKb} KB`);
-
-  if (bgPrimary === "pixian") {
-    // Primary: Pixian, fallback: rembg
-    noBgBuffer = await callPixian(generatedBuffer, imageSizeKb);
-    if (!noBgBuffer) {
-      console.log(`[bgRemoval] Pixian failed, falling back to rembg`);
-      noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
-    }
+  if (skipBgRemoval) {
+    console.log("[bgRemoval] SKIPPED for replace_subject on imported sticker — preserving original background");
+    noBgBuffer = generatedBuffer;
   } else {
-    // Primary: rembg, fallback: Pixian
-    noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
-    if (!noBgBuffer) {
-      console.log(`[bgRemoval] rembg failed, falling back to Pixian`);
+    // ============================================================
+    // Background removal — configurable primary service
+    // app_config key: bg_removal_primary (prod) / bg_removal_primary_test (test)
+    // Values: "rembg" | "pixian"
+    // ============================================================
+    const imageSizeKb = Math.round(generatedBuffer.length / 1024);
+    const rembgUrl = process.env.REMBG_URL;
+    const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
+    const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
+
+    const startTime = Date.now();
+
+    console.log(`[bgRemoval] Primary service: ${bgPrimary}, image size: ${imageSizeKb} KB`);
+
+    if (bgPrimary === "pixian") {
       noBgBuffer = await callPixian(generatedBuffer, imageSizeKb);
+      if (!noBgBuffer) {
+        console.log(`[bgRemoval] Pixian failed, falling back to rembg`);
+        noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
+      }
+    } else {
+      noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
+      if (!noBgBuffer) {
+        console.log(`[bgRemoval] rembg failed, falling back to Pixian`);
+        noBgBuffer = await callPixian(generatedBuffer, imageSizeKb);
+      }
+    }
+
+    const bgDuration = Date.now() - startTime;
+    console.log(`[bgRemoval] Total background removal took ${bgDuration}ms`);
+
+    if (!noBgBuffer) {
+      console.error("=== Background removal failed (all methods) ===");
+      console.error("Duration:", bgDuration, "ms");
+      
+      await sendAlert({
+        type: "rembg_failed",
+        message: `Background removal failed: all methods exhausted`,
+        details: { 
+          user: `@${user?.username || telegramId}`,
+          sessionId: session.id,
+          generationType,
+          styleId: session.selected_style_id || "-",
+          imageSizeKb,
+          durationMs: bgDuration,
+          bgPrimary,
+          rembgConfigured: !!rembgUrl,
+        },
+      });
+      throw new Error(`Background removal failed: all methods exhausted`);
     }
   }
-
-  if (!noBgBuffer) {
-    const duration = Date.now() - startTime;
-    console.error("=== Background removal failed (all methods) ===");
-    console.error("Duration:", duration, "ms");
-    
-    await sendAlert({
-      type: "rembg_failed",
-      message: `Background removal failed: all methods exhausted`,
-      details: { 
-        user: `@${user?.username || telegramId}`,
-        sessionId: session.id,
-        generationType,
-        styleId: session.selected_style_id || "-",
-        imageSizeKb,
-        durationMs: duration,
-        bgPrimary,
-        rembgConfigured: !!rembgUrl,
-      },
-    });
-    throw new Error(`Background removal failed: all methods exhausted`);
-  }
-
-  const bgDuration = Date.now() - startTime;
-  console.log(`[bgRemoval] Total background removal took ${bgDuration}ms`);
 
   await updateProgress(6);
 
   // At this point noBgBuffer is guaranteed to be set (or we threw above)
   const cleanedBuffer = noBgBuffer!;
 
-  // Safety padding: add 5% transparent border so trim never eats into character
-  // (Gemini sometimes generates characters touching image edges)
-  const meta = await sharp(cleanedBuffer).metadata();
-  const safetyPad = Math.round(Math.max(meta.width || 0, meta.height || 0) * 0.05);
-  const paddedBuffer = await sharp(cleanedBuffer)
-    .extend({
-      top: safetyPad, bottom: safetyPad, left: safetyPad, right: safetyPad,
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    })
-    .toBuffer();
+  let stickerBuffer: Buffer;
+  if (skipBgRemoval) {
+    stickerBuffer = await sharp(cleanedBuffer)
+      .resize(512, 512, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .webp({ quality: 95 })
+      .toBuffer();
+  } else {
+    // Safety padding: add 5% transparent border so trim never eats into character
+    const meta = await sharp(cleanedBuffer).metadata();
+    const safetyPad = Math.round(Math.max(meta.width || 0, meta.height || 0) * 0.05);
+    const paddedBuffer = await sharp(cleanedBuffer)
+      .extend({
+        top: safetyPad, bottom: safetyPad, left: safetyPad, right: safetyPad,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .toBuffer();
 
-  // Trim transparent borders and fit into 512x512 with 15px padding
-  const stickerBuffer = await sharp(paddedBuffer)
-    .trim({ threshold: 2 })
-    .resize(482, 482, {
-      fit: "contain",
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    })
-    .extend({
-      top: 15, bottom: 15, left: 15, right: 15,
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    })
-    .webp({ quality: 95 })
-    .toBuffer();
+    stickerBuffer = await sharp(paddedBuffer)
+      .trim({ threshold: 2 })
+      .resize(482, 482, {
+        fit: "contain",
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .extend({
+        top: 15, bottom: 15, left: 15, right: 15,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .webp({ quality: 95 })
+      .toBuffer();
+  }
 
   await updateProgress(7);
   const filePathStorage = `stickers/${session.user_id}/${session.id}/${Date.now()}.webp`;
