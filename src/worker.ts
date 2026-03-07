@@ -1542,35 +1542,27 @@ async function runJob(job: any) {
       : "";
 
     promptForGeneration =
-      `You are a creative illustrator specializing in character reinterpretation. You are given two images.\n` +
-      `Image 1 — the ARTWORK to reproduce (sticker, illustration, or photo).\n` +
-      `Image 2 — an APPEARANCE REFERENCE showing how the character should look.\n\n` +
-      `YOUR TASK: Recreate Image 1 as closely as possible, but adjust the character's appearance ` +
-      `(facial features, hair style, hair color, skin tone) to match the person shown in Image 2. ` +
-      `Everything else must stay identical to Image 1.${bgBlock}\n\n` +
-      `STYLE LOCK (strict):\n` +
-      `- Detect the EXACT visual style of Image 1 and preserve it in the output.\n` +
-      `- Photorealistic input → photorealistic output (real skin texture, natural lighting, no simplification).\n` +
-      `- Cartoon/anime/illustration input → same stylized output.\n` +
-      `- NEVER change the style family. Do NOT beautify or simplify beyond what Image 1 already has.\n\n` +
-      `APPEARANCE ADJUSTMENT RULES:\n` +
-      `- Draw the character's face IN THE SAME VISUAL STYLE as Image 1.\n` +
-      `- Borrow KEY FEATURES from Image 2: face shape, eye shape, nose shape, hair style, hair color, skin tone.\n` +
-      `- Keep the same facial expression and emotion as in Image 1.\n` +
-      `- The result must look like a natural part of Image 1, not a collage or cutout.\n\n` +
-      `PRESERVATION CHECKLIST (every item MUST match Image 1):\n` +
-      `✓ Background: same color, shapes, patterns, text/labels, logos — pixel-accurate\n` +
-      `✓ Character body: same pose, limbs, clothing, accessories\n` +
-      `✓ Art style: same line work, coloring technique, shading — INCLUDING the character\n` +
-      `✓ Composition: same layout, framing, dimensions\n` +
-      `✓ All text/labels must appear EXACTLY as in Image 1\n\n` +
-      `ONLY CHANGE:\n` +
-      `✗ Character's facial features → adjust to match Image 2, in the same art style\n` +
-      `✗ Hair style/color → take from Image 2, rendered in the same art style\n\n` +
-      `CRITICAL:\n` +
-      `- Output must be a UNIFIED artwork — consistent style everywhere.\n` +
-      `- If Image 1 has a complex background, reproduce that exact background.\n` +
-      `- This is a creative illustration task. Produce the final image directly.`;
+      `You are an expert illustrator. You receive two images.\n` +
+      `Image 1 — the ORIGINAL ARTWORK (sticker, drawing, or photo).\n` +
+      `Image 2 — a CHARACTER DESIGN REFERENCE.\n\n` +
+      `TASK: Redraw Image 1 but make the main character look like the person in Image 2.${bgBlock}\n\n` +
+      `HOW TO REDRAW THE CHARACTER:\n` +
+      `- Study the person in Image 2: their overall look, proportions, coloring.\n` +
+      `- Redraw the character in Image 1 so they resemble the person from Image 2.\n` +
+      `- Keep the same pose, expression, and emotion as in Image 1.\n` +
+      `- The redrawn character must blend naturally into the artwork.\n\n` +
+      `STYLE RULE (mandatory):\n` +
+      `- Match the EXACT visual style of Image 1.\n` +
+      `- If Image 1 is a photo → output a photo. If cartoon → output cartoon. If anime → anime.\n` +
+      `- Never switch between style families.\n\n` +
+      `KEEP UNCHANGED (copy from Image 1):\n` +
+      `- Background, colors, patterns, decorations\n` +
+      `- All text and labels (reproduce exactly)\n` +
+      `- Character's clothing, accessories, props\n` +
+      `- Body pose, limb positions\n` +
+      `- Composition, layout, framing\n` +
+      `- Art style, line work, shading technique\n\n` +
+      `OUTPUT: A single unified artwork. Produce the final image directly.`;
   }
 
   await updateProgress(3);
