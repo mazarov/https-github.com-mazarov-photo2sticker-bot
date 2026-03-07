@@ -1678,10 +1678,6 @@ async function runJob(job: any) {
       nsfw_check: 0,
       face_recognition: 0.8,
       face_detection: 0.25,
-      watermark: "",
-      callback_url: "",
-      start_time: 0,
-      end_time: 0,
     });
     console.log("[ReplaceSubject][Facemint] task created", { taskId, price });
 

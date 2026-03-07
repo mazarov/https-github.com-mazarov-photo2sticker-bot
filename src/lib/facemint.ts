@@ -89,6 +89,11 @@ export async function createFaceSwapTask(params: FacemintCreateTaskParams): Prom
     });
   }
 
+  console.log("[Facemint] create-face-swap-task payload keys:", Object.keys(payload));
+  if ("callback_url" in payload) {
+    console.log("[Facemint] callback_url value:", payload.callback_url);
+  }
+
   const { data } = await axios.post<FacemintCreateTaskResponse>(url, payload, {
     headers: getHeaders(),
     timeout: 30_000,
