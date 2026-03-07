@@ -1542,16 +1542,22 @@ async function runJob(job: any) {
       : "";
 
     promptForGeneration =
-      `You are an artist redrawing a character. You are given two images:\n` +
+      `You are an image editor performing identity replacement with strict style preservation. You are given two images:\n` +
       `Image 1 — ORIGINAL STICKER/IMAGE to reproduce.\n` +
       `Image 2 — REFERENCE PHOTO of a real person.\n\n` +
       `YOUR TASK: Redraw Image 1 exactly as it is, but REDRAW the character's face ` +
       `so it RESEMBLES the person from Image 2 — while keeping the SAME ART STYLE as Image 1.${bgBlock}\n\n` +
+      `STYLE LOCK (strict):\n` +
+      `- First infer the EXACT style of Image 1 and keep it unchanged.\n` +
+      `- If Image 1 is photorealistic, output MUST stay photorealistic (real skin texture, real lighting, natural details).\n` +
+      `- If Image 1 is anime/cartoon/illustration, output MUST stay in that same stylized style.\n` +
+      `- NEVER switch style families (photoreal <-> anime/cartoon).\n` +
+      `- Do NOT beautify, simplify, or stylize beyond what Image 1 already has.\n\n` +
       `FACE RULES (most important):\n` +
-      `- Do NOT paste a photo-realistic face onto a cartoon body. That looks terrible.\n` +
-      `- REDRAW the face IN THE ART STYLE of Image 1 (cartoon → cartoon face, anime → anime face, etc.)\n` +
+      `- Do NOT paste a photo-realistic face onto a cartoon body, and do NOT paste a cartoon face onto a photorealistic body.\n` +
+      `- REDRAW the face IN THE EXACT ART STYLE of Image 1 (photoreal -> photoreal, anime -> anime, cartoon -> cartoon).\n` +
       `- The redrawn face should capture the person's KEY FEATURES from Image 2: face shape, eye shape, nose shape, hair style, hair color, skin tone.\n` +
-      `- The face must look like a STYLIZED PORTRAIT of the person, not a photo cutout.\n` +
+      `- Keep identity realism level equal to Image 1 (do not make it more stylized than source).\n` +
       `- Keep the same facial expression/emotion as in Image 1.\n\n` +
       `PRESERVATION CHECKLIST (every item MUST match Image 1):\n` +
       `✓ Background: same color, same shapes, same patterns, same text/labels, same logos\n` +
@@ -1564,7 +1570,7 @@ async function runJob(job: any) {
       `✗ Hair style/color → take from Image 2, drawn in the same art style\n\n` +
       `CRITICAL:\n` +
       `- The output must be a UNIFIED artwork — same style everywhere, face included.\n` +
-      `- If Image 1 is cartoon — the new face must be cartoon. NEVER mix photo-realistic face with cartoon body.\n` +
+      `- If Image 1 is photorealistic, the new face must remain photorealistic. If cartoon/anime, keep that style. NEVER mix styles.\n` +
       `- If Image 1 has a complex background — reproduce that exact background.`;
   }
 
