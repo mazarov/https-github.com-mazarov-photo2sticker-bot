@@ -1667,9 +1667,9 @@ async function buildStickerButtons(
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
-  const emotionCb = sessionRef ? `change_emotion:${stickerId}:${sessionRef}` : `change_emotion:${stickerId}`;
-  const motionCb = sessionRef ? `change_motion:${stickerId}:${sessionRef}` : `change_motion:${stickerId}`;
-  const replaceFaceCb = sessionRef ? `replace_face:${stickerId}:${sessionRef}` : `replace_face:${stickerId}`;
+  const emotionCb = appendSessionRefIfFits(`change_emotion:${stickerId}`, sessionRef);
+  const motionCb = appendSessionRefIfFits(`change_motion:${stickerId}`, sessionRef);
+  const replaceFaceCb = appendSessionRefIfFits(`replace_face:${stickerId}`, sessionRef);
 
   return {
     inline_keyboard: [
