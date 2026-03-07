@@ -370,11 +370,11 @@ function subjectGenderFromType(subjectType: SubjectType): "male" | "female" | "n
   return "neutral";
 }
 
-/** Parse subject type from theme request text when user explicitly mentions men/male or women/female. Overrides session when theme says e.g. "(Men)", "Single male.", "A man who". */
+/** Parse subject type from theme request text when user explicitly mentions men/male or women/female. Overrides session when theme says e.g. "(Men)", "Single male.", "subject_type = single_male". */
 export function parseSubjectTypeFromThemeRequest(request: string): SubjectType | null {
   if (!request || typeof request !== "string") return null;
-  const maleHints = /\b(man|men|male|мужчин|мужск|для мужчин|single male)\b|\(men\)|\(m\)|^he\s|\she\s/i;
-  const femaleHints = /\b(woman|women|female|женщин|женск|для женщин|single female)\b|\(women\)|\(w\)|^she\s|\sshe\s/i;
+  const maleHints = /\b(man|men|male|single_male|single male|мужчин|мужск|для мужчин)\b|\(men\)|\(m\)|^he\s|\she\s|subject_type\s*=\s*single_male/i;
+  const femaleHints = /\b(woman|women|female|single_female|single female|женщин|женск|для женщин)\b|\(women\)|\(w\)|^she\s|\sshe\s|subject_type\s*=\s*single_female/i;
   const hasMale = maleHints.test(request);
   const hasFemale = femaleHints.test(request);
   if (hasMale && !hasFemale) return "single_male";
@@ -496,9 +496,15 @@ function formatCaptionsUserMessage(plan: BossPlan, subjectType: SubjectType, cri
   const gender = subjectGenderFromType(subjectType);
   lines.push("", `TONE: ${plan.tone ?? ""}`);
   if (gender === "male") {
-    lines.push("", "SUBJECT: male. Russian labels (labels) MUST use masculine grammatical forms: e.g. видел, понял, сделал — NOT feminine (видела, поняла).");
+    lines.push(
+      "",
+      "SUBJECT: male (CRITICAL). Russian labels MUST use masculine verb forms. WRONG: сделала, надела, отправила, села, оставила, закрыла. RIGHT: сделал, надел, отправил, сел, оставил, закрыл. Every past-tense verb in labels must end in -л (masculine), never -ла (feminine)."
+    );
   } else if (gender === "female") {
-    lines.push("", "SUBJECT: female. Russian labels (labels) MUST use feminine grammatical forms: e.g. видела, поняла, сделала — NOT masculine.");
+    lines.push(
+      "",
+      "SUBJECT: female (CRITICAL). Russian labels MUST use feminine grammatical forms: e.g. видела, поняла, сделала — NOT masculine (видел, понял, сделал)."
+    );
   }
   lines.push("", "Write one caption per moment: caption 1 for moment 1, caption 2 for moment 2, … caption 16 for moment 16. Output labels and labels_en as JSON.");
   let msg = lines.join("\n");
@@ -576,7 +582,7 @@ function formatScenesUserMessage(
   return msg;
 }
 
-function formatCriticUserMessage(spec: PackSpecRow): string {
+function formatCriticUserMessage(spec: PackSpecRow, subjectType?: SubjectType): string {
   const lines: string[] = ["CAPTIONS (RU):"];
   (spec.labels ?? []).forEach((l, i) => {
     lines.push(`${i + 1}. ${l}`);
@@ -594,6 +600,9 @@ function formatCriticUserMessage(spec: PackSpecRow): string {
     spec.scene_descriptions_ru.forEach((s, i) => {
       lines.push(`${i + 1}. ${s}`);
     });
+  }
+  if (subjectType === "single_male" || subjectType === "single_female") {
+    lines.push("", `SUBJECT_TYPE: ${subjectType}. Check RU captions use correct grammatical gender.`);
   }
   lines.push("", "Output pass, reasons, and suggestions as JSON.");
   return lines.join("\n");
@@ -792,12 +801,18 @@ over approving boring ones.
 
 ---
 
+## GENDER CHECK (when SUBJECT_TYPE is given)
+If SUBJECT_TYPE = single_male: Russian captions MUST use masculine verb forms (сделал, надел, отправил, сел, оставил, закрыл). FAIL if any caption uses feminine -ла forms (сделала, надела, отправила, села, оставила, закрыла). Suggest: "Fix caption N: use masculine form."
+If SUBJECT_TYPE = single_female: Russian captions MUST use feminine forms. FAIL if masculine forms used for a female subject.
+
+---
+
 ## OUTPUT
 JSON only: pass (boolean), reasons (array, max 3 items, max 12 words each), suggestions (array, max 3 items, max 12 words each). No prose.`;
 
-async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
+async function runCritic(spec: PackSpecRow, subjectType?: SubjectType): Promise<CriticOutput> {
   const model = await getModelForAgent("critic");
-  const userMessage = formatCriticUserMessage(spec);
+  const userMessage = formatCriticUserMessage(spec, subjectType);
   return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, {
     temperature: 1,
     agentLabel: "critic",
@@ -1094,7 +1109,7 @@ export async function runPackGenerationPipeline(
       fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'pack-multiagent.ts:beforeCritic',message:'spec before Critic',data:{iter:iter+1,maxLabelLenRu:maxLenRu,maxLabelLenEn:maxLenEn,sampleRu:(spec.labels||[])[0],sampleEn:(spec.labels_en||[])[0]},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
       // #endregion
       const tCritic = Date.now();
-      const critic = await wrapStage(iter === 0 ? "critic" : "critic_2", () => runCritic(spec));
+      const critic = await wrapStage(iter === 0 ? "critic" : "critic_2", () => runCritic(spec, subjectType));
       console.log(stageLabel(iter === 0 ? "critic" : "critic_2"), "done in", Date.now() - tCritic, "ms");
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/cee87e10-8efc-4a8c-a815-18fbbe1210d8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5edd11'},body:JSON.stringify({sessionId:'5edd11',location:'pack-multiagent.ts:criticResult',message:'Critic result',data:{pass:critic.pass,reasonsCount:(critic.reasons||[]).length,firstReason:(critic.reasons||[])[0],suggestionsCount:(critic.suggestions||[]).length},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
@@ -1196,7 +1211,7 @@ export async function reworkOneIteration(
     runScenes(plan, outfit, subjectType, hasContext ? criticContext : undefined),
   ]);
   const spec = assembleSpec(plan, captions, scenes);
-  const critic = await runCritic(spec);
+  const critic = await runCritic(spec, subjectType);
   console.log("[pack-multiagent] Rework Critic pass:", critic.pass, "reasons:", critic.reasons, "suggestions:", critic.suggestions);
   return { spec, critic };
 }
