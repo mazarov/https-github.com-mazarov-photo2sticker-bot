@@ -1481,25 +1481,26 @@ async function runJob(job: any) {
   if (generationType === "replace_subject") {
     promptForGeneration =
       `You are an image editor. You are given two images:\n` +
-      `Image 1 — ORIGINAL STICKER that must be preserved.\n` +
+      `Image 1 — ORIGINAL STICKER/IMAGE that must be preserved as closely as possible.\n` +
       `Image 2 — IDENTITY PHOTO of a real person (face reference).\n\n` +
-      `YOUR TASK: Edit Image 1 (the sticker) by replacing ONLY the face/head of the character ` +
-      `with the face from Image 2. Everything else in the sticker MUST remain EXACTLY the same:\n` +
+      `YOUR TASK: Edit Image 1 by replacing ONLY the face/head of the character ` +
+      `with the face from Image 2. EVERYTHING else MUST remain pixel-perfect identical:\n` +
       `- Same body, same pose, same limbs position\n` +
       `- Same clothing, accessories, props\n` +
       `- Same art style, line work, coloring technique\n` +
-      `- Same background color and composition\n` +
-      `- Same proportions and framing\n\n` +
+      `- Same background — preserve ALL background elements: shapes, patterns, text/labels, logos, decorations, colors\n` +
+      `- Same proportions, framing, and overall layout\n` +
+      `- Same image dimensions and aspect ratio\n\n` +
       `CRITICAL RULES:\n` +
-      `- Do NOT regenerate the sticker from scratch. EDIT the existing sticker.\n` +
-      `- The new face must match the art style of the sticker (if sticker is cartoon — draw face in cartoon style, if anime — anime style, etc.)\n` +
-      `- Adapt the face from Image 2 to fit the head shape and angle in the sticker.\n` +
-      `- Preserve the facial expression/emotion from the original sticker but with the new person's features.\n` +
+      `- Do NOT regenerate the image from scratch. Make a MINIMAL edit — only the face area.\n` +
+      `- The background is sacred: if Image 1 has text, logos, geometric shapes, gradients, or any decorative elements in the background — they MUST appear in the output EXACTLY as they are.\n` +
+      `- The new face must match the art style of Image 1 (cartoon → cartoon face, anime → anime face, realistic → realistic face).\n` +
+      `- Adapt the face from Image 2 to fit the head shape, angle, and size in Image 1.\n` +
+      `- Preserve the facial expression/emotion from Image 1 but with the new person's features.\n` +
       `- Hair style and color should come from Image 2 (the real person).\n` +
-      `- Do NOT change the body, outfit, pose, hands, legs, or any other element.\n` +
-      `- Do NOT add any text.\n` +
-      `- Keep the same background.\n` +
-      `- Output must be the same dimensions and aspect ratio as Image 1.`;
+      `- Do NOT remove, add, or modify ANY text that exists in Image 1.\n` +
+      `- Do NOT change the body, outfit, pose, hands, legs, or any element outside the head/face area.\n` +
+      `- Think of it as a face-swap: paste a new face onto the existing image, nothing else changes.`;
   }
 
   await updateProgress(3);
