@@ -343,7 +343,7 @@ async function runConceptAndPlan(request: string, subjectType: SubjectType): Pro
   const userMessage = `User request: ${request}\n\nPhoto context (subject_type): ${subjectType}\n\nOutput the combined brief and plan as a single JSON.`;
   const raw = await openAiChatJson<BriefAndPlanRaw | { brief: ConceptBrief; plan: BossPlan }>(model, BRIEF_AND_PLAN_SYSTEM, userMessage, {
     agentLabel: "brief_and_plan",
-    maxCompletionTokens: 2200,
+    maxCompletionTokens: 16000,
   });
   // Модель может вернуть вложенный { brief, plan } или плоский объект со всеми полями
   if (raw && typeof raw === "object" && "plan" in raw && raw.plan && typeof raw.plan === "object" && "moments" in raw.plan) {
@@ -604,7 +604,7 @@ async function runCaptions(plan: BossPlan, subjectType: SubjectType, criticFeedb
   const userMessage = formatCaptionsUserMessage(plan, subjectType, criticFeedback);
   return openAiChatJson<CaptionsOutput>(model, CAPTIONS_SYSTEM, userMessage, {
     agentLabel: "captions",
-    maxCompletionTokens: 900,
+    maxCompletionTokens: 16000,
   });
 }
 
@@ -728,7 +728,7 @@ async function runScenes(
   const userMessage = formatScenesUserMessage(plan, outfit, subjectType, criticFeedback, visualAnchors);
   const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, {
     agentLabel: "scenes",
-    maxCompletionTokens: 1800,
+    maxCompletionTokens: 16000,
   });
   const sceneDescriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, PACK_STICKER_COUNT) : [];
   return { scene_descriptions: sceneDescriptions };
@@ -801,7 +801,7 @@ async function runCritic(spec: PackSpecRow): Promise<CriticOutput> {
   return openAiChatJson<CriticOutput>(model, CRITIC_SYSTEM, userMessage, {
     temperature: 1,
     agentLabel: "critic",
-    maxCompletionTokens: 600,
+    maxCompletionTokens: 16000,
   });
 }
 
@@ -857,7 +857,7 @@ async function runCaptionsForIndices(
     `Output JSON with keys: labels (array of ${indices.length} strings, RU, in order of indices), labels_en (array of ${indices.length} strings, EN). RU: 2-15 chars each, EN: 2-18 chars each.`;
   const raw = await openAiChatJson<{ labels: string[]; labels_en: string[] }>(model, CAPTIONS_SYSTEM, userMessage, {
     agentLabel: "captions_rework",
-    maxCompletionTokens: 500,
+    maxCompletionTokens: 16000,
   });
   const labels = Array.isArray(raw.labels) ? raw.labels.slice(0, indices.length) : [];
   const labels_en = Array.isArray(raw.labels_en) ? raw.labels_en.slice(0, indices.length) : [];
@@ -904,7 +904,7 @@ async function runScenesForIndices(
     `Output JSON with one key: scene_descriptions (array of ${indices.length} strings, in order of indices). Each sentence 12–18 words, start with {subject}. No subordinate clauses.`;
   const raw = await openAiChatJson<{ scene_descriptions: string[] }>(model, SCENES_SYSTEM, userMessage, {
     agentLabel: "scenes_rework",
-    maxCompletionTokens: 700,
+    maxCompletionTokens: 16000,
   });
   const scene_descriptions = Array.isArray(raw.scene_descriptions) ? raw.scene_descriptions.slice(0, indices.length) : [];
   return { scene_descriptions };
