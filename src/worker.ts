@@ -1413,9 +1413,7 @@ async function runJob(job: any) {
   const sourceFileId =
     generationType === "emotion" || generationType === "motion" || generationType === "text"
       ? session.last_sticker_file_id
-      : generationType === "replace_subject"
-        ? session.last_sticker_file_id
-        : session.current_photo_file_id || photos[photos.length - 1];
+      : session.current_photo_file_id || photos[photos.length - 1];
 
   // Debug logging for source file
   console.log("[Worker] Source file debug:", {
@@ -1611,7 +1609,7 @@ async function runJob(job: any) {
               ...(generationType === "replace_subject" && replaceReferenceBase64
                 ? [{
                     inlineData: {
-                      mimeType: replaceReferenceMimeType || "image/webp",
+                      mimeType: replaceReferenceMimeType || "image/jpeg",
                       data: replaceReferenceBase64,
                     },
                   }]
@@ -1894,91 +1892,102 @@ async function runJob(job: any) {
   const generatedBuffer = Buffer.from(imageBase64, "base64");
 
   await updateProgress(5);
-  // ============================================================
-  // Background removal — configurable primary service
-  // app_config key: bg_removal_primary (prod) / bg_removal_primary_test (test)
-  // Values: "rembg" | "pixian"
-  // ============================================================
-  const imageSizeKb = Math.round(generatedBuffer.length / 1024);
-  const rembgUrl = process.env.REMBG_URL;
-  const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
-  const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
-  
+
+  const skipBgRemoval = generationType === "replace_subject" && isImportedSticker;
   let noBgBuffer: Buffer | undefined;
-  const startTime = Date.now();
 
-  console.log(`[bgRemoval] Primary service: ${bgPrimary}, image size: ${imageSizeKb} KB`);
-
-  if (bgPrimary === "pixian") {
-    // Primary: Pixian, fallback: rembg
-    noBgBuffer = await callPixian(generatedBuffer, imageSizeKb);
-    if (!noBgBuffer) {
-      console.log(`[bgRemoval] Pixian failed, falling back to rembg`);
-      noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
-    }
+  if (skipBgRemoval) {
+    console.log("[bgRemoval] SKIPPED for replace_subject on imported sticker — preserving original background");
+    noBgBuffer = generatedBuffer;
   } else {
-    // Primary: rembg, fallback: Pixian
-    noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
-    if (!noBgBuffer) {
-      console.log(`[bgRemoval] rembg failed, falling back to Pixian`);
+    // ============================================================
+    // Background removal — configurable primary service
+    // app_config key: bg_removal_primary (prod) / bg_removal_primary_test (test)
+    // Values: "rembg" | "pixian"
+    // ============================================================
+    const imageSizeKb = Math.round(generatedBuffer.length / 1024);
+    const rembgUrl = process.env.REMBG_URL;
+    const bgConfigKey = config.appEnv === "test" ? "bg_removal_primary_test" : "bg_removal_primary";
+    const bgPrimary = await getAppConfig(bgConfigKey, "rembg");
+
+    const startTime = Date.now();
+
+    console.log(`[bgRemoval] Primary service: ${bgPrimary}, image size: ${imageSizeKb} KB`);
+
+    if (bgPrimary === "pixian") {
       noBgBuffer = await callPixian(generatedBuffer, imageSizeKb);
+      if (!noBgBuffer) {
+        console.log(`[bgRemoval] Pixian failed, falling back to rembg`);
+        noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
+      }
+    } else {
+      noBgBuffer = await callRembg(generatedBuffer, rembgUrl, imageSizeKb);
+      if (!noBgBuffer) {
+        console.log(`[bgRemoval] rembg failed, falling back to Pixian`);
+        noBgBuffer = await callPixian(generatedBuffer, imageSizeKb);
+      }
+    }
+
+    const bgDuration = Date.now() - startTime;
+    console.log(`[bgRemoval] Total background removal took ${bgDuration}ms`);
+
+    if (!noBgBuffer) {
+      console.error("=== Background removal failed (all methods) ===");
+      console.error("Duration:", bgDuration, "ms");
+      
+      await sendAlert({
+        type: "rembg_failed",
+        message: `Background removal failed: all methods exhausted`,
+        details: { 
+          user: `@${user?.username || telegramId}`,
+          sessionId: session.id,
+          generationType,
+          styleId: session.selected_style_id || "-",
+          imageSizeKb,
+          durationMs: bgDuration,
+          bgPrimary,
+          rembgConfigured: !!rembgUrl,
+        },
+      });
+      throw new Error(`Background removal failed: all methods exhausted`);
     }
   }
-
-  if (!noBgBuffer) {
-    const duration = Date.now() - startTime;
-    console.error("=== Background removal failed (all methods) ===");
-    console.error("Duration:", duration, "ms");
-    
-    await sendAlert({
-      type: "rembg_failed",
-      message: `Background removal failed: all methods exhausted`,
-      details: { 
-        user: `@${user?.username || telegramId}`,
-        sessionId: session.id,
-        generationType,
-        styleId: session.selected_style_id || "-",
-        imageSizeKb,
-        durationMs: duration,
-        bgPrimary,
-        rembgConfigured: !!rembgUrl,
-      },
-    });
-    throw new Error(`Background removal failed: all methods exhausted`);
-  }
-
-  const bgDuration = Date.now() - startTime;
-  console.log(`[bgRemoval] Total background removal took ${bgDuration}ms`);
 
   await updateProgress(6);
 
   // At this point noBgBuffer is guaranteed to be set (or we threw above)
   const cleanedBuffer = noBgBuffer!;
 
-  // Safety padding: add 5% transparent border so trim never eats into character
-  // (Gemini sometimes generates characters touching image edges)
-  const meta = await sharp(cleanedBuffer).metadata();
-  const safetyPad = Math.round(Math.max(meta.width || 0, meta.height || 0) * 0.05);
-  const paddedBuffer = await sharp(cleanedBuffer)
-    .extend({
-      top: safetyPad, bottom: safetyPad, left: safetyPad, right: safetyPad,
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    })
-    .toBuffer();
+  let stickerBuffer: Buffer;
+  if (skipBgRemoval) {
+    stickerBuffer = await sharp(cleanedBuffer)
+      .resize(512, 512, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .webp({ quality: 95 })
+      .toBuffer();
+  } else {
+    // Safety padding: add 5% transparent border so trim never eats into character
+    const meta = await sharp(cleanedBuffer).metadata();
+    const safetyPad = Math.round(Math.max(meta.width || 0, meta.height || 0) * 0.05);
+    const paddedBuffer = await sharp(cleanedBuffer)
+      .extend({
+        top: safetyPad, bottom: safetyPad, left: safetyPad, right: safetyPad,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .toBuffer();
 
-  // Trim transparent borders and fit into 512x512 with 15px padding
-  const stickerBuffer = await sharp(paddedBuffer)
-    .trim({ threshold: 2 })
-    .resize(482, 482, {
-      fit: "contain",
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    })
-    .extend({
-      top: 15, bottom: 15, left: 15, right: 15,
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    })
-    .webp({ quality: 95 })
-    .toBuffer();
+    stickerBuffer = await sharp(paddedBuffer)
+      .trim({ threshold: 2 })
+      .resize(482, 482, {
+        fit: "contain",
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .extend({
+        top: 15, bottom: 15, left: 15, right: 15,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .webp({ quality: 95 })
+      .toBuffer();
+  }
 
   await updateProgress(7);
   const filePathStorage = `stickers/${session.user_id}/${session.id}/${Date.now()}.webp`;
@@ -2006,41 +2015,22 @@ async function runJob(job: any) {
     return null;
   })();
 
-  const insertPayload: any = {
-    user_id: session.user_id,
-    session_id: session.id,
-    source_photo_file_id: savedSourcePhotoFileId,
-    user_input: session.user_input || null,
-    generated_prompt: finalPromptUsed || null,
-    result_storage_path: filePathStorage,
-    sticker_set_name: user?.sticker_set_name || null,
-    style_preset_id: session.selected_style_id || null,  // For style examples
-    idea_source: ideaSource,
-    env: config.appEnv,
-    generation_type: generationType,
-  };
-  let stickerRecord: any = null;
-  let insertError: any = null;
-  const firstInsert = await supabase
+  const { data: stickerRecord } = await supabase
     .from("stickers")
-    .insert(insertPayload)
+    .insert({
+      user_id: session.user_id,
+      session_id: session.id,
+      source_photo_file_id: savedSourcePhotoFileId,
+      user_input: session.user_input || null,
+      generated_prompt: finalPromptUsed || null,
+      result_storage_path: filePathStorage,
+      sticker_set_name: user?.sticker_set_name || null,
+      style_preset_id: session.selected_style_id || null,  // For style examples
+      idea_source: ideaSource,
+      env: config.appEnv,
+    })
     .select("id")
     .single();
-  stickerRecord = firstInsert.data;
-  insertError = firstInsert.error;
-  if (insertError && (String(insertError.message || "").toLowerCase().includes("generation_type") || insertError.code === "42703")) {
-    delete insertPayload.generation_type;
-    const fallbackInsert = await supabase
-      .from("stickers")
-      .insert(insertPayload)
-      .select("id")
-      .single();
-    stickerRecord = fallbackInsert.data;
-    insertError = fallbackInsert.error;
-  }
-  if (insertError) {
-    throw new Error(`Failed to insert sticker: ${insertError.message || insertError}`);
-  }
   console.timeEnd(timerLabel("step7_insert"));
 
   const stickerId = stickerRecord?.id;
@@ -2063,7 +2053,6 @@ async function runJob(job: any) {
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
-  const replaceFaceText = await getText(lang, "btn.replace_face");
 
   // Use sticker ID in callback_data for message binding
   const replyMarkup = {
@@ -2076,9 +2065,6 @@ async function runJob(job: any) {
       [
         { text: toggleBorderText, callback_data: stickerId ? `toggle_border:${stickerId}` : "toggle_border" },
         { text: addTextText, callback_data: stickerId ? `add_text:${stickerId}` : "add_text" },
-      ],
-      [
-        { text: replaceFaceText, callback_data: stickerId ? `replace_face:${stickerId}` : "replace_face" },
       ],
       [
         { text: packIdeasText, callback_data: stickerId ? `pack_ideas:${stickerId}` : "pack_ideas" },
