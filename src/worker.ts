@@ -1478,6 +1478,27 @@ async function runJob(job: any) {
         "\n\nOutput MUST be a photograph, not a drawing, illustration, or stylized art.";
     }
   }
+  const isImportedSticker = Boolean(session.edit_sticker_file_id);
+  if (isImportedSticker && (generationType === "emotion" || generationType === "motion")) {
+    const changeType = generationType === "emotion" ? "emotion/facial expression" : "motion/body pose";
+    const changeHint = session.selected_emotion || session.emotion_prompt || "";
+    promptForGeneration =
+      `You are an image editor. You are given an existing sticker.\n\n` +
+      `YOUR TASK: Edit this sticker by changing ONLY the ${changeType} to: "${changeHint}".\n\n` +
+      `EVERYTHING else MUST remain EXACTLY the same:\n` +
+      `- Same character identity, face features, hair\n` +
+      `- Same art style, line work, coloring technique (cartoon, anime, realistic, pixel art — whatever the input uses)\n` +
+      `- Same clothing, accessories, props\n` +
+      `- Same background and composition\n` +
+      `- Same proportions and framing\n\n` +
+      `CRITICAL RULES:\n` +
+      `- Do NOT regenerate the sticker from scratch. Make a MINIMAL edit.\n` +
+      `- Do NOT change the art style. If the input is photo-realistic — output must be photo-realistic. If cartoon — cartoon.\n` +
+      `- Do NOT add any text or watermarks.\n` +
+      `- The output must look like it belongs to the same sticker set as the input.\n` +
+      `- Background MUST be flat bright magenta (#FF00FF).\n` +
+      `- Keep the character fully visible with margins.`;
+  }
   if (generationType === "replace_subject") {
     promptForGeneration =
       `You are an image editor. You are given two images:\n` +
