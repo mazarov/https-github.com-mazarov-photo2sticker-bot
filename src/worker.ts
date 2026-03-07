@@ -1899,7 +1899,8 @@ async function runJob(job: any) {
 
   await updateProgress(5);
 
-  const skipBgRemoval = generationType === "replace_subject";
+  const skipBgRemoval = generationType === "replace_subject"
+    || (isImportedSticker && (generationType === "emotion" || generationType === "motion"));
   let noBgBuffer: Buffer | undefined;
 
   if (skipBgRemoval) {
