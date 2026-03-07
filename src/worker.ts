@@ -1575,6 +1575,7 @@ async function runJob(job: any) {
   const primaryModel =
     generationType === "emotion" ? await getAppConfig("gemini_model_emotion", "gemini-2.5-flash-image") :
     generationType === "motion"  ? await getAppConfig("gemini_model_motion",  "gemini-2.5-flash-image") :
+    generationType === "replace_subject" ? await getAppConfig("gemini_model_replace_face", "gemini-2.5-flash-image") :
     await getAppConfig("gemini_model_style", "gemini-3-pro-image-preview");
   const fallbackModel: string | null = (() => {
     // Style must also have a fallback because gemini-2.5-flash-image can return finishReason=OTHER with no inlineData.
