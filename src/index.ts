@@ -9025,11 +9025,13 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
     selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
   };
 
+  const earlyMsgId = await sendEarlyProgress(ctx, lang);
   await startGeneration(ctx, user, patchedSession, lang, {
     generationType: "replace_subject",
     promptFinal: replacePrompt,
     selectedStyleId: sticker.style_preset_id || session.selected_style_id || null,
     userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
+    earlyProgressMessageId: earlyMsgId,
   });
 });
 
