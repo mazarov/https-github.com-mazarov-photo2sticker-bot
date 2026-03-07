@@ -1534,24 +1534,30 @@ async function runJob(job: any) {
       : "";
 
     promptForGeneration =
-      `You are an image editor performing a face-swap. You are given two images:\n` +
-      `Image 1 — ORIGINAL IMAGE that must be preserved as closely as possible.\n` +
-      `Image 2 — IDENTITY PHOTO of a real person (face reference).\n\n` +
-      `YOUR TASK: Reproduce Image 1 pixel-for-pixel, changing ONLY the face/head of the character ` +
-      `to match the person from Image 2.${bgBlock}\n\n` +
+      `You are an artist redrawing a character. You are given two images:\n` +
+      `Image 1 — ORIGINAL STICKER/IMAGE to reproduce.\n` +
+      `Image 2 — REFERENCE PHOTO of a real person.\n\n` +
+      `YOUR TASK: Redraw Image 1 exactly as it is, but REDRAW the character's face ` +
+      `so it RESEMBLES the person from Image 2 — while keeping the SAME ART STYLE as Image 1.${bgBlock}\n\n` +
+      `FACE RULES (most important):\n` +
+      `- Do NOT paste a photo-realistic face onto a cartoon body. That looks terrible.\n` +
+      `- REDRAW the face IN THE ART STYLE of Image 1 (cartoon → cartoon face, anime → anime face, etc.)\n` +
+      `- The redrawn face should capture the person's KEY FEATURES from Image 2: face shape, eye shape, nose shape, hair style, hair color, skin tone.\n` +
+      `- The face must look like a STYLIZED PORTRAIT of the person, not a photo cutout.\n` +
+      `- Keep the same facial expression/emotion as in Image 1.\n\n` +
       `PRESERVATION CHECKLIST (every item MUST match Image 1):\n` +
       `✓ Background: same color, same shapes, same patterns, same text/labels, same logos\n` +
       `✓ Character body: same pose, same limbs, same clothing, same accessories\n` +
-      `✓ Art style: same line work, same coloring technique, same shading\n` +
+      `✓ Art style: same line work, same coloring technique, same shading — INCLUDING the face\n` +
       `✓ Composition: same layout, same framing, same dimensions\n` +
       `✓ All text/labels in the image must appear EXACTLY as in Image 1\n\n` +
       `ONLY CHANGE:\n` +
-      `✗ The face/head → replace with features from Image 2\n` +
-      `✗ Hair style/color → take from Image 2\n\n` +
+      `✗ The face/head → redraw with features inspired by Image 2, IN THE SAME ART STYLE\n` +
+      `✗ Hair style/color → take from Image 2, drawn in the same art style\n\n` +
       `CRITICAL:\n` +
-      `- The new face must match the art style of Image 1.\n` +
-      `- If Image 1 has a complex background (not transparent/solid) — you MUST reproduce that exact background.\n` +
-      `- Think of it as Photoshop face-swap: only the head changes, everything else is untouched.`;
+      `- The output must be a UNIFIED artwork — same style everywhere, face included.\n` +
+      `- If Image 1 is cartoon — the new face must be cartoon. NEVER mix photo-realistic face with cartoon body.\n` +
+      `- If Image 1 has a complex background — reproduce that exact background.`;
   }
 
   await updateProgress(3);
