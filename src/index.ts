@@ -6293,25 +6293,50 @@ bot.on("sticker", async (ctx) => {
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const session = await getActiveSession(user.id);
+  // Architectural behavior:
+  // incoming sticker is interpreted as explicit intent to start edit-sticker flow.
+  // We only block when generation is currently running.
+  const hardProcessingStates = new Set([
+    "processing",
+    "processing_emotion",
+    "processing_motion",
+    "processing_text",
+    "generating_pack_preview",
+    "generating_pack_theme",
+    "processing_pack",
+  ]);
+
+  let session = await getActiveSession(user.id);
   if (!session?.id) {
-    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    const { data: newSession } = await supabase
+      .from("sessions")
+      .insert({
+        user_id: user.id,
+        state: "wait_edit_sticker",
+        flow_kind: "single",
+        is_active: true,
+        session_rev: 1,
+        env: config.appEnv,
+      })
+      .select("*")
+      .single();
+    session = newSession;
+  }
+  if (!session?.id) {
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
     return;
   }
-  if (session.state !== "wait_edit_sticker") {
-    console.log("[edit_sticker] sticker ignored due to state:", session.state, "session:", session.id);
-    const isPackState =
-      String(session.state || "").startsWith("wait_pack_")
-      || ["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(String(session.state || ""));
-    const hint = isPackState
-      ? (lang === "ru"
-          ? "Сейчас ты в сценарии пака. Нажми «🎨 Изменить стикер» и потом пришли стикер."
-          : "You are currently in pack flow. Tap “🎨 Edit sticker” and then send a sticker.")
-      : (lang === "ru"
-          ? "Чтобы изменить присланный стикер, сначала нажми «🎨 Изменить стикер»."
-          : "To edit a sent sticker, first tap “🎨 Edit sticker”.");
-    await ctx.reply(hint, getMainMenuKeyboard(lang, ctx?.from?.id));
+  if (hardProcessingStates.has(String(session.state || ""))) {
+    await ctx.reply(
+      lang === "ru"
+        ? "⏳ Сейчас идёт генерация. Дождись результата и отправь стикер снова."
+        : "⏳ Generation is in progress. Wait for the result and send the sticker again."
+    );
     return;
+  }
+
+  if (String(session.state || "").startsWith("assistant_")) {
+    await closeAllActiveAssistantSessions(user.id, "abandoned");
   }
 
   const sticker = (ctx.message as any)?.sticker;
