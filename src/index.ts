@@ -11893,11 +11893,6 @@ async function showStickerIdeaCard(ctx: any, opts: {
     appendSessionRefIfFits(`asst_idea_style:${ideaIndex}`, sessionRef)
   )]);
 
-  rows.push([Markup.button.callback(
-    isRu ? "✏️ Своя идея" : "✏️ Custom idea",
-    appendSessionRefIfFits("asst_idea_custom", sessionRef)
-  )]);
-
   await ctx.reply(text, Markup.inlineKeyboard(rows));
 }
 
