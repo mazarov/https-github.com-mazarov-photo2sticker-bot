@@ -1845,6 +1845,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
       user_id: user.id,
       state: lastPhoto ? "assistant_wait_idea" : "assistant_wait_photo",
       is_active: true,
+      flow_kind: "assistant",
       env: config.appEnv,
       current_photo_file_id: lastPhoto,
       photos: lastPhoto ? [lastPhoto] : [],
@@ -6613,6 +6614,38 @@ bot.on("text", async (ctx) => {
         .limit(1)
         .maybeSingle();
       recoveredSession = customIdeaSession || null;
+    }
+    if (!recoveredSession?.id) {
+      // Assistant idea-card flow: session has sticker_ideas_state but may have state/updated_at quirks.
+      const { data: assistantIdeaSession } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("env", config.appEnv)
+        .not("sticker_ideas_state", "is", null)
+        .neq("state", "canceled")
+        .gte("created_at", recentCutoff)
+        .order("updated_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      recoveredSession = assistantIdeaSession || null;
+    }
+    if (!recoveredSession?.id) {
+      // Fallback: any recent assistant session (flow_kind or state).
+      const { data: assistantSession } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("env", config.appEnv)
+        .eq("flow_kind", "assistant")
+        .neq("state", "canceled")
+        .gte("created_at", recentCutoff)
+        .order("updated_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      recoveredSession = assistantSession || null;
     }
     if (recoveredSession?.id) {
       session = recoveredSession;
