@@ -2,7 +2,7 @@ import axios from "axios";
 import os from "os";
 import FormData from "form-data";
 import sharp from "sharp";
-import { config, getGeminiGenerateContentUrl } from "./config";
+import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
 import { getText } from "./lib/texts";
@@ -25,6 +25,9 @@ import {
   type SubjectProfile,
   type SubjectSourceKind,
 } from "./lib/subject-profile";
+
+const geminiRoute = getGeminiRouteInfo();
+console.log("[GeminiRoute][Worker]", geminiRoute);
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));

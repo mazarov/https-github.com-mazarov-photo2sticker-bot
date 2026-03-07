@@ -1,5 +1,7 @@
 import "dotenv/config";
 
+const DEFAULT_GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com";
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -23,7 +25,7 @@ export const config = {
   supabaseStorageBucketExamples: process.env.SUPABASE_STORAGE_BUCKET_EXAMPLES || "stickers-examples",
   geminiApiKey: required("GEMINI_API_KEY"),
   /** Optional proxy base URL for Gemini API (e.g. https://gemini-proxy.example.com). */
-  geminiApiBaseUrl: (process.env.GEMINI_PROXY_BASE_URL || "https://generativelanguage.googleapis.com").replace(/\/+$/, ""),
+  geminiApiBaseUrl: (process.env.GEMINI_PROXY_BASE_URL || DEFAULT_GEMINI_API_BASE_URL).replace(/\/+$/, ""),
   openaiApiKey: process.env.OPENAI_API_KEY || "",
 
   // AI Chat assistant settings
@@ -64,4 +66,19 @@ export const config = {
 
 export function getGeminiGenerateContentUrl(model: string): string {
   return `${config.geminiApiBaseUrl}/v1beta/models/${model}:generateContent`;
+}
+
+export function getGeminiRouteInfo(): { baseUrl: string; host: string; viaProxy: boolean } {
+  const baseUrl = config.geminiApiBaseUrl;
+  let host = "unknown";
+  try {
+    host = new URL(baseUrl).host;
+  } catch {
+    // Keep "unknown" if URL is malformed.
+  }
+  return {
+    baseUrl,
+    host,
+    viaProxy: host !== "generativelanguage.googleapis.com",
+  };
 }

@@ -2,7 +2,7 @@ import express from "express";
 import { Telegraf, Markup, Input } from "telegraf";
 import axios from "axios";
 import sharp from "sharp";
-import { config, getGeminiGenerateContentUrl } from "./config";
+import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
@@ -62,6 +62,9 @@ const bot = new Telegraf(config.telegramBotToken, {
   // Keep handler alive long enough so admin flow does not crash mid-iteration.
   handlerTimeout: 600_000, // 10 min
 });
+
+const geminiRoute = getGeminiRouteInfo();
+console.log("[GeminiRoute][API]", geminiRoute);
 
 // Global error handler — catch all unhandled errors from handlers
 bot.catch((err: any, ctx: any) => {
