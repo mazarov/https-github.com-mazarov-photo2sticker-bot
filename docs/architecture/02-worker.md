@@ -191,11 +191,14 @@ const sourceFileId =
 const savedSourcePhotoFileId = sourceFileId;
 ```
 
-### replace_subject (двойной image input)
+### replace_subject (Gemini / Facemint)
 
-- `sourceFileId` = `session.current_photo_file_id` (identity source).
-- Дополнительно worker догружает `session.last_sticker_file_id` как sticker-reference и передаёт во 2-й `inlineData` к Gemini.
-- Prompt режим: "identity from photo + pose/expression/style from sticker reference".
+- `sourceFileId` = `session.last_sticker_file_id` (стикер-референс).
+- Для `replace_subject` worker также использует `session.current_photo_file_id` как identity-source.
+- Путь выбирается флагом `app_config.facemint_replace_face_enabled`:
+  - `false` (default): legacy Gemini flow (двойной image input + prompt reconstruction).
+  - `true`: Facemint API (`create-face-swap-task` + polling `get-task-info`) с загрузкой входных файлов в Supabase Storage.
+- При Facemint-пути worker пропускает postcheck/retry Gemini и сохраняет фон без `rembg` (preserve original background).
 
 ## Конфигурация
 
@@ -203,7 +206,8 @@ const savedSourcePhotoFileId = sourceFileId;
 |----------|---------|----------|
 | `JOB_POLL_INTERVAL_MS` | 2000 | Интервал опроса очереди |
 | `APP_ENV` | prod | Окружение (фильтр заданий) |
-| Gemini model | app_config: см. 04-database.md «Ключи моделей Gemini». Pack: `gemini_model_pack`, single: `gemini_model_style` / `gemini_model_emotion` / `gemini_model_motion` | Модель генерации |
+| Gemini model | app_config: см. 04-database.md «Ключи моделей Gemini». Pack: `gemini_model_pack`, single: `gemini_model_style` / `gemini_model_emotion` / `gemini_model_motion` / `gemini_model_replace_face` | Модель генерации |
+| Facemint API | `FACEMINT_API_KEY`, `FACEMINT_BASE_URL`, `app_config.facemint_replace_face_enabled` | Специализированный face-swap для `replace_subject` |
 | rembg URL | http://p2s-rembg:5000 | Адрес сервиса удаления фона |
 
 ## Обработка ошибок

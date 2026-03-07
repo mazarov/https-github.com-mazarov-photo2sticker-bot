@@ -10,6 +10,7 @@ import { sendAlert, sendNotification, sendPackPreviewAlert, sendPackCompletedLan
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
 import { addTextToSticker, fitStickerIn512WithMargin, addWhiteBorder } from "./lib/image-utils";
+import { createFaceSwapTask, waitForFaceSwapTask } from "./lib/facemint";
 import {
   appendSubjectLock,
   buildSubjectLockBlock,
@@ -33,12 +34,43 @@ async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+function isConfigEnabled(value: string | null | undefined): boolean {
+  return String(value || "").trim().toLowerCase() === "true";
+}
+
 /** Supabase Storage 500 / fetch failed / timeout — retry once after delay. */
 function isTransientStorageError(e: unknown): boolean {
   if (!e || typeof e !== "object") return false;
   const msg = String((e as { message?: string }).message ?? e);
   const code = (e as { code?: number; status?: number }).code ?? (e as { code?: number; status?: number }).status;
   return code === 500 || /fetch failed|timeout|ECONNRESET|ETIMEDOUT/i.test(msg);
+}
+
+async function uploadBufferForFacemint(
+  buffer: Buffer,
+  storagePath: string,
+  contentType: string
+): Promise<string> {
+  const upload = () =>
+    supabase.storage
+      .from(config.supabaseStorageBucket)
+      .upload(storagePath, buffer, { contentType, upsert: true });
+
+  let { error } = await upload();
+  if (error && isTransientStorageError(error)) {
+    await sleep(2000);
+    const retry = await upload();
+    error = retry.error;
+  }
+  if (error) {
+    throw new Error(`Facemint input upload failed: ${error.message}`);
+  }
+
+  const { data } = supabase.storage.from(config.supabaseStorageBucket).getPublicUrl(storagePath);
+  if (!data?.publicUrl) {
+    throw new Error("Facemint input upload failed: public URL is empty");
+  }
+  return data.publicUrl;
 }
 
 /** Telegram sendPhoto limit: 10 MB. Resize pack preview if over limit. */
@@ -1445,12 +1477,14 @@ async function runJob(job: any) {
   const mimeType = getMimeTypeByTelegramPath(filePath);
   let replaceReferenceBase64: string | null = null;
   let replaceReferenceMimeType: string | null = null;
+  let replaceReferenceBuffer: Buffer | null = null;
   if (generationType === "replace_subject" && session.current_photo_file_id) {
     try {
       const refPath = await getFilePath(session.current_photo_file_id);
       const refBuffer = await downloadFile(refPath);
       replaceReferenceBase64 = refBuffer.toString("base64");
       replaceReferenceMimeType = getMimeTypeByTelegramPath(refPath);
+      replaceReferenceBuffer = refBuffer;
       console.log("[ReplaceSubject] loaded identity photo reference:", {
         hasRef: true,
         refMime: replaceReferenceMimeType,
@@ -1464,6 +1498,9 @@ async function runJob(job: any) {
     generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject"
       ? "sticker"
       : "photo";
+  const facemintReplaceFaceEnabled = generationType === "replace_subject"
+    ? isConfigEnabled(await getAppConfig("facemint_replace_face_enabled", "false"))
+    : false;
   const lockEnabled = await isSubjectLockEnabled();
   let subjectProfile = getSessionSubjectProfileForSource(session, sourceFileId, sourceKind);
   if (!subjectProfile) {
@@ -1505,7 +1542,7 @@ async function runJob(job: any) {
       `- Background MUST be flat bright magenta (#FF00FF).\n` +
       `- Keep the character fully visible with margins.`;
   }
-  if (generationType === "replace_subject") {
+  if (generationType === "replace_subject" && !facemintReplaceFaceEnabled) {
     let bgDescription = "";
     try {
       console.log("[ReplaceSubject] Analyzing sticker background...");
@@ -1573,6 +1610,70 @@ async function runJob(job: any) {
   }
 
   await updateProgress(3);
+  const usedFacemintReplaceFace = facemintReplaceFaceEnabled && !!config.facemintApiKey;
+  let imageBase64: string | null = null;
+  let finalPromptUsed = promptForGeneration;
+  let callGeminiImage: ((promptText: string, modelName: string, stage: string) => Promise<any>) | null = null;
+  let activeModel = "";
+
+  if (facemintReplaceFaceEnabled && !config.facemintApiKey) {
+    console.warn("[ReplaceSubject][Facemint] enabled but FACEMINT_API_KEY is empty, fallback to Gemini");
+  }
+
+  if (usedFacemintReplaceFace) {
+    if (!replaceReferenceBuffer) {
+      throw new Error("Facemint replace_subject failed: identity photo is missing");
+    }
+    const stickerExt = mimeType === "image/webp" ? "webp" : mimeType === "image/png" ? "png" : "jpg";
+    const refExt =
+      replaceReferenceMimeType === "image/webp"
+        ? "webp"
+        : replaceReferenceMimeType === "image/png"
+          ? "png"
+          : "jpg";
+    const prefix = `temp/facemint/${session.user_id}/${session.id}/${job.id}`;
+    const stickerStoragePath = `${prefix}-source.${stickerExt}`;
+    const faceStoragePath = `${prefix}-face.${refExt}`;
+    const stickerUrl = await uploadBufferForFacemint(fileBuffer, stickerStoragePath, mimeType);
+    const faceUrl = await uploadBufferForFacemint(
+      replaceReferenceBuffer,
+      faceStoragePath,
+      replaceReferenceMimeType || "image/jpeg"
+    );
+
+    console.log("[ReplaceSubject][Facemint] creating task");
+    const { taskId, price } = await createFaceSwapTask({
+      type: "image",
+      media_url: stickerUrl,
+      swap_list: [{ to_face: faceUrl }],
+      resolution: 1,
+      enhance: 1,
+      nsfw_check: 0,
+      face_recognition: 0.8,
+      face_detection: 0.25,
+      watermark: "",
+      callback_url: "",
+      start_time: 0,
+      end_time: 0,
+    });
+    console.log("[ReplaceSubject][Facemint] task created", { taskId, price });
+
+    const task = await waitForFaceSwapTask(taskId, { timeoutMs: 60_000, pollIntervalMs: 2_000 });
+    const resultUrl = task.result?.file_url;
+    if (!resultUrl) {
+      throw new Error("Facemint replace_subject failed: task completed without result file URL");
+    }
+    const resultRes = await axios.get<ArrayBuffer>(resultUrl, {
+      responseType: "arraybuffer",
+      timeout: 30_000,
+    });
+    const facemintBuffer = Buffer.from(resultRes.data);
+    imageBase64 = facemintBuffer.toString("base64");
+    finalPromptUsed = `[facemint replace_subject] task_id=${taskId}`;
+    console.log("[ReplaceSubject][Facemint] task complete", { taskId, bytes: facemintBuffer.length });
+  }
+
+  if (!usedFacemintReplaceFace) {
   console.log("Calling Gemini image generation...");
   console.log("generationType:", generationType);
   console.log("session.generation_type:", session.generation_type);
@@ -1599,10 +1700,10 @@ async function runJob(job: any) {
     }
     return primaryModel !== styleFallback ? styleFallback : (primaryModel !== altFallback ? altFallback : null);
   })();
-  let activeModel = primaryModel;
+  activeModel = primaryModel;
   console.log("Using model:", activeModel, "generationType:", generationType);
 
-  const callGeminiImage = async (promptText: string, modelName: string, stage: string) => {
+  callGeminiImage = async (promptText: string, modelName: string, stage: string) => {
     if (isSingleFlowGeneration) {
       console.log("[single.gen.worker] model_call", {
         ...singleTrace,
@@ -1661,6 +1762,10 @@ async function runJob(job: any) {
     }
     return res;
   };
+
+  if (!callGeminiImage) {
+    throw new Error("Gemini image caller not initialized");
+  }
 
   let geminiRes;
   try {
@@ -1747,8 +1852,7 @@ async function runJob(job: any) {
     return;
   }
 
-  let imageBase64 = extractGeminiImageBase64(geminiRes.data);
-  let finalPromptUsed = promptForGeneration;
+  imageBase64 = extractGeminiImageBase64(geminiRes.data);
 
   if (!imageBase64) {
     const firstFinishReason = geminiRes.data?.candidates?.[0]?.finishReason || "unknown";
@@ -1831,7 +1935,9 @@ async function runJob(job: any) {
     }
   }
 
-  const postcheckEnabled = await isSubjectPostcheckEnabled();
+  }
+
+  const postcheckEnabled = !usedFacemintReplaceFace && await isSubjectPostcheckEnabled();
   if (postcheckEnabled && subjectProfile?.subjectMode && subjectProfile.subjectMode !== "unknown") {
     const firstGeneratedBuffer = Buffer.from(imageBase64, "base64");
     const detected = await detectSubjectProfileFromImageBuffer(firstGeneratedBuffer, "image/png");
@@ -1865,6 +1971,9 @@ async function runJob(job: any) {
       const retryPrompt = `${promptForGeneration}\n\n[SUBJECT POSTCHECK RETRY]\nCRITICAL: Previous output had subject-count mismatch. Keep EXACT source subject count. Do NOT add or remove people.`;
       let retryRes: any;
       try {
+        if (!callGeminiImage) {
+          throw new Error("Gemini image caller not initialized for postcheck retry");
+        }
         retryRes = await callGeminiImage(retryPrompt, activeModel, "postcheck_retry");
       } catch (retryErr: any) {
         const retryMsg = retryErr.response?.data?.error?.message || retryErr.message || "retry_failed";
@@ -1905,6 +2014,9 @@ async function runJob(job: any) {
     }
   }
 
+  if (!imageBase64) {
+    throw new Error("Generation returned no image bytes");
+  }
   console.log("Image generated successfully");
 
   await updateProgress(4);
@@ -1912,11 +2024,16 @@ async function runJob(job: any) {
 
   await updateProgress(5);
 
-  const skipBgRemoval = isImportedSticker && (generationType === "emotion" || generationType === "motion");
+  const skipBgRemoval =
+    (isImportedSticker && (generationType === "emotion" || generationType === "motion"))
+    || (usedFacemintReplaceFace && generationType === "replace_subject");
   let noBgBuffer: Buffer | undefined;
 
   if (skipBgRemoval) {
-    console.log("[bgRemoval] SKIPPED for replace_subject on imported sticker — preserving original background");
+    console.log("[bgRemoval] SKIPPED — preserving original background", {
+      generationType,
+      reason: usedFacemintReplaceFace ? "facemint_replace_subject" : "imported_sticker_edit",
+    });
     noBgBuffer = generatedBuffer;
   } else {
     // ============================================================

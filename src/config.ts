@@ -27,6 +27,8 @@ export const config = {
   /** Optional proxy base URL for Gemini API (e.g. https://gemini-proxy.example.com). */
   geminiApiBaseUrl: (process.env.GEMINI_PROXY_BASE_URL || DEFAULT_GEMINI_API_BASE_URL).replace(/\/+$/, ""),
   openaiApiKey: process.env.OPENAI_API_KEY || "",
+  facemintApiKey: process.env.FACEMINT_API_KEY || "",
+  facemintBaseUrl: process.env.FACEMINT_BASE_URL || "https://api.facemint.io/api",
 
   // AI Chat assistant settings
   aiChatProvider: (process.env.AI_CHAT_PROVIDER || "gemini") as "gemini" | "openai",
