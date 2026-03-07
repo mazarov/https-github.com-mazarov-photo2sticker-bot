@@ -1542,27 +1542,30 @@ async function runJob(job: any) {
       : "";
 
     promptForGeneration =
-      `You are an expert illustrator. You receive two images.\n` +
-      `Image 1 — the ORIGINAL ARTWORK (sticker, drawing, or photo).\n` +
-      `Image 2 — a CHARACTER DESIGN REFERENCE.\n\n` +
-      `TASK: Redraw Image 1 but make the main character look like the person in Image 2.${bgBlock}\n\n` +
-      `HOW TO REDRAW THE CHARACTER:\n` +
-      `- Study the person in Image 2: their overall look, proportions, coloring.\n` +
-      `- Redraw the character in Image 1 so they resemble the person from Image 2.\n` +
-      `- Keep the same pose, expression, and emotion as in Image 1.\n` +
-      `- The redrawn character must blend naturally into the artwork.\n\n` +
-      `STYLE RULE (mandatory):\n` +
-      `- Match the EXACT visual style of Image 1.\n` +
-      `- If Image 1 is a photo → output a photo. If cartoon → output cartoon. If anime → anime.\n` +
-      `- Never switch between style families.\n\n` +
-      `KEEP UNCHANGED (copy from Image 1):\n` +
-      `- Background, colors, patterns, decorations\n` +
-      `- All text and labels (reproduce exactly)\n` +
-      `- Character's clothing, accessories, props\n` +
-      `- Body pose, limb positions\n` +
-      `- Composition, layout, framing\n` +
-      `- Art style, line work, shading technique\n\n` +
-      `OUTPUT: A single unified artwork. Produce the final image directly.`;
+      `You are an artist redrawing a character. You are given two images:\n` +
+      `Image 1 — ORIGINAL STICKER/IMAGE to reproduce.\n` +
+      `Image 2 — REFERENCE PHOTO of a real person.\n\n` +
+      `YOUR TASK: Redraw Image 1 exactly as it is, but REDRAW the character's face ` +
+      `so it RESEMBLES the person from Image 2 — while keeping the SAME ART STYLE as Image 1.${bgBlock}\n\n` +
+      `FACE RULES (most important):\n` +
+      `- Do NOT paste a photo-realistic face onto a cartoon body. That looks terrible.\n` +
+      `- REDRAW the face IN THE ART STYLE of Image 1 (cartoon → cartoon face, anime → anime face, etc.)\n` +
+      `- The redrawn face should capture the person's KEY FEATURES from Image 2: face shape, eye shape, nose shape, hair style, hair color, skin tone.\n` +
+      `- The face must look like a STYLIZED PORTRAIT of the person, not a photo cutout.\n` +
+      `- Keep the same facial expression/emotion as in Image 1.\n\n` +
+      `PRESERVATION CHECKLIST (every item MUST match Image 1):\n` +
+      `✓ Background: same color, same shapes, same patterns, same text/labels, same logos\n` +
+      `✓ Character body: same pose, same limbs, same clothing, same accessories\n` +
+      `✓ Art style: same line work, same coloring technique, same shading — INCLUDING the face\n` +
+      `✓ Composition: same layout, same framing, same dimensions\n` +
+      `✓ All text/labels in the image must appear EXACTLY as in Image 1\n\n` +
+      `ONLY CHANGE:\n` +
+      `✗ The face/head → redraw with features inspired by Image 2, IN THE SAME ART STYLE\n` +
+      `✗ Hair style/color → take from Image 2, drawn in the same art style\n\n` +
+      `CRITICAL:\n` +
+      `- The output must be a UNIFIED artwork — same style everywhere, face included.\n` +
+      `- If Image 1 is cartoon — the new face must be cartoon. NEVER mix photo-realistic face with cartoon body.\n` +
+      `- If Image 1 has a complex background — reproduce that exact background.`;
   }
 
   await updateProgress(3);
