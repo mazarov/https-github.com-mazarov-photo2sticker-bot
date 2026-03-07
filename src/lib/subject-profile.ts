@@ -1,5 +1,5 @@
 import axios from "axios";
-import { config } from "../config";
+import { config, getGeminiGenerateContentUrl } from "../config";
 import { getAppConfig } from "./app-config";
 
 export type SubjectMode = "single" | "multi" | "unknown";
@@ -536,7 +536,7 @@ export async function detectSubjectProfileFromImageBuffer(
     for (let attempt = 1; attempt <= DETECTOR_MAX_ATTEMPTS; attempt++) {
       try {
         const response = await axios.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          getGeminiGenerateContentUrl(model),
           {
             contents: [
               {

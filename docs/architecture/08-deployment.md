@@ -91,6 +91,7 @@ git checkout feature/xxx
 | `APP_ENV` | `prod` | Окружение: `prod` / `test` |
 | `AI_CHAT_PROVIDER` | `gemini` | Провайдер AI чата: `gemini` / `openai` |
 | `AI_CHAT_MODEL` | (auto) | Модель AI чата |
+| `GEMINI_PROXY_BASE_URL` | `https://generativelanguage.googleapis.com` | Базовый URL Gemini API. Для обхода geo-блоков можно указать прокси, например `https://gemini-proxy.photo2sticker.ru`. |
 | `OPENAI_API_KEY` | — | API ключ OpenAI (если provider=openai) |
 | `PORT` | `3001` | Порт API |
 | `PUBLIC_BASE_URL` | — | Публичный URL сервера (например `https://bot.example.com`). Если задан — бот в режиме **webhook** (нет конфликта 409 при нескольких репликах). Без него — long polling, допустима только одна реплика на токен. |

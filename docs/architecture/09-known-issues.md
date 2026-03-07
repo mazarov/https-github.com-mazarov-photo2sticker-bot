@@ -211,3 +211,21 @@ bot.launch({ dropPendingUpdates: true });
 3. Для мониторинга в логах: `[subject-profile] detector ETIMEDOUT, retrying` (первая попытка), `[subject-profile] detector ETIMEDOUT after retry, using unknown` (обе попытки не удались). Поиск по тегу `detector ETIMEDOUT` даёт все такие кейсы.
 
 **Как диагностировать**: в логах API/worker искать `[subject-profile] detector ETIMEDOUT`.
+
+---
+
+## 14. Gemini geo-блок: `User location is not supported for the API use`
+
+**Проблема**: часть вызовов Gemini может падать с ошибкой:
+`Gemini API failed: User location is not supported for the API use.`
+Причина — geo-ограничение по IP исходящего сервера.
+
+**Решение**:
+1. Поднять reverse proxy в EU/US (nginx) и проксировать `https://generativelanguage.googleapis.com`.
+2. В env API/Worker задать `GEMINI_PROXY_BASE_URL` (например, `https://gemini-proxy.photo2sticker.ru`).
+3. Все вызовы Gemini в коде строятся через `getGeminiGenerateContentUrl()` из `src/config.ts`, поэтому переключение происходит централизованно без правок бизнес-логики.
+
+**Как диагностировать**:
+- искать в логах `User location is not supported for the API use`;
+- проверить прокси: `curl -I https://<proxy-domain>` (должен отвечать HTTPS endpoint);
+- проверить маршрут Gemini через прокси: `curl -X POST https://<proxy-domain>/v1beta/models/gemini-2.0-flash:generateContent -d '{}' -H 'Content-Type: application/json'` (ожидаем `403/400`, это нормальный ответ без API key).

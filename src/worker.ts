@@ -2,7 +2,7 @@ import axios from "axios";
 import os from "os";
 import FormData from "form-data";
 import sharp from "sharp";
-import { config } from "./config";
+import { config, getGeminiGenerateContentUrl } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
 import { getText } from "./lib/texts";
@@ -704,7 +704,7 @@ ${packTaskBlock}`
   for (let attempt = 1; attempt <= PACK_PREVIEW_GEMINI_MAX_ATTEMPTS; attempt++) {
     try {
       geminiRes = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        getGeminiGenerateContentUrl(model),
         {
           contents: [{
             role: "user",
@@ -800,7 +800,7 @@ ${packTaskBlock}`
     console.warn("[PackPreview] Gemini returned no image on first attempt, retrying once. finishReason:", finishReason);
     try {
       const retryRes = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        getGeminiGenerateContentUrl(model),
         {
           contents: [{
             role: "user",
@@ -1496,7 +1496,7 @@ async function runJob(job: any) {
       });
     }
     const res = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`,
+      getGeminiGenerateContentUrl(modelName),
       {
         contents: [
           {

@@ -2,7 +2,7 @@ import express from "express";
 import { Telegraf, Markup, Input } from "telegraf";
 import axios from "axios";
 import sharp from "sharp";
-import { config } from "./config";
+import { config, getGeminiGenerateContentUrl } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
@@ -192,7 +192,7 @@ async function translateLabelsEnToRu(labelsEn: string[]): Promise<string[]> {
   if (!Array.isArray(labelsEn) || labelsEn.length === 0) return [];
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+      getGeminiGenerateContentUrl("gemini-2.0-flash"),
       {
         contents: [{ role: "user", parts: [{ text: `Translate these ${labelsEn.length} short sticker captions from English to Russian. Keep the same tone and approximate length. Return ONLY a JSON array of ${labelsEn.length} strings, no other text.\n\n${JSON.stringify(labelsEn)}` }] }],
         generationConfig: { responseMimeType: "application/json", temperature: 0.3 },
@@ -990,7 +990,7 @@ async function generatePrompt(userInput: string): Promise<PromptResult> {
     });
 
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${agent.model}:generateContent`,
+      getGeminiGenerateContentUrl(agent.model),
       {
         systemInstruction: {
           parts: [{ text: agent.system_prompt }],
@@ -2925,7 +2925,7 @@ async function generateAndSendOutreachAlert(
     const userContext = `Name: ${firstName || "unknown"}\nUsername: ${username || "none"}\nLanguage: ${lang}\nSource: ${utm.source || "organic"}/${utm.medium || "none"}\nPremium: ${isPremium}`;
 
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+      getGeminiGenerateContentUrl("gemini-2.0-flash"),
       {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: "user", parts: [{ text: userContext }] }],
@@ -10607,7 +10607,7 @@ bot.action(/^admin_regen_outreach:(.+)$/, async (ctx) => {
     const userContext = `Name: ${user.first_name || "unknown"}\nUsername: ${user.username || "none"}\nLanguage: ${lang}\nSource: ${user.utm_source || "organic"}/${user.utm_medium || "none"}`;
 
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+      getGeminiGenerateContentUrl("gemini-2.0-flash"),
       {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: "user", parts: [{ text: userContext }] }],
@@ -11031,7 +11031,7 @@ Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sar
   // Fallback: Gemini when OPENAI_API_KEY is not set
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
+      getGeminiGenerateContentUrl("gemini-2.5-flash"),
       {
         systemInstruction: {
           parts: [{ text: systemPrompt }],

@@ -22,6 +22,8 @@ export const config = {
   /** Public bucket for style example images (landing). Must exist and be public in Supabase. */
   supabaseStorageBucketExamples: process.env.SUPABASE_STORAGE_BUCKET_EXAMPLES || "stickers-examples",
   geminiApiKey: required("GEMINI_API_KEY"),
+  /** Optional proxy base URL for Gemini API (e.g. https://gemini-proxy.example.com). */
+  geminiApiBaseUrl: (process.env.GEMINI_PROXY_BASE_URL || "https://generativelanguage.googleapis.com").replace(/\/+$/, ""),
   openaiApiKey: process.env.OPENAI_API_KEY || "",
 
   // AI Chat assistant settings
@@ -59,3 +61,7 @@ export const config = {
     "lt", "sl", "hr", "sr", "tr",
   ],
 };
+
+export function getGeminiGenerateContentUrl(model: string): string {
+  return `${config.geminiApiBaseUrl}/v1beta/models/${model}:generateContent`;
+}
