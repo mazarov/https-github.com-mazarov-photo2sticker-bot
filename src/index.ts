@@ -8979,19 +8979,10 @@ bot.action(/^remove_bg:([^:]+)(?::(.+))?$/, async (ctx) => {
   const lang = user.lang || "en";
 
   const stickerId = ctx.match[1];
-  const { sessionId: explicitSessionId } = parseCallbackSessionRef(ctx.match?.[2] || null);
-  const session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
-
-  if (!session?.id) {
-    await rejectSessionEvent(ctx, lang, "remove_bg", "session_not_found");
-    return;
-  }
 
   const { data: sticker } = await supabase
     .from("stickers")
-    .select("telegram_file_id")
+    .select("telegram_file_id, user_id")
     .eq("id", stickerId)
     .maybeSingle();
 
@@ -8999,6 +8990,7 @@ bot.action(/^remove_bg:([^:]+)(?::(.+))?$/, async (ctx) => {
     await ctx.reply(lang === "ru" ? "Стикер не найден." : "Sticker not found.");
     return;
   }
+  if (sticker.user_id !== user.id) return;
 
   try {
     await ctx.reply(lang === "ru" ? "⏳ Убираю фон..." : "⏳ Removing background...");
@@ -9030,14 +9022,12 @@ bot.action(/^remove_bg:([^:]+)(?::(.+))?$/, async (ctx) => {
       .webp({ quality: 95 })
       .toBuffer();
 
-    const nextRev = (session.session_rev || 1) + 1;
     const newFileId = await sendSticker(ctx.chat!.id, stickerBuffer);
 
     const { data: newSticker } = await supabase
       .from("stickers")
       .insert({
         user_id: user.id,
-        session_id: session.id,
         telegram_file_id: newFileId || null,
         source_photo_file_id: sticker.telegram_file_id,
         generation_type: "remove_bg",
@@ -9050,18 +9040,7 @@ bot.action(/^remove_bg:([^:]+)(?::(.+))?$/, async (ctx) => {
       await supabase.from("stickers").update({ telegram_file_id: newFileId }).eq("id", newSticker.id);
     }
 
-    await supabase
-      .from("sessions")
-      .update({
-        last_sticker_file_id: newFileId || sticker.telegram_file_id,
-        session_rev: nextRev,
-      })
-      .eq("id", session.id);
-
-    const replyMarkup = await buildStickerButtons(lang, newSticker?.id || stickerId, {
-      sessionId: session.id,
-      sessionRev: nextRev,
-    });
+    const replyMarkup = await buildStickerButtons(lang, newSticker?.id || stickerId);
     await ctx.reply(lang === "ru" ? "Фон удалён! Что дальше?" : "Background removed! What's next?", { reply_markup: replyMarkup });
   } catch (err: any) {
     console.error("[remove_bg] failed:", err?.message || err);
