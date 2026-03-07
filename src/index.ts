@@ -2,6 +2,7 @@ import express from "express";
 import { Telegraf, Markup, Input } from "telegraf";
 import axios from "axios";
 import sharp from "sharp";
+import FormData from "form-data";
 import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
@@ -1664,12 +1665,14 @@ async function buildStickerButtons(
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
   const replaceFaceText = await getText(lang, "btn.replace_face");
+  const removeBgText = lang === "ru" ? "🖼 Вырезать фон" : "🖼 Remove background";
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
   const emotionCb = appendSessionRefIfFits(`change_emotion:${stickerId}`, sessionRef);
   const motionCb = appendSessionRefIfFits(`change_motion:${stickerId}`, sessionRef);
   const replaceFaceCb = appendSessionRefIfFits(`replace_face:${stickerId}`, sessionRef);
+  const removeBgCb = appendSessionRefIfFits(`remove_bg:${stickerId}`, sessionRef);
 
   return {
     inline_keyboard: [
@@ -1684,6 +1687,7 @@ async function buildStickerButtons(
       ],
       [
         { text: replaceFaceText, callback_data: replaceFaceCb },
+        { text: removeBgText, callback_data: removeBgCb },
       ],
       [
         { text: packIdeasText, callback_data: `pack_ideas:${stickerId}` },
@@ -8960,6 +8964,110 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
     selectedStyleId: sticker.style_preset_id || session.selected_style_id || null,
     userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
   });
+});
+
+// Callback: remove background from sticker (edit-sticker flow)
+bot.action(/^remove_bg:([^:]+)(?::(.+))?$/, async (ctx) => {
+  console.log("=== remove_bg:ID callback ===");
+  const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
+  safeAnswerCbQuery(ctx, isRu ? "🖼 Убираю фон..." : "🖼 Removing background...");
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const stickerId = ctx.match[1];
+  const { sessionId: explicitSessionId } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
+
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, "remove_bg", "session_not_found");
+    return;
+  }
+
+  const { data: sticker } = await supabase
+    .from("stickers")
+    .select("telegram_file_id")
+    .eq("id", stickerId)
+    .maybeSingle();
+
+  if (!sticker?.telegram_file_id) {
+    await ctx.reply(lang === "ru" ? "Стикер не найден." : "Sticker not found.");
+    return;
+  }
+
+  try {
+    await ctx.reply(lang === "ru" ? "⏳ Убираю фон..." : "⏳ Removing background...");
+
+    const filePath = await getFilePath(sticker.telegram_file_id);
+    const fileBuffer = await downloadFile(filePath);
+    const imageSizeKb = Math.round(fileBuffer.length / 1024);
+
+    const pngBuffer = await sharp(fileBuffer).png().toBuffer();
+
+    console.log(`[remove_bg] Calling Pixian, size: ${imageSizeKb} KB`);
+    const pixianForm = new FormData();
+    pixianForm.append("image", pngBuffer, { filename: "image.png", contentType: "image/png" });
+
+    const pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
+      auth: { username: config.pixianUsername, password: config.pixianPassword },
+      headers: pixianForm.getHeaders(),
+      responseType: "arraybuffer",
+      timeout: 60000,
+    });
+
+    const noBgBuffer = Buffer.from(pixianRes.data);
+    console.log(`[remove_bg] Pixian success, result: ${Math.round(noBgBuffer.length / 1024)} KB`);
+
+    const stickerBuffer = await sharp(noBgBuffer)
+      .trim({ threshold: 2 })
+      .resize(482, 482, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .extend({ top: 15, bottom: 15, left: 15, right: 15, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .webp({ quality: 95 })
+      .toBuffer();
+
+    const nextRev = (session.session_rev || 1) + 1;
+    const stickerMsg = await sendSticker(ctx.chat!.id, stickerBuffer);
+    const newFileId = stickerMsg?.sticker?.file_id;
+
+    const { data: newSticker } = await supabase
+      .from("stickers")
+      .insert({
+        user_id: user.id,
+        session_id: session.id,
+        telegram_file_id: newFileId || null,
+        source_photo_file_id: sticker.telegram_file_id,
+        generation_type: "remove_bg",
+        env: config.appEnv,
+      })
+      .select("id")
+      .single();
+
+    if (newSticker?.id && newFileId) {
+      await supabase.from("stickers").update({ telegram_file_id: newFileId }).eq("id", newSticker.id);
+    }
+
+    await supabase
+      .from("sessions")
+      .update({
+        last_sticker_file_id: newFileId || sticker.telegram_file_id,
+        session_rev: nextRev,
+      })
+      .eq("id", session.id);
+
+    const replyMarkup = await buildStickerButtons(lang, newSticker?.id || stickerId, {
+      sessionId: session.id,
+      sessionRev: nextRev,
+    });
+    await ctx.reply(lang === "ru" ? "Фон удалён! Что дальше?" : "Background removed! What's next?", { reply_markup: replyMarkup });
+  } catch (err: any) {
+    console.error("[remove_bg] failed:", err?.message || err);
+    await ctx.reply(lang === "ru" ? "❌ Не удалось убрать фон. Попробуй ещё раз." : "❌ Failed to remove background. Try again.");
+  }
 });
 
 // Callback: add text to sticker
