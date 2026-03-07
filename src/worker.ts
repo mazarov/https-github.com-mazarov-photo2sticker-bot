@@ -1964,9 +1964,14 @@ async function runJob(job: any) {
 
   }
 
+  if (!imageBase64) {
+    throw new Error("Generation returned no image bytes");
+  }
+  const generatedImageBase64 = imageBase64;
+
   const postcheckEnabled = !usedFacemintReplaceFace && await isSubjectPostcheckEnabled();
   if (postcheckEnabled && subjectProfile?.subjectMode && subjectProfile.subjectMode !== "unknown") {
-    const firstGeneratedBuffer = Buffer.from(imageBase64, "base64");
+    const firstGeneratedBuffer = Buffer.from(generatedImageBase64, "base64");
     const detected = await detectSubjectProfileFromImageBuffer(firstGeneratedBuffer, "image/png");
     const mismatch = isSubjectPostcheckMismatch(
       subjectProfile.subjectMode,
@@ -2041,9 +2046,6 @@ async function runJob(job: any) {
     }
   }
 
-  if (!imageBase64) {
-    throw new Error("Generation returned no image bytes");
-  }
   console.log("Image generated successfully");
 
   await updateProgress(4);
