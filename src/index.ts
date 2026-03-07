@@ -1038,13 +1038,54 @@ async function enqueueJob(sessionId: string, userId: string, isFirstFree: boolea
   });
 }
 
-async function sendProgressStart(ctx: any, sessionId: string, lang: string) {
-  const msg = await ctx.reply(await getText(lang, "progress.step1"));
+async function sendProgressStart(
+  ctx: any,
+  sessionId: string,
+  lang: string,
+  existingMessageId?: number | null,
+) {
+  const progressText = await getText(lang, "progress.step1");
+
+  if (existingMessageId && ctx.chat?.id) {
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        existingMessageId,
+        undefined,
+        progressText,
+      );
+    } catch {
+      // edit may fail if text is identical — not critical
+    }
+    await supabase
+      .from("sessions")
+      .update({ progress_message_id: existingMessageId, progress_chat_id: ctx.chat.id })
+      .eq("id", sessionId);
+    return;
+  }
+
+  const msg = await ctx.reply(progressText);
   if (msg?.message_id && ctx.chat?.id) {
     await supabase
       .from("sessions")
       .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
       .eq("id", sessionId);
+  }
+}
+
+async function sendEarlyProgress(ctx: any, lang: string): Promise<number | null> {
+  try {
+    const text = lang === "ru" ? "⏳ Запускаю генерацию..." : "⏳ Starting generation...";
+    const msg = await ctx.reply(text);
+    return msg?.message_id || null;
+  } catch {
+    return null;
+  }
+}
+
+function deleteEarlyProgress(ctx: any, messageId?: number | null) {
+  if (messageId && ctx.chat?.id) {
+    ctx.telegram.deleteMessage(ctx.chat.id, messageId).catch(() => {});
   }
 }
 
@@ -1296,6 +1337,7 @@ async function startGeneration(
     selectedEmotion?: string | null;
     textPrompt?: string | null;
     assistantParams?: { style: string; emotion: string; pose: string } | null;
+    earlyProgressMessageId?: number | null;
   }
 ) {
   const creditsNeeded = 1;
@@ -1306,6 +1348,7 @@ async function startGeneration(
   const processingStates = new Set(["processing", "processing_emotion", "processing_motion", "processing_text"]);
 
   if (processingStates.has(String(session?.state || ""))) {
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     await ctx.reply(lang === "ru"
       ? "⏳ Генерация уже запущена. Подожди несколько секунд."
       : "⏳ Generation is already running. Please wait a few seconds.");
@@ -1327,12 +1370,14 @@ async function startGeneration(
 
   if (claimErr) {
     console.error("[startGeneration] claim failed:", claimErr.message);
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     await ctx.reply(lang === "ru"
       ? "⚠️ Не удалось запустить генерацию. Попробуй ещё раз."
       : "⚠️ Failed to start generation. Please try again.");
     return;
   }
   if (!claimedSession) {
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     const freshSession = await getSessionByIdForUser(user.id, session.id);
     if (processingStates.has(String(freshSession?.state || ""))) {
       await ctx.reply(lang === "ru"
@@ -1370,6 +1415,7 @@ async function startGeneration(
 
   // Check if user has enough credits
   if (user.credits < creditsNeeded) {
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     // Paywall for users who haven't purchased yet
     const isPaywall = !user.has_purchased;
     
@@ -1474,6 +1520,7 @@ async function startGeneration(
     .rpc("deduct_credits", { p_user_id: user.id, p_amount: creditsNeeded });
   
   if (deductError || !deducted) {
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     console.error("Atomic deduct failed - race condition detected:", deductError?.message || "not enough credits");
     await ctx.reply(await getText(lang, "photo.not_enough_credits", {
       needed: creditsNeeded,
@@ -1587,7 +1634,7 @@ async function startGeneration(
     photoFileId: session.current_photo_file_id || undefined,
   }).catch(console.error);
 
-  await sendProgressStart(ctx, session.id, lang);
+  await sendProgressStart(ctx, session.id, lang, options.earlyProgressMessageId);
 }
 
 // Credit packages: { credits, bonus_credits?, price_in_stars, label_ru, label_en, price_rub, adminOnly?, trialOnly?, hidden? }
@@ -8481,6 +8528,7 @@ bot.action(/^emotion_(?!make_example)([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
+  const earlyMsgId = await sendEarlyProgress(ctx, lang);
   const emotionTemplate = await getPromptTemplate("emotion");
   const promptFinal = buildPromptFromTemplate(emotionTemplate, preset.prompt_hint);
   await startGeneration(ctx, user, session, lang, {
@@ -8488,6 +8536,7 @@ bot.action(/^emotion_(?!make_example)([^:]+)(?::(.+))?$/, async (ctx) => {
     promptFinal,
     emotionPrompt: preset.prompt_hint,
     selectedEmotion: preset.id,
+    earlyProgressMessageId: earlyMsgId,
   });
 });
 
@@ -8651,6 +8700,7 @@ bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
+  const earlyMsgId = await sendEarlyProgress(ctx, lang);
   const motionTemplate = await getPromptTemplate("motion");
   const promptFinal = buildPromptFromTemplate(motionTemplate, preset.prompt_hint);
   await startGeneration(ctx, user, session, lang, {
@@ -8658,6 +8708,7 @@ bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
     promptFinal,
     emotionPrompt: preset.prompt_hint,
     selectedEmotion: preset.id,
+    earlyProgressMessageId: earlyMsgId,
   });
 });
 
