@@ -1667,6 +1667,12 @@ async function runJob(job: any) {
       faceStoragePath,
       replaceReferenceMimeType || "image/jpeg"
     );
+    console.log("[ReplaceSubject][Facemint] upload done", {
+      stickerUrl,
+      faceUrl,
+      stickerPath: stickerStoragePath,
+      facePath: faceStoragePath,
+    });
 
     const stickerMeta = await sharp(fileBuffer).metadata();
     const faceMeta = await sharp(replaceReferenceBuffer).metadata();
@@ -1677,7 +1683,7 @@ async function runJob(job: any) {
         width: stickerMeta.width,
         height: stickerMeta.height,
         format: stickerMeta.format,
-        url: stickerUrl?.slice(0, 80) + "...",
+        url: stickerUrl,
       },
       face: {
         bytes: replaceReferenceBuffer.length,
@@ -1685,7 +1691,7 @@ async function runJob(job: any) {
         width: faceMeta.width,
         height: faceMeta.height,
         format: faceMeta.format,
-        url: faceUrl?.slice(0, 80) + "...",
+        url: faceUrl,
       },
     });
 

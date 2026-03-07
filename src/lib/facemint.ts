@@ -97,9 +97,19 @@ export async function createFaceSwapTask(params: FacemintCreateTaskParams): Prom
     });
   }
 
+  console.log("[Facemint] create-face-swap-task request", { url, payload });
+
   const { data } = await axios.post<FacemintCreateTaskResponse>(url, payload, {
     headers: getHeaders(),
     timeout: 30_000,
+  });
+
+  console.log("[Facemint] create-face-swap-task response", {
+    code: data?.code,
+    info: data?.info,
+    taskId: data?.data?.taskId,
+    price: data?.data?.price,
+    fullResponse: JSON.stringify(data),
   });
 
   if (data?.code !== 0 || !data?.data?.taskId) {
@@ -112,13 +122,36 @@ export async function createFaceSwapTask(params: FacemintCreateTaskParams): Prom
   };
 }
 
-export async function getFaceSwapTaskInfo(taskId: string): Promise<FacemintTaskInfo> {
+export async function getFaceSwapTaskInfo(
+  taskId: string,
+  options?: { logRequest?: boolean }
+): Promise<FacemintTaskInfo> {
   const url = `${config.facemintBaseUrl.replace(/\/+$/, "")}/get-task-info`;
+  const body = { task_id: taskId };
+  if (options?.logRequest) {
+    console.log("[Facemint] get-task-info request", { url, body });
+  }
   const { data } = await axios.post<FacemintTaskInfoResponse>(
     url,
-    { task_id: taskId },
+    body,
     { headers: getHeaders(), timeout: 30_000 }
   );
+
+  if (options?.logRequest) {
+    console.log("[Facemint] get-task-info response", {
+      taskId,
+      state: data?.data?.state,
+      process: data?.data?.process,
+      fullResponse: JSON.stringify(data),
+    });
+  }
+  if (data?.data && (data.data.state === -1 || data.data.state === 2)) {
+    console.log("[Facemint] get-task-info failure state", {
+      taskId,
+      state: data.data.state,
+      fullResponse: JSON.stringify(data),
+    });
+  }
 
   if (data?.code !== 0 || !data?.data) {
     throw new Error(`Facemint get task failed: code=${data?.code ?? "unknown"} info=${data?.info ?? "no_info"}`);
@@ -138,12 +171,13 @@ export async function waitForFaceSwapTask(
   let pollCount = 0;
 
   while (Date.now() < deadline) {
-    const task = await getFaceSwapTaskInfo(taskId);
+    const task = await getFaceSwapTaskInfo(taskId, { logRequest: pollCount === 0 });
     lastState = task.state;
     pollCount++;
 
     if (task.state === 3) return task;
     if (task.state === -1 || task.state === 2) {
+      console.log("[Facemint] task failed, full task info", JSON.stringify(task, null, 2));
       throw new Error(`Facemint task finished with non-success state=${task.state}`);
     }
 
