@@ -1413,7 +1413,9 @@ async function runJob(job: any) {
   const sourceFileId =
     generationType === "emotion" || generationType === "motion" || generationType === "text"
       ? session.last_sticker_file_id
-      : session.current_photo_file_id || photos[photos.length - 1];
+      : generationType === "replace_subject"
+        ? session.last_sticker_file_id
+        : session.current_photo_file_id || photos[photos.length - 1];
 
   // Debug logging for source file
   console.log("[Worker] Source file debug:", {
@@ -1437,23 +1439,23 @@ async function runJob(job: any) {
   const mimeType = getMimeTypeByTelegramPath(filePath);
   let replaceReferenceBase64: string | null = null;
   let replaceReferenceMimeType: string | null = null;
-  if (generationType === "replace_subject" && session.last_sticker_file_id) {
+  if (generationType === "replace_subject" && session.current_photo_file_id) {
     try {
-      const refPath = await getFilePath(session.last_sticker_file_id);
+      const refPath = await getFilePath(session.current_photo_file_id);
       const refBuffer = await downloadFile(refPath);
       replaceReferenceBase64 = refBuffer.toString("base64");
       replaceReferenceMimeType = getMimeTypeByTelegramPath(refPath);
-      console.log("[ReplaceSubject] loaded sticker reference:", {
+      console.log("[ReplaceSubject] loaded identity photo reference:", {
         hasRef: true,
         refMime: replaceReferenceMimeType,
         refBytes: refBuffer.length,
       });
     } catch (err: any) {
-      console.warn("[ReplaceSubject] failed to load sticker reference, fallback to single input:", err?.message || err);
+      console.warn("[ReplaceSubject] failed to load identity photo, fallback to single input:", err?.message || err);
     }
   }
   const sourceKind: SubjectSourceKind =
-    generationType === "emotion" || generationType === "motion" || generationType === "text"
+    generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject"
       ? "sticker"
       : "photo";
   const lockEnabled = await isSubjectLockEnabled();
@@ -1478,15 +1480,26 @@ async function runJob(job: any) {
   }
   if (generationType === "replace_subject") {
     promptForGeneration =
-      `You are given two reference images.\n` +
-      `Image 1 is IDENTITY PHOTO (face and identity source).\n` +
-      `Image 2 is STICKER REFERENCE (pose, expression, composition, style source).\n\n` +
-      `Generate one sticker with identity from Image 1 and pose/expression/style from Image 2.\n` +
-      `Keep one subject only. Do not add text.\n` +
-      `Background MUST be flat bright magenta (#FF00FF).\n` +
-      `No borders, outlines, or decorative strokes around subject.\n` +
-      `Keep full subject visible with margins.\n\n` +
-      promptForGeneration;
+      `You are an image editor. You are given two images:\n` +
+      `Image 1 — ORIGINAL STICKER that must be preserved.\n` +
+      `Image 2 — IDENTITY PHOTO of a real person (face reference).\n\n` +
+      `YOUR TASK: Edit Image 1 (the sticker) by replacing ONLY the face/head of the character ` +
+      `with the face from Image 2. Everything else in the sticker MUST remain EXACTLY the same:\n` +
+      `- Same body, same pose, same limbs position\n` +
+      `- Same clothing, accessories, props\n` +
+      `- Same art style, line work, coloring technique\n` +
+      `- Same background color and composition\n` +
+      `- Same proportions and framing\n\n` +
+      `CRITICAL RULES:\n` +
+      `- Do NOT regenerate the sticker from scratch. EDIT the existing sticker.\n` +
+      `- The new face must match the art style of the sticker (if sticker is cartoon — draw face in cartoon style, if anime — anime style, etc.)\n` +
+      `- Adapt the face from Image 2 to fit the head shape and angle in the sticker.\n` +
+      `- Preserve the facial expression/emotion from the original sticker but with the new person's features.\n` +
+      `- Hair style and color should come from Image 2 (the real person).\n` +
+      `- Do NOT change the body, outfit, pose, hands, legs, or any other element.\n` +
+      `- Do NOT add any text.\n` +
+      `- Keep the same background.\n` +
+      `- Output must be the same dimensions and aspect ratio as Image 1.`;
   }
 
   await updateProgress(3);
