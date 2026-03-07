@@ -3589,15 +3589,15 @@ bot.on("photo", async (ctx) => {
 
     const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
     const newCb = flowType === "assistant"
-      ? (sessionRef ? `assistant_new_photo:${sessionRef}` : "assistant_new_photo")
+      ? appendSessionRefIfFits("assistant_new_photo", sessionRef)
       : flowType === "pack"
-      ? (sessionRef ? `pack_new_photo:${sessionRef}` : "pack_new_photo")
-      : (sessionRef ? `single_new_photo:${sessionRef}` : "single_new_photo");
+      ? appendSessionRefIfFits("pack_new_photo", sessionRef)
+      : appendSessionRefIfFits("single_new_photo", sessionRef);
     const keepCb = flowType === "assistant"
-      ? (sessionRef ? `assistant_keep_photo:${sessionRef}` : "assistant_keep_photo")
+      ? appendSessionRefIfFits("assistant_keep_photo", sessionRef)
       : flowType === "pack"
-      ? (sessionRef ? `pack_keep_photo:${sessionRef}` : "pack_keep_photo")
-      : (sessionRef ? `single_keep_photo:${sessionRef}` : "single_keep_photo");
+      ? appendSessionRefIfFits("pack_keep_photo", sessionRef)
+      : appendSessionRefIfFits("single_keep_photo", sessionRef);
 
     await ctx.reply(
       lang === "ru"
@@ -3849,11 +3849,11 @@ bot.on("photo", async (ctx) => {
       Markup.inlineKeyboard([
         [Markup.button.callback(
           lang === "ru" ? "✅ Новое фото" : "✅ New photo",
-          sessionRef ? `pack_new_photo:${sessionRef}` : "pack_new_photo"
+          appendSessionRefIfFits("pack_new_photo", sessionRef)
         )],
         [Markup.button.callback(
           lang === "ru" ? "❌ Оставить текущее" : "❌ Keep current",
-          sessionRef ? `pack_keep_photo:${sessionRef}` : "pack_keep_photo"
+          appendSessionRefIfFits("pack_keep_photo", sessionRef)
         )],
       ])
     );
