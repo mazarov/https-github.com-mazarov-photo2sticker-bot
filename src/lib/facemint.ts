@@ -56,6 +56,13 @@ function getHeaders(): Record<string, string> {
   };
 }
 
+/** Facemint API requires valid callback_url and watermark (non-empty). We use polling, so callback is unused. */
+function getDefaultCallbackUrl(): string {
+  if (config.facemintCallbackUrl?.trim()) return config.facemintCallbackUrl.trim();
+  const base = (config.publicBaseUrl || "https://photo2sticker.ru").replace(/\/+$/, "");
+  return `${base}/webhook/facemint`;
+}
+
 export async function createFaceSwapTask(params: FacemintCreateTaskParams): Promise<{ taskId: string; price?: number }> {
   const url = `${config.facemintBaseUrl.replace(/\/+$/, "")}/create-face-swap-task`;
   const payload: Record<string, unknown> = {
@@ -66,16 +73,17 @@ export async function createFaceSwapTask(params: FacemintCreateTaskParams): Prom
     nsfw_check: 0,
     face_recognition: 0.8,
     face_detection: 0.25,
+    watermark: "Photo2Sticker",
+    callback_url: getDefaultCallbackUrl(),
     ...params,
   };
 
-  // Facemint validates callback URL format; avoid sending empty string.
+  // Facemint requires valid non-empty values; ensure we never send empty strings.
   if (typeof payload.callback_url === "string" && payload.callback_url.trim() === "") {
-    delete payload.callback_url;
+    payload.callback_url = getDefaultCallbackUrl();
   }
-  // Keep default provider watermark behavior unless explicitly requested.
   if (typeof payload.watermark === "string" && payload.watermark.trim() === "") {
-    delete payload.watermark;
+    payload.watermark = "Photo2Sticker";
   }
 
   if (Array.isArray(payload.swap_list)) {
@@ -87,11 +95,6 @@ export async function createFaceSwapTask(params: FacemintCreateTaskParams): Prom
       }
       return pair;
     });
-  }
-
-  console.log("[Facemint] create-face-swap-task payload keys:", Object.keys(payload));
-  if ("callback_url" in payload) {
-    console.log("[Facemint] callback_url value:", payload.callback_url);
   }
 
   const { data } = await axios.post<FacemintCreateTaskResponse>(url, payload, {
