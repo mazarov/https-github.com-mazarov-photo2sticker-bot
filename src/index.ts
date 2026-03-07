@@ -3946,7 +3946,7 @@ bot.hears(["🎨 Изменить стикер", "🎨 Edit sticker"], async (ct
   }
 
   const lang = user.lang || "en";
-  await closeAllActiveSessions(user.id);
+  await closeAllActiveAssistantSessions(user.id, "abandoned");
 
   const { data: session, error } = await supabase
     .from("sessions")
