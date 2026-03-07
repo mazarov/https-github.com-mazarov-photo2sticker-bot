@@ -65,6 +65,7 @@ function getDefaultCallbackUrl(): string {
 
 export async function createFaceSwapTask(params: FacemintCreateTaskParams): Promise<{ taskId: string; price?: number }> {
   const url = `${config.facemintBaseUrl.replace(/\/+$/, "")}/create-face-swap-task`;
+  const wm = (config.facemintWatermark ?? "").trim() || " ";
   const payload: Record<string, unknown> = {
     start_time: 0,
     end_time: 0,
@@ -73,17 +74,13 @@ export async function createFaceSwapTask(params: FacemintCreateTaskParams): Prom
     nsfw_check: 0,
     face_recognition: 0.8,
     face_detection: 0.25,
-    watermark: "Photo2Sticker",
+    watermark: wm,
     callback_url: getDefaultCallbackUrl(),
     ...params,
   };
 
-  // Facemint requires valid non-empty values; ensure we never send empty strings.
   if (typeof payload.callback_url === "string" && payload.callback_url.trim() === "") {
     payload.callback_url = getDefaultCallbackUrl();
-  }
-  if (typeof payload.watermark === "string" && payload.watermark.trim() === "") {
-    payload.watermark = "Photo2Sticker";
   }
 
   if (Array.isArray(payload.swap_list)) {

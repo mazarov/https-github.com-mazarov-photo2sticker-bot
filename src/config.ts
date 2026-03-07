@@ -31,6 +31,8 @@ export const config = {
   facemintBaseUrl: process.env.FACEMINT_BASE_URL || "https://api.facemint.io/api",
   /** Valid URL for Facemint callback (required by API; we use polling, so callback is unused). */
   facemintCallbackUrl: process.env.FACEMINT_CALLBACK_URL || "",
+  /** Watermark text. Empty string = no watermark (if API allows). Default "Photo2Sticker". */
+  facemintWatermark: process.env.FACEMINT_WATERMARK ?? "Photo2Sticker",
 
   // AI Chat assistant settings
   aiChatProvider: (process.env.AI_CHAT_PROVIDER || "gemini") as "gemini" | "openai",
