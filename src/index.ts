@@ -6642,7 +6642,23 @@ bot.on("text", async (ctx) => {
 
   // Уточнение резолва (flow-aware): если сессия не в pack-flow, но есть паковая сессия, ожидающая тему — подставляем её (getActiveSession мог вернуть другую по updated_at).
   const packThemeStates = ["wait_pack_generate_request", "wait_pack_carousel", "wait_pack_rework_feedback"];
-  const needRefinement = session?.id && config.adminIds.includes(telegramId) && !packThemeStates.includes(session.state);
+  const textFlowStates = new Set([
+    "wait_text_overlay",
+    "wait_text",
+    "wait_custom_emotion",
+    "wait_custom_motion",
+    "wait_custom_style",
+    "wait_custom_style_v2",
+  ]);
+  // Single text flows must never be hijacked by admin pack refinement.
+  const protectSingleTextFlow =
+    textFlowStates.has(String(session?.state || ""))
+    || String(session?.flow_kind || "") === "single";
+  const needRefinement =
+    session?.id
+    && config.adminIds.includes(telegramId)
+    && !packThemeStates.includes(session.state)
+    && !protectSingleTextFlow;
   if (needRefinement) {
     const { data: packForTheme } = await supabase
       .from("sessions")
@@ -9160,7 +9176,14 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
   if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
-      .insert({ user_id: user.id, state: "wait_text_overlay", is_active: true, env: config.appEnv })
+      .insert({
+        user_id: user.id,
+        state: "wait_text_overlay",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: 1,
+        env: config.appEnv,
+      })
       .select()
       .single();
     session = newSession;
@@ -9174,9 +9197,12 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
     .update({
       state: "wait_text_overlay",
       is_active: true,
+      flow_kind: "single",
+      session_rev: (session.session_rev || 1) + 1,
       last_sticker_file_id: sticker.telegram_file_id,
       user_input: stickerId,
       pending_generation_type: null,
+      updated_at: new Date().toISOString(),
     })
     .eq("id", session.id);
 
@@ -9188,8 +9214,11 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
       .update({
         state: "wait_text_overlay",
         is_active: true,
+        flow_kind: "single",
+        session_rev: (session.session_rev || 1) + 1,
         last_sticker_file_id: sticker.telegram_file_id,
         pending_generation_type: null,
+        updated_at: new Date().toISOString(),
       })
       .eq("id", session.id);
     if (retryErr) {
@@ -11196,12 +11225,13 @@ bot.action(/^retry_generation:(.+)$/, async (ctx) => {
   const lang = user.lang || "en";
 
   // Get the original session
-  const { data: session } = await supabase
+  const { data: sessionData } = await supabase
     .from("sessions")
     .select("*")
     .eq("id", sessionId)
     .eq("user_id", user.id)
     .maybeSingle();
+  let session = sessionData;
 
   if (!session) {
     console.log("[retry_generation] Session not found:", sessionId);
@@ -11224,6 +11254,45 @@ bot.action(/^retry_generation:(.+)$/, async (ctx) => {
       : "❌ Cannot retry. Send a new photo.";
     await ctx.editMessageText(noPromptText);
     return;
+  }
+
+  const processingStates = new Set(["processing", "processing_emotion", "processing_motion", "processing_text"]);
+  if (processingStates.has(String(session.state || ""))) {
+    const { data: activeJobs } = await supabase
+      .from("jobs")
+      .select("id,status")
+      .eq("session_id", session.id)
+      .in("status", ["queued", "running", "processing"])
+      .limit(1);
+
+    if (activeJobs && activeJobs.length > 0) {
+      const stillRunningText = lang === "ru"
+        ? "⏳ Генерация ещё выполняется. Подожди пару секунд и попробуй снова."
+        : "⏳ Generation is still running. Please wait a few seconds and try again.";
+      await ctx.editMessageText(stillRunningText).catch(() => {});
+      return;
+    }
+
+    const retryReadyState =
+      session.generation_type === "emotion" ? "wait_emotion" :
+      session.generation_type === "motion" ? "wait_motion" :
+      session.generation_type === "text" ? "wait_text_overlay" :
+      session.generation_type === "replace_subject" ? "wait_edit_action" : "wait_style";
+
+    await supabase
+      .from("sessions")
+      .update({
+        state: retryReadyState,
+        is_active: true,
+        progress_message_id: null,
+        progress_chat_id: null,
+      })
+      .eq("id", session.id);
+
+    session = {
+      ...session,
+      state: retryReadyState,
+    };
   }
 
   // Update error message to show retry in progress
