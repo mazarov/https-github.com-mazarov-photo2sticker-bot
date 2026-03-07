@@ -67,14 +67,17 @@ function isTransientStorageError(e: unknown): boolean {
   return code === 500 || /fetch failed|timeout|ECONNRESET|ETIMEDOUT/i.test(msg);
 }
 
+/** Facemint needs publicly accessible URLs. Bucket stickers is private — use stickers-examples (public) for temp uploads. */
+
 async function uploadBufferForFacemint(
   buffer: Buffer,
   storagePath: string,
   contentType: string
 ): Promise<string> {
+  const bucket = config.supabaseStorageBucketExamples || "stickers-examples";
   const upload = () =>
     supabase.storage
-      .from(config.supabaseStorageBucket)
+      .from(bucket)
       .upload(storagePath, buffer, { contentType, upsert: true });
 
   let { error } = await upload();
@@ -87,11 +90,14 @@ async function uploadBufferForFacemint(
     throw new Error(`Facemint input upload failed: ${error.message}`);
   }
 
-  const { data } = supabase.storage.from(config.supabaseStorageBucket).getPublicUrl(storagePath);
+  const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
   if (!data?.publicUrl) {
     throw new Error("Facemint input upload failed: public URL is empty");
   }
-  return data.publicUrl;
+  const publicUrl = config.supabasePublicStorageUrl
+    ? data.publicUrl.replace(config.supabaseUrl, config.supabasePublicStorageUrl)
+    : data.publicUrl;
+  return publicUrl;
 }
 
 /** Telegram sendPhoto limit: 10 MB. Resize pack preview if over limit. */
@@ -1668,6 +1674,7 @@ async function runJob(job: any) {
       replaceReferenceMimeType || "image/jpeg"
     );
     console.log("[ReplaceSubject][Facemint] upload done", {
+      bucket: config.supabaseStorageBucketExamples || "stickers-examples",
       stickerUrl,
       faceUrl,
       stickerPath: stickerStoragePath,
