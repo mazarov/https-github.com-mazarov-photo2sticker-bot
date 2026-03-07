@@ -1668,6 +1668,27 @@ async function runJob(job: any) {
       replaceReferenceMimeType || "image/jpeg"
     );
 
+    const stickerMeta = await sharp(fileBuffer).metadata();
+    const faceMeta = await sharp(replaceReferenceBuffer).metadata();
+    console.log("[ReplaceSubject][Facemint] input images", {
+      sticker: {
+        bytes: fileBuffer.length,
+        mime: mimeType,
+        width: stickerMeta.width,
+        height: stickerMeta.height,
+        format: stickerMeta.format,
+        url: stickerUrl?.slice(0, 80) + "...",
+      },
+      face: {
+        bytes: replaceReferenceBuffer.length,
+        mime: replaceReferenceMimeType || "image/jpeg",
+        width: faceMeta.width,
+        height: faceMeta.height,
+        format: faceMeta.format,
+        url: faceUrl?.slice(0, 80) + "...",
+      },
+    });
+
     console.log("[ReplaceSubject][Facemint] creating task");
     const { taskId, price } = await createFaceSwapTask({
       type: "image",
