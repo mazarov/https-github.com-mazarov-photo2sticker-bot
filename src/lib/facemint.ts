@@ -58,18 +58,37 @@ function getHeaders(): Record<string, string> {
 
 export async function createFaceSwapTask(params: FacemintCreateTaskParams): Promise<{ taskId: string; price?: number }> {
   const url = `${config.facemintBaseUrl.replace(/\/+$/, "")}/create-face-swap-task`;
-  const payload = {
+  const payload: Record<string, unknown> = {
     start_time: 0,
     end_time: 0,
     resolution: 1,
     enhance: 1,
-    watermark: "",
-    callback_url: "",
     nsfw_check: 0,
     face_recognition: 0.8,
     face_detection: 0.25,
     ...params,
   };
+
+  // Facemint validates callback URL format; avoid sending empty string.
+  if (typeof payload.callback_url === "string" && payload.callback_url.trim() === "") {
+    delete payload.callback_url;
+  }
+  // Keep default provider watermark behavior unless explicitly requested.
+  if (typeof payload.watermark === "string" && payload.watermark.trim() === "") {
+    delete payload.watermark;
+  }
+
+  if (Array.isArray(payload.swap_list)) {
+    payload.swap_list = payload.swap_list.map((item: unknown) => {
+      const pair = (item ?? {}) as FacemintSwapPair;
+      if (typeof pair.from_face === "string" && pair.from_face.trim() === "") {
+        const { from_face, ...rest } = pair;
+        return rest;
+      }
+      return pair;
+    });
+  }
+
   const { data } = await axios.post<FacemintCreateTaskResponse>(url, payload, {
     headers: getHeaders(),
     timeout: 30_000,
