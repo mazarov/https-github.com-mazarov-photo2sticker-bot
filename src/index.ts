@@ -1039,13 +1039,54 @@ async function enqueueJob(sessionId: string, userId: string, isFirstFree: boolea
   });
 }
 
-async function sendProgressStart(ctx: any, sessionId: string, lang: string) {
-  const msg = await ctx.reply(await getText(lang, "progress.step1"));
+async function sendProgressStart(
+  ctx: any,
+  sessionId: string,
+  lang: string,
+  existingMessageId?: number | null,
+) {
+  const progressText = await getText(lang, "progress.step1");
+
+  if (existingMessageId && ctx.chat?.id) {
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        existingMessageId,
+        undefined,
+        progressText,
+      );
+    } catch {
+      // edit may fail if text is identical — not critical
+    }
+    await supabase
+      .from("sessions")
+      .update({ progress_message_id: existingMessageId, progress_chat_id: ctx.chat.id })
+      .eq("id", sessionId);
+    return;
+  }
+
+  const msg = await ctx.reply(progressText);
   if (msg?.message_id && ctx.chat?.id) {
     await supabase
       .from("sessions")
       .update({ progress_message_id: msg.message_id, progress_chat_id: ctx.chat.id })
       .eq("id", sessionId);
+  }
+}
+
+async function sendEarlyProgress(ctx: any, lang: string): Promise<number | null> {
+  try {
+    const text = lang === "ru" ? "⏳ Запускаю генерацию..." : "⏳ Starting generation...";
+    const msg = await ctx.reply(text);
+    return msg?.message_id || null;
+  } catch {
+    return null;
+  }
+}
+
+function deleteEarlyProgress(ctx: any, messageId?: number | null) {
+  if (messageId && ctx.chat?.id) {
+    ctx.telegram.deleteMessage(ctx.chat.id, messageId).catch(() => {});
   }
 }
 
@@ -1297,6 +1338,7 @@ async function startGeneration(
     selectedEmotion?: string | null;
     textPrompt?: string | null;
     assistantParams?: { style: string; emotion: string; pose: string } | null;
+    earlyProgressMessageId?: number | null;
   }
 ) {
   const creditsNeeded = 1;
@@ -1307,6 +1349,7 @@ async function startGeneration(
   const processingStates = new Set(["processing", "processing_emotion", "processing_motion", "processing_text"]);
 
   if (processingStates.has(String(session?.state || ""))) {
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     await ctx.reply(lang === "ru"
       ? "⏳ Генерация уже запущена. Подожди несколько секунд."
       : "⏳ Generation is already running. Please wait a few seconds.");
@@ -1328,12 +1371,14 @@ async function startGeneration(
 
   if (claimErr) {
     console.error("[startGeneration] claim failed:", claimErr.message);
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     await ctx.reply(lang === "ru"
       ? "⚠️ Не удалось запустить генерацию. Попробуй ещё раз."
       : "⚠️ Failed to start generation. Please try again.");
     return;
   }
   if (!claimedSession) {
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     const freshSession = await getSessionByIdForUser(user.id, session.id);
     if (processingStates.has(String(freshSession?.state || ""))) {
       await ctx.reply(lang === "ru"
@@ -1371,6 +1416,7 @@ async function startGeneration(
 
   // Check if user has enough credits
   if (user.credits < creditsNeeded) {
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     // Paywall for users who haven't purchased yet
     const isPaywall = !user.has_purchased;
     
@@ -1475,6 +1521,7 @@ async function startGeneration(
     .rpc("deduct_credits", { p_user_id: user.id, p_amount: creditsNeeded });
   
   if (deductError || !deducted) {
+    deleteEarlyProgress(ctx, options.earlyProgressMessageId);
     console.error("Atomic deduct failed - race condition detected:", deductError?.message || "not enough credits");
     await ctx.reply(await getText(lang, "photo.not_enough_credits", {
       needed: creditsNeeded,
@@ -1589,7 +1636,7 @@ async function startGeneration(
     photoFileId: session.current_photo_file_id || undefined,
   }).catch(console.error);
 
-  await sendProgressStart(ctx, session.id, lang);
+  await sendProgressStart(ctx, session.id, lang, options.earlyProgressMessageId);
 }
 
 // Credit packages: { credits, bonus_credits?, price_in_stars, label_ru, label_en, price_rub, adminOnly?, trialOnly?, hidden? }
@@ -6595,7 +6642,23 @@ bot.on("text", async (ctx) => {
 
   // Уточнение резолва (flow-aware): если сессия не в pack-flow, но есть паковая сессия, ожидающая тему — подставляем её (getActiveSession мог вернуть другую по updated_at).
   const packThemeStates = ["wait_pack_generate_request", "wait_pack_carousel", "wait_pack_rework_feedback"];
-  const needRefinement = session?.id && config.adminIds.includes(telegramId) && !packThemeStates.includes(session.state);
+  const textFlowStates = new Set([
+    "wait_text_overlay",
+    "wait_text",
+    "wait_custom_emotion",
+    "wait_custom_motion",
+    "wait_custom_style",
+    "wait_custom_style_v2",
+  ]);
+  // Single text flows must never be hijacked by admin pack refinement.
+  const protectSingleTextFlow =
+    textFlowStates.has(String(session?.state || ""))
+    || String(session?.flow_kind || "") === "single";
+  const needRefinement =
+    session?.id
+    && config.adminIds.includes(telegramId)
+    && !packThemeStates.includes(session.state)
+    && !protectSingleTextFlow;
   if (needRefinement) {
     const { data: packForTheme } = await supabase
       .from("sessions")
@@ -8695,6 +8758,7 @@ bot.action(/^emotion_(?!make_example)([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
+  const earlyMsgId = await sendEarlyProgress(ctx, lang);
   const emotionTemplate = await getPromptTemplate("emotion");
   const promptFinal = buildPromptFromTemplate(emotionTemplate, preset.prompt_hint);
   await startGeneration(ctx, user, session, lang, {
@@ -8702,6 +8766,7 @@ bot.action(/^emotion_(?!make_example)([^:]+)(?::(.+))?$/, async (ctx) => {
     promptFinal,
     emotionPrompt: preset.prompt_hint,
     selectedEmotion: preset.id,
+    earlyProgressMessageId: earlyMsgId,
   });
 });
 
@@ -8865,6 +8930,7 @@ bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
+  const earlyMsgId = await sendEarlyProgress(ctx, lang);
   const motionTemplate = await getPromptTemplate("motion");
   const promptFinal = buildPromptFromTemplate(motionTemplate, preset.prompt_hint);
   await startGeneration(ctx, user, session, lang, {
@@ -8872,6 +8938,7 @@ bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
     promptFinal,
     emotionPrompt: preset.prompt_hint,
     selectedEmotion: preset.id,
+    earlyProgressMessageId: earlyMsgId,
   });
 });
 
@@ -8958,11 +9025,13 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
     selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
   };
 
+  const earlyMsgId = await sendEarlyProgress(ctx, lang);
   await startGeneration(ctx, user, patchedSession, lang, {
     generationType: "replace_subject",
     promptFinal: replacePrompt,
     selectedStyleId: sticker.style_preset_id || session.selected_style_id || null,
     userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
+    earlyProgressMessageId: earlyMsgId,
   });
 });
 
@@ -9088,7 +9157,14 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
   if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
-      .insert({ user_id: user.id, state: "wait_text_overlay", is_active: true, env: config.appEnv })
+      .insert({
+        user_id: user.id,
+        state: "wait_text_overlay",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: 1,
+        env: config.appEnv,
+      })
       .select()
       .single();
     session = newSession;
@@ -9102,9 +9178,12 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
     .update({
       state: "wait_text_overlay",
       is_active: true,
+      flow_kind: "single",
+      session_rev: (session.session_rev || 1) + 1,
       last_sticker_file_id: sticker.telegram_file_id,
       user_input: stickerId,
       pending_generation_type: null,
+      updated_at: new Date().toISOString(),
     })
     .eq("id", session.id);
 
@@ -9116,8 +9195,11 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
       .update({
         state: "wait_text_overlay",
         is_active: true,
+        flow_kind: "single",
+        session_rev: (session.session_rev || 1) + 1,
         last_sticker_file_id: sticker.telegram_file_id,
         pending_generation_type: null,
+        updated_at: new Date().toISOString(),
       })
       .eq("id", session.id);
     if (retryErr) {
@@ -11124,12 +11206,13 @@ bot.action(/^retry_generation:(.+)$/, async (ctx) => {
   const lang = user.lang || "en";
 
   // Get the original session
-  const { data: session } = await supabase
+  const { data: sessionData } = await supabase
     .from("sessions")
     .select("*")
     .eq("id", sessionId)
     .eq("user_id", user.id)
     .maybeSingle();
+  let session = sessionData;
 
   if (!session) {
     console.log("[retry_generation] Session not found:", sessionId);
@@ -11152,6 +11235,45 @@ bot.action(/^retry_generation:(.+)$/, async (ctx) => {
       : "❌ Cannot retry. Send a new photo.";
     await ctx.editMessageText(noPromptText);
     return;
+  }
+
+  const processingStates = new Set(["processing", "processing_emotion", "processing_motion", "processing_text"]);
+  if (processingStates.has(String(session.state || ""))) {
+    const { data: activeJobs } = await supabase
+      .from("jobs")
+      .select("id,status")
+      .eq("session_id", session.id)
+      .in("status", ["queued", "running", "processing"])
+      .limit(1);
+
+    if (activeJobs && activeJobs.length > 0) {
+      const stillRunningText = lang === "ru"
+        ? "⏳ Генерация ещё выполняется. Подожди пару секунд и попробуй снова."
+        : "⏳ Generation is still running. Please wait a few seconds and try again.";
+      await ctx.editMessageText(stillRunningText).catch(() => {});
+      return;
+    }
+
+    const retryReadyState =
+      session.generation_type === "emotion" ? "wait_emotion" :
+      session.generation_type === "motion" ? "wait_motion" :
+      session.generation_type === "text" ? "wait_text_overlay" :
+      session.generation_type === "replace_subject" ? "wait_edit_action" : "wait_style";
+
+    await supabase
+      .from("sessions")
+      .update({
+        state: retryReadyState,
+        is_active: true,
+        progress_message_id: null,
+        progress_chat_id: null,
+      })
+      .eq("id", session.id);
+
+    session = {
+      ...session,
+      state: retryReadyState,
+    };
   }
 
   // Update error message to show retry in progress

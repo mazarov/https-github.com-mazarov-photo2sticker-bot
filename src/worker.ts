@@ -87,6 +87,14 @@ async function retryWithBackoff<T>(
   throw new Error("Unreachable");
 }
 
+function getRetryReadyState(generationType?: string | null): string {
+  if (generationType === "emotion") return "wait_emotion";
+  if (generationType === "motion") return "wait_motion";
+  if (generationType === "text") return "wait_text_overlay";
+  if (generationType === "replace_subject") return "wait_edit_action";
+  return "wait_style";
+}
+
 const WORKER_ID = `${os.hostname()}-${process.pid}-${Date.now()}`;
 console.log(`Worker started: ${WORKER_ID}`);
 if (!config.alertChannelId) {
@@ -2370,11 +2378,27 @@ async function poll() {
       try {
         const { data: session } = await supabase
           .from("sessions")
-          .select("user_id, photos, credits_spent, session_rev")
+          .select("user_id, photos, credits_spent, session_rev, state, generation_type")
           .eq("id", job.session_id)
           .maybeSingle();
 
         if (session?.user_id) {
+          const processingStates = new Set(["processing", "processing_emotion", "processing_motion", "processing_text"]);
+          const sessionState = String(session.state || "");
+          if (processingStates.has(sessionState)) {
+            // Recover stuck sessions: previous job has already ended with error,
+            // so retry button must not be blocked by stale processing_* state.
+            await supabase
+              .from("sessions")
+              .update({
+                state: getRetryReadyState(session.generation_type),
+                is_active: true,
+                progress_message_id: null,
+                progress_chat_id: null,
+              })
+              .eq("id", job.session_id);
+          }
+
           const creditsToRefund = session.credits_spent || 1;
 
           const { data: refundUser } = await supabase
