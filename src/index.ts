@@ -6571,6 +6571,18 @@ bot.on("text", async (ctx) => {
   // #region agent log
   console.log("[pack_text_resolve] after getActiveSession", { userId: user.id, telegramId, sessionId: session?.id ?? null, sessionState: session?.state ?? null, isTest: config.appEnv === "test", isAdmin: config.adminIds.includes(telegramId) });
   // #endregion
+  const recoverableTextStates = [
+    "wait_text_overlay",
+    "wait_text",
+    "wait_custom_emotion",
+    "wait_custom_motion",
+    "wait_custom_style",
+    "wait_custom_style_v2",
+    "assistant_chat",
+    "assistant_wait_photo",
+    "assistant_wait_idea",
+  ];
+
   if (!session?.id) {
     // Generic fallback for text-input states (single/assistant/manual text steps),
     // because some environments occasionally flip is_active=false unexpectedly.
@@ -6580,21 +6592,30 @@ bot.on("text", async (ctx) => {
       .select("*")
       .eq("user_id", user.id)
       .eq("env", config.appEnv)
-      .in("state", [
-        "wait_text_overlay",
-        "wait_text",
-        "wait_custom_emotion",
-        "wait_custom_motion",
-        "wait_custom_style",
-        "wait_custom_style_v2",
-      ])
+      .in("state", recoverableTextStates)
       .gte("updated_at", recentCutoff)
       .order("updated_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (textFlowSession?.id) {
-      session = textFlowSession;
+    let recoveredSession = textFlowSession;
+    if (!recoveredSession?.id) {
+      // Legacy custom-idea flow uses a separate waiting flag without dedicated state.
+      const { data: customIdeaSession } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("env", config.appEnv)
+        .eq("waiting_custom_idea", true)
+        .gte("updated_at", recentCutoff)
+        .order("updated_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      recoveredSession = customIdeaSession || null;
+    }
+    if (recoveredSession?.id) {
+      session = recoveredSession;
       console.log("[pack_text_resolve] recovered text-flow session", {
         userId: user.id,
         telegramId,
@@ -6642,18 +6663,15 @@ bot.on("text", async (ctx) => {
 
   // Уточнение резолва (flow-aware): если сессия не в pack-flow, но есть паковая сессия, ожидающая тему — подставляем её (getActiveSession мог вернуть другую по updated_at).
   const packThemeStates = ["wait_pack_generate_request", "wait_pack_carousel", "wait_pack_rework_feedback"];
-  const textFlowStates = new Set([
-    "wait_text_overlay",
-    "wait_text",
-    "wait_custom_emotion",
-    "wait_custom_motion",
-    "wait_custom_style",
-    "wait_custom_style_v2",
-  ]);
+  const textFlowStates = new Set(recoverableTextStates);
+  const assistantTextStates = new Set(["assistant_chat", "assistant_wait_photo", "assistant_wait_idea"]);
   // Single text flows must never be hijacked by admin pack refinement.
   const protectSingleTextFlow =
     textFlowStates.has(String(session?.state || ""))
-    || String(session?.flow_kind || "") === "single";
+    || assistantTextStates.has(String(session?.state || ""))
+    || Boolean(session?.waiting_custom_idea)
+    || String(session?.flow_kind || "") === "single"
+    || String(session?.flow_kind || "") === "assistant";
   const needRefinement =
     session?.id
     && config.adminIds.includes(telegramId)
@@ -11845,11 +11863,6 @@ async function showStickerIdeaCard(ctx: any, opts: {
   rows.push([Markup.button.callback(
     isRu ? "✏️ Своя идея" : "✏️ Custom idea",
     appendSessionRefIfFits("asst_idea_custom", sessionRef)
-  )]);
-
-  rows.push([Markup.button.callback(
-    isRu ? "⏭️ Пропустить" : "⏭️ Skip",
-    appendSessionRefIfFits("asst_idea_skip", sessionRef)
   )]);
 
   await ctx.reply(text, Markup.inlineKeyboard(rows));
