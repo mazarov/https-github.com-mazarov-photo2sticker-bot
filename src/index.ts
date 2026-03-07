@@ -6294,7 +6294,25 @@ bot.on("sticker", async (ctx) => {
   const lang = user.lang || "en";
 
   const session = await getActiveSession(user.id);
-  if (!session?.id || session.state !== "wait_edit_sticker") return;
+  if (!session?.id) {
+    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    return;
+  }
+  if (session.state !== "wait_edit_sticker") {
+    console.log("[edit_sticker] sticker ignored due to state:", session.state, "session:", session.id);
+    const isPackState =
+      String(session.state || "").startsWith("wait_pack_")
+      || ["generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(String(session.state || ""));
+    const hint = isPackState
+      ? (lang === "ru"
+          ? "Сейчас ты в сценарии пака. Нажми «🎨 Изменить стикер» и потом пришли стикер."
+          : "You are currently in pack flow. Tap “🎨 Edit sticker” and then send a sticker.")
+      : (lang === "ru"
+          ? "Чтобы изменить присланный стикер, сначала нажми «🎨 Изменить стикер»."
+          : "To edit a sent sticker, first tap “🎨 Edit sticker”.");
+    await ctx.reply(hint, getMainMenuKeyboard(lang, ctx?.from?.id));
+    return;
+  }
 
   const sticker = (ctx.message as any)?.sticker;
   const stickerFileId = sticker?.file_id as string | undefined;
