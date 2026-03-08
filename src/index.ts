@@ -2967,7 +2967,8 @@ async function getPackFlowSessionById(userId: string, sessionId?: string | null)
 function parseCallbackSessionRef(raw?: string | null): { sessionId: string | null; rev: number | null } {
   if (!raw) return { sessionId: null, rev: null };
   const parts = raw.split(":");
-  const sessionId = parts[0] || null;
+  const sessionToken = parts[0] || null;
+  const sessionId = decodeCallbackSessionToken(sessionToken);
   if (parts.length < 2) return { sessionId, rev: null };
   const maybeRev = Number(parts[parts.length - 1]);
   return Number.isInteger(maybeRev) && maybeRev > 0 ? { sessionId, rev: maybeRev } : { sessionId, rev: null };
@@ -2980,18 +2981,56 @@ function parsePackAdminSessionId(callbackData?: string | null): string | null {
   return parts.length >= 2 && parts[1]?.trim() ? parts[1].trim() : null;
 }
 
+function encodeUuidToBase64Url(uuid: string): string | null {
+  const hex = uuid.replace(/-/g, "");
+  if (!/^[0-9a-fA-F]{32}$/.test(hex)) return null;
+  return Buffer.from(hex, "hex")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function decodeBase64UrlToUuid(token: string): string | null {
+  if (!/^[A-Za-z0-9\-_]{22}$/.test(token)) return null;
+  const base64 = token.replace(/-/g, "+").replace(/_/g, "/") + "==";
+  const hex = Buffer.from(base64, "base64").toString("hex");
+  if (!/^[0-9a-fA-F]{32}$/.test(hex)) return null;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function encodeCallbackSessionToken(sessionId?: string | null): string | null {
+  if (!sessionId) return null;
+  // Compact UUID token (22 chars base64url) to fit Telegram callback_data 64-byte limit.
+  return encodeUuidToBase64Url(sessionId) || sessionId;
+}
+
+function decodeCallbackSessionToken(token?: string | null): string | null {
+  if (!token) return null;
+  // Backward compatible: old callbacks carry full UUID.
+  if (/^[0-9a-fA-F-]{36}$/.test(token)) return token;
+  return decodeBase64UrlToUuid(token) || token;
+}
+
 function formatCallbackSessionRef(sessionId?: string | null, sessionRev?: number | null): string | null {
   if (!sessionId) return null;
+  const token = encodeCallbackSessionToken(sessionId);
+  if (!token) return null;
   const rev = Number(sessionRev);
-  if (Number.isInteger(rev) && rev > 0) return `${sessionId}:${rev}`;
-  return sessionId;
+  if (Number.isInteger(rev) && rev > 0) return `${token}:${rev}`;
+  return token;
 }
 
 function appendSessionRefIfFits(baseCallbackData: string, sessionRef?: string | null): string {
   if (!sessionRef) return baseCallbackData;
   const withRef = `${baseCallbackData}:${sessionRef}`;
   // Telegram callback_data limit is 64 bytes.
-  return withRef.length <= 64 ? withRef : baseCallbackData;
+  if (withRef.length <= 64) return withRef;
+  console.warn("[callback.session_ref] dropped due to callback_data limit", {
+    baseCallbackData,
+    withRefLength: withRef.length,
+  });
+  return baseCallbackData;
 }
 
 async function isStrictSessionRevEnabled(): Promise<boolean> {
