@@ -2452,6 +2452,31 @@ async function resolveSessionForIncomingPhoto(userId: string) {
   const activeSession = await getActiveSession(userId);
   if (activeSession?.id) return activeSession;
 
+  // Strong fallback: pick the latest non-assistant active-like session first.
+  // This protects manual flows from being hijacked by stale assistant recovery sessions.
+  const NON_ASSISTANT_FALLBACK_STATES = SESSION_FALLBACK_ACTIVE_STATES.filter(
+    (s) => !String(s).startsWith("assistant_")
+  );
+  const { data: latestNonAssistantSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .in("state", NON_ASSISTANT_FALLBACK_STATES as unknown as string[])
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestNonAssistantSession?.id) {
+    console.log(
+      "Photo router fallback: using latest non-assistant session:",
+      latestNonAssistantSession.id,
+      "state:",
+      latestNonAssistantSession.state
+    );
+    return latestNonAssistantSession;
+  }
+
   // Prefer latest single-flow session before assistant recovery to avoid hijacking
   // fresh manual states (wait_action/wait_style/etc.) by stale assistant leftovers.
   const { data: latestSingleSession } = await supabase
@@ -6332,7 +6357,7 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
       photos,
       current_photo_file_id: newPhotoFileId,
       pending_photo_file_id: null,
-      state: "wait_style",
+      state: "wait_action",
       is_active: true,
       flow_kind: "single",
       session_rev: nextRev,
@@ -6344,8 +6369,7 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
     "style"
   ).catch((err) => console.warn("[single_new_photo] subject profile failed:", err?.message || err));
 
-  // messageId must be a Telegram message_id number; session.id is UUID and breaks editMessageText path.
-  await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
+  await sendActionMenu(ctx, lang, session.id, nextRev);
 });
 
 // Callback: single_keep_photo — keep current photo in single flow
@@ -6384,6 +6408,7 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
     .from("sessions")
     .update({
       pending_photo_file_id: null,
+      state: "wait_action",
       is_active: true,
       flow_kind: "single",
       session_rev: (session.session_rev || 1) + 1,
@@ -6391,6 +6416,7 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
     .eq("id", session.id);
 
   await ctx.reply(lang === "ru" ? "Оставляем текущее фото." : "Keeping current photo.");
+  await sendActionMenu(ctx, lang, session.id, (session.session_rev || 1) + 1);
 });
 
 /** Admin flow «Сделать примером»: набор выбран кнопкой (step 2), обрабатываем ссылку → sticker_pack_example/{id}/example.webp (4x4). */
