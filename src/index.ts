@@ -538,13 +538,22 @@ async function sendStyleKeyboardFlat(
   const text = options?.headerText || await getText(lang, "photo.ask_style");
 
   if (messageId) {
-    await ctx.telegram.editMessageText(
-      ctx.chat?.id,
-      messageId,
-      undefined,
-      text,
-      { reply_markup: { inline_keyboard: buttons } }
-    ).catch((err: any) => console.error("sendStyleKeyboardFlat error:", err?.message));
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat?.id,
+        messageId,
+        undefined,
+        text,
+        { reply_markup: { inline_keyboard: buttons } }
+      );
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      console.error("sendStyleKeyboardFlat error:", msg);
+      // Fallback for stale/non-editable messages: send a fresh style list instead of failing silently.
+      if (msg.includes("message can't be edited")) {
+        await ctx.reply(text, Markup.inlineKeyboard(buttons)).catch(() => {});
+      }
+    }
   } else {
     await ctx.reply(text, Markup.inlineKeyboard(buttons));
   }
@@ -6274,8 +6283,17 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
   }
   const strictRevEnabled = await isStrictSessionRevEnabled();
   if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
-    await rejectSessionEvent(ctx, lang, "single_new_photo", "stale_callback");
-    return;
+    // Photo-switch decisions can race with async session updates.
+    // If there is still a pending photo in this exact session, allow processing.
+    if (!(session.pending_photo_file_id && explicitSessionId && explicitSessionId === session.id)) {
+      await rejectSessionEvent(ctx, lang, "single_new_photo", "stale_callback");
+      return;
+    }
+    console.warn("[single_new_photo] stale_callback bypassed due to pending_photo_file_id", {
+      sessionId: session.id,
+      callbackRev,
+      currentRev: session.session_rev,
+    });
   }
 
   const newPhotoFileId = session.pending_photo_file_id;
@@ -6330,8 +6348,15 @@ bot.action(/^single_keep_photo(?::(.+))?$/, async (ctx) => {
   }
   const strictRevEnabled = await isStrictSessionRevEnabled();
   if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
-    await rejectSessionEvent(ctx, lang, "single_keep_photo", "stale_callback");
-    return;
+    if (!(session.pending_photo_file_id && explicitSessionId && explicitSessionId === session.id)) {
+      await rejectSessionEvent(ctx, lang, "single_keep_photo", "stale_callback");
+      return;
+    }
+    console.warn("[single_keep_photo] stale_callback bypassed due to pending_photo_file_id", {
+      sessionId: session.id,
+      callbackRev,
+      currentRev: session.session_rev,
+    });
   }
 
   await supabase
