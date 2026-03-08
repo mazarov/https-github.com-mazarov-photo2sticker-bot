@@ -826,7 +826,12 @@ async function getFirstEmotionPresetWithExample(presets: EmotionPreset[]): Promi
 async function sendEmotionKeyboard(
   ctx: any,
   lang: string,
-  options?: { sessionId?: string | null; sessionRev?: number | null }
+  options?: {
+    sessionId?: string | null;
+    sessionRev?: number | null;
+    messageId?: number;
+    backCallbackData?: string | null;
+  }
 ) {
   const presets = await getEmotionPresets();
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
@@ -853,8 +858,29 @@ async function sendEmotionKeyboard(
     buttons.push(row);
   }
 
+  if (options?.backCallbackData) {
+    buttons.push([
+      Markup.button.callback(lang === "ru" ? "↩️ Назад" : "↩️ Back", options.backCallbackData),
+    ]);
+  }
+
   const caption = await getText(lang, "emotion.choose");
   const replyMarkup = Markup.inlineKeyboard(buttons);
+
+  if (options?.messageId && ctx.chat?.id) {
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        options.messageId,
+        undefined,
+        caption,
+        { reply_markup: replyMarkup.reply_markup }
+      );
+      return;
+    } catch (err: any) {
+      console.warn("[sendEmotionKeyboard] edit failed, fallback to reply:", err?.message || err);
+    }
+  }
 
   const firstWithExample = await getFirstEmotionPresetWithExample(presets);
   if (firstWithExample) {
@@ -892,7 +918,12 @@ async function getMotionPresets(): Promise<MotionPreset[]> {
 async function sendMotionKeyboard(
   ctx: any,
   lang: string,
-  options?: { sessionId?: string | null; sessionRev?: number | null }
+  options?: {
+    sessionId?: string | null;
+    sessionRev?: number | null;
+    messageId?: number;
+    backCallbackData?: string | null;
+  }
 ) {
   const presets = await getMotionPresets();
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
@@ -919,10 +950,30 @@ async function sendMotionKeyboard(
     buttons.push(row);
   }
 
-  await ctx.reply(
-    await getText(lang, "motion.choose"),
-    Markup.inlineKeyboard(buttons)
-  );
+  if (options?.backCallbackData) {
+    buttons.push([
+      Markup.button.callback(lang === "ru" ? "↩️ Назад" : "↩️ Back", options.backCallbackData),
+    ]);
+  }
+
+  const text = await getText(lang, "motion.choose");
+  const keyboard = Markup.inlineKeyboard(buttons);
+  if (options?.messageId && ctx.chat?.id) {
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        options.messageId,
+        undefined,
+        text,
+        { reply_markup: keyboard.reply_markup }
+      );
+      return;
+    } catch (err: any) {
+      console.warn("[sendMotionKeyboard] edit failed, fallback to reply:", err?.message || err);
+    }
+  }
+
+  await ctx.reply(text, keyboard);
 }
 
 async function getPromptTemplate(id: string): Promise<string> {
@@ -5865,7 +5916,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_approval"],
@@ -5999,7 +6050,7 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_approval"],
@@ -6135,7 +6186,7 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_approval", "wait_pack_preview_payment", "wait_pack_carousel"],
@@ -8788,6 +8839,7 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
     return;
   }
 
+  const nextRev = (session.session_rev || 1) + 1;
   await supabase
     .from("sessions")
     .update({
@@ -8799,10 +8851,17 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
       pending_generation_type: null,
       selected_emotion: null,
       emotion_prompt: null,
+      session_rev: nextRev,
     })
     .eq("id", session.id);
 
-  await sendStyleKeyboardFlat(ctx, lang);
+  const sessionRef = formatCallbackSessionRef(session.id, nextRev);
+  const backCb = appendSessionRefIfFits(`back_to_sticker_menu:${stickerId}`, sessionRef);
+  const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+  await sendStyleKeyboardFlat(ctx, lang, currentMessageId, {
+    selectedStyleId: session.selected_style_id || null,
+    extraButtons: [[{ text: lang === "ru" ? "↩️ Назад" : "↩️ Back", callback_data: backCb }]],
+  });
 });
 
 // Callback: change style (old format - fallback)
@@ -8910,9 +8969,14 @@ bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
+  const messageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+  const sessionRef = formatCallbackSessionRef(session.id, (session.session_rev || 1) + 1);
+  const backCb = appendSessionRefIfFits(`back_to_sticker_menu:${stickerId}`, sessionRef);
   await sendEmotionKeyboard(ctx, lang, {
     sessionId: session.id,
     sessionRev: (session.session_rev || 1) + 1,
+    messageId,
+    backCallbackData: backCb,
   });
 });
 
@@ -8965,7 +9029,7 @@ bot.action(/^emotion_(?!make_example)([^:]+)(?::(.+))?$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const emotionId = ctx.match[1];
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "emotion_select", "session_not_found");
@@ -9082,10 +9146,62 @@ bot.action(/^change_motion:([^:]+)(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
+  const messageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+  const sessionRef = formatCallbackSessionRef(session.id, (session.session_rev || 1) + 1);
+  const backCb = appendSessionRefIfFits(`back_to_sticker_menu:${stickerId}`, sessionRef);
   await sendMotionKeyboard(ctx, lang, {
     sessionId: session.id,
     sessionRev: (session.session_rev || 1) + 1,
+    messageId,
+    backCallbackData: backCb,
   });
+});
+
+// Callback: back from submenu to the sticker action menu
+bot.action(/^back_to_sticker_menu:([^:]+)(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  const stickerId = ctx.match[1];
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+
+  const { data: sticker } = await supabase
+    .from("stickers")
+    .select("id, user_id")
+    .eq("id", stickerId)
+    .maybeSingle();
+  if (!sticker?.id || sticker.user_id !== user.id) {
+    await ctx.reply(await getText(lang, "error.no_stickers_added"));
+    return;
+  }
+
+  const session = explicitSessionId ? await getSessionByIdForUser(user.id, explicitSessionId) : await getActiveSession(user.id);
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && session?.id && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "back_to_sticker_menu", "stale_callback");
+    return;
+  }
+
+  const replyMarkup = await buildStickerButtons(lang, stickerId, {
+    sessionId: session?.id || null,
+    sessionRev: Number(session?.session_rev || 1),
+  });
+  const menuText = await getText(lang, "edit.what_to_do");
+  const messageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+  const chatId = (ctx.callbackQuery as any)?.message?.chat?.id as number | undefined;
+  if (chatId && messageId) {
+    try {
+      await ctx.telegram.editMessageText(chatId, messageId, undefined, menuText, { reply_markup: replyMarkup });
+      return;
+    } catch (err: any) {
+      console.warn("[back_to_sticker_menu] edit failed, fallback to reply:", err?.message || err);
+    }
+  }
+  await ctx.reply(menuText, { reply_markup: replyMarkup });
 });
 
 // Callback: change motion (old format - fallback)
@@ -12358,7 +12474,7 @@ function getIdeaKeyboard(
   index: number,
   total: number,
   lang: string,
-  options?: { sessionId?: string | null; sessionRev?: number | null }
+  options?: { sessionId?: string | null; sessionRev?: number | null; backCallbackData?: string | null }
 ) {
   const generateText = lang === "ru" ? "🎨 Сгенерить (1💎)" : "🎨 Generate (1💎)";
   const nextText = lang === "ru" ? "➡️ Следующая" : "➡️ Next";
@@ -12374,6 +12490,9 @@ function getIdeaKeyboard(
     [{ text: customText, callback_data: "custom_idea" }],
     [{ text: doneText, callback_data: "idea_done" }],
   ];
+  if (options?.backCallbackData) {
+    buttons.push([{ text: lang === "ru" ? "↩️ Назад" : "↩️ Back", callback_data: options.backCallbackData }]);
+  }
 
   return { inline_keyboard: buttons };
 }
@@ -12417,9 +12536,18 @@ bot.action(/^pack_ideas:(.+)$/, async (ctx) => {
   }
   if (!session?.id) return;
 
-  // Show thinking message
+  // Reuse current message for submenu UX: edit in-place instead of sending a new message.
   const thinkingText = lang === "ru" ? "💡 Придумываю идеи для пака..." : "💡 Thinking of ideas for your pack...";
-  const thinkingMsg = await ctx.reply(thinkingText);
+  const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+  if (ctx.chat?.id && currentMessageId) {
+    try {
+      await ctx.telegram.editMessageText(ctx.chat.id, currentMessageId, undefined, thinkingText);
+    } catch {
+      await ctx.reply(thinkingText);
+    }
+  } else {
+    await ctx.reply(thinkingText);
+  }
 
   // Gather existing stickers context for deduplication
   const existingStickers: string[] = [];
@@ -12470,17 +12598,26 @@ bot.action(/^pack_ideas:(.+)$/, async (ctx) => {
     console.log("[PackIdeas] Session updated OK, ideas saved to DB");
   }
 
-  // Delete thinking message
-  try {
-    await ctx.deleteMessage(thinkingMsg.message_id);
-  } catch {}
-
   // Show first idea — embed idea data in callback_data for resilience
+  const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
+  const backCb = appendSessionRefIfFits(`back_to_sticker_menu:${stickerId}`, sessionRef);
   const text = formatIdeaMessage(ideas[0], 0, ideas.length, lang);
   const keyboard = getIdeaKeyboard(0, ideas.length, lang, {
     sessionId: session.id,
     sessionRev: session.session_rev,
+    backCallbackData: backCb,
   });
+  if (ctx.chat?.id && currentMessageId) {
+    try {
+      await ctx.telegram.editMessageText(ctx.chat.id, currentMessageId, undefined, text, {
+        parse_mode: "HTML",
+        reply_markup: keyboard,
+      });
+      return;
+    } catch (err: any) {
+      console.warn("[pack_ideas] edit first card failed, fallback to reply:", err?.message || err);
+    }
+  }
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
 });
 
@@ -12619,6 +12756,20 @@ bot.action(/^idea_next(?::(.+))?$/, async (ctx) => {
 
   if (nextIndex >= ideas.length) {
     const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
+    let backCb: string | null = null;
+    if (session.last_sticker_file_id) {
+      const { data: lastSticker } = await supabase
+        .from("stickers")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("telegram_file_id", session.last_sticker_file_id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (lastSticker?.id) {
+        backCb = appendSessionRefIfFits(`back_to_sticker_menu:${lastSticker.id}`, sessionRef);
+      }
+    }
     // All ideas shown
     const generated = ideas.filter((i: StickerIdea) => i.generated).length;
     const text = lang === "ru"
@@ -12632,6 +12783,7 @@ bot.action(/^idea_next(?::(.+))?$/, async (ctx) => {
           inline_keyboard: [
             [{ text: lang === "ru" ? "🔄 Новые идеи" : "🔄 More ideas", callback_data: appendSessionRefIfFits("idea_more", sessionRef) }],
             [{ text: lang === "ru" ? "📷 Новое фото" : "📷 New photo", callback_data: "new_photo" }],
+            ...(backCb ? [[{ text: lang === "ru" ? "↩️ Назад" : "↩️ Back", callback_data: backCb }]] : []),
           ],
         },
       });
@@ -12647,10 +12799,26 @@ bot.action(/^idea_next(?::(.+))?$/, async (ctx) => {
   if (idxErr) console.error("[idea_next] index update failed:", idxErr.message);
 
   // Edit current message with next idea
+  const sessionRef = formatCallbackSessionRef(session.id, session.session_rev);
+  let backCb: string | null = null;
+  if (session.last_sticker_file_id) {
+    const { data: lastSticker } = await supabase
+      .from("stickers")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("telegram_file_id", session.last_sticker_file_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lastSticker?.id) {
+      backCb = appendSessionRefIfFits(`back_to_sticker_menu:${lastSticker.id}`, sessionRef);
+    }
+  }
   const text = formatIdeaMessage(ideas[nextIndex], nextIndex, ideas.length, lang);
   const keyboard = getIdeaKeyboard(nextIndex, ideas.length, lang, {
     sessionId: session.id,
     sessionRev: session.session_rev,
+    backCallbackData: backCb,
   });
   console.log("[idea_next] Editing message with idea", nextIndex);
   try {
