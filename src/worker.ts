@@ -1804,39 +1804,6 @@ async function runJob(job: any) {
     await getAppConfig("gemini_model_style", "gemini-3-pro-image-preview");
   activeModel = primaryModel;
   console.log("Using model:", activeModel, "generationType:", generationType);
-  logLongValue("[GeminiDebug] source_file_url", sourceFileUrl);
-  if (replaceReferenceUrl) {
-    logLongValue("[GeminiDebug] replace_reference_url", replaceReferenceUrl);
-  }
-  logLongValue("[GeminiDebug] full_prompt_before_primary", promptForGeneration);
-  const preflightRequestMeta = {
-    sessionId: session.id,
-    jobId: job.id,
-    stage: "primary",
-    model: activeModel,
-    endpoint: getGeminiGenerateContentUrl(activeModel),
-    generationType,
-    source: {
-      fileId: sourceFileId,
-      filePath,
-      fileUrlLength: sourceFileUrl.length,
-      mimeType,
-      bytes: fileBuffer.length,
-      sha256: sourceSha256,
-    },
-    replaceReference: replaceReferenceBase64
-      ? {
-          fileId: session.current_photo_file_id,
-          filePath: replaceReferencePath,
-          fileUrlLength: replaceReferenceUrl?.length || 0,
-          mimeType: replaceReferenceMimeType,
-          bytes: replaceReferenceBuffer?.length || 0,
-          sha256: replaceReferenceSha256,
-        }
-      : null,
-  };
-  logLongValue("[GeminiDebug] request_meta_json", JSON.stringify(preflightRequestMeta));
-
   callGeminiImage = async (promptText: string, modelName: string, stage: string) => {
     if (isSingleFlowGeneration) {
       console.log("[single.gen.worker] model_call", {
@@ -1853,16 +1820,16 @@ async function runJob(job: any) {
             parts: [
               { text: promptText },
               {
-                inlineData: {
+                fileData: {
                   mimeType,
-                  data: base64,
+                  fileUri: sourceFileUrl,
                 },
               },
-              ...(generationType === "replace_subject" && replaceReferenceBase64
+              ...(generationType === "replace_subject" && replaceReferenceUrl
                 ? [{
-                    inlineData: {
+                    fileData: {
                       mimeType: replaceReferenceMimeType || "image/jpeg",
-                      data: replaceReferenceBase64,
+                      fileUri: replaceReferenceUrl,
                     },
                   }]
                 : []),
@@ -1879,61 +1846,34 @@ async function runJob(job: any) {
       sessionId: session.id,
       jobId: job.id,
       stage,
-      generationType,
-      inputImage: {
-        fileId: sourceFileId,
-        filePath,
-        mimeType,
-        bytes: fileBuffer.length,
-        sha256: sourceSha256,
-        inlineDataBase64Length: base64.length,
-        inlineDataBase64Preview: base64.slice(0, 64),
-        inlineDataBase64Suffix: base64.slice(-64),
-      },
-      replaceReferenceImage: replaceReferenceBase64
-        ? {
-            fileId: session.current_photo_file_id,
-            filePath: replaceReferencePath,
-            mimeType: replaceReferenceMimeType || "image/jpeg",
-            bytes: replaceReferenceBuffer?.length || 0,
-            sha256: replaceReferenceSha256,
-            inlineDataBase64Length: replaceReferenceBase64.length,
-            inlineDataBase64Preview: replaceReferenceBase64.slice(0, 64),
-            inlineDataBase64Suffix: replaceReferenceBase64.slice(-64),
-          }
-        : null,
-    };
-    const requestPreview = {
-      sessionId: session.id,
-      jobId: job.id,
-      stage,
       model: modelName,
       requestUrl,
       generationType,
       promptLength: promptText.length,
-      source: {
+      promptText,
+      inputImage: {
+        transport: "fileData",
         fileId: sourceFileId,
         filePath,
-        fileUrlLength: sourceFileUrl.length,
+        sourceFileUrl,
         mimeType,
         bytes: fileBuffer.length,
         sha256: sourceSha256,
       },
-      replaceReference: replaceReferenceBase64
+      replaceReferenceImage: replaceReferenceUrl
         ? {
+            transport: "fileData",
             fileId: session.current_photo_file_id,
             filePath: replaceReferencePath,
-            fileUrlLength: replaceReferenceUrl?.length || 0,
-            mimeType: replaceReferenceMimeType,
+            sourceFileUrl: replaceReferenceUrl,
+            mimeType: replaceReferenceMimeType || "image/jpeg",
             bytes: replaceReferenceBuffer?.length || 0,
             sha256: replaceReferenceSha256,
           }
         : null,
     };
-    logLongValue("[GeminiDebug] request_url", requestUrl);
-    logLongValue("[GeminiDebug] request_prompt", promptText);
+
     logLongValue("[GeminiDebug] request_image_payload_json", JSON.stringify(requestImagePayload));
-    logLongValue("[GeminiDebug] request_preview_json", JSON.stringify(requestPreview));
     const res = await axios.post(
       requestUrl,
       requestBody,
