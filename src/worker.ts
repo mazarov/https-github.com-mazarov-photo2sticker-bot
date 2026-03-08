@@ -245,24 +245,6 @@ function extractGeminiImageBase64(responseData: any): string | null {
   return null;
 }
 
-const STYLE_SAFETY_BLOCK = `[STYLE SAFETY]
-Use only safe, non-sexual content.
-Subject must be clearly adult-looking.
-No nudity, lingerie, underwear-only outfits, fetish elements, or suggestive posing.
-Keep normal everyday clothing and neutral-safe composition.`;
-
-function applyStyleSafetyPolicy(prompt: string): string {
-  const cleanPrompt = String(prompt || "").trim();
-  if (!cleanPrompt) return STYLE_SAFETY_BLOCK;
-  if (/\[STYLE SAFETY\]/i.test(cleanPrompt)) return cleanPrompt;
-  return `${STYLE_SAFETY_BLOCK}\n\n${cleanPrompt}`;
-}
-
-function isSafetyFinishReason(value: unknown): boolean {
-  const reason = String(value || "").toUpperCase();
-  return reason === "PROHIBITED_CONTENT" || reason === "SAFETY";
-}
-
 function sha256Hex(input: Buffer): string {
   return createHash("sha256").update(input).digest("hex");
 }
@@ -857,52 +839,39 @@ ${packTaskBlock}`
   const imageSize = await getAppConfig("gemini_image_size_pack", "1K");
   console.log("[PackPreview] Using model:", model, "imageSize:", imageSize);
 
-  const PACK_PREVIEW_GEMINI_MAX_ATTEMPTS = 3;
-  const PACK_PREVIEW_GEMINI_RETRY_DELAY_MS = 12000;
-
   let geminiRes: any = null;
   let lastErrorMsg = "";
-  for (let attempt = 1; attempt <= PACK_PREVIEW_GEMINI_MAX_ATTEMPTS; attempt++) {
-    try {
-      geminiRes = await axios.post(
-        getGeminiGenerateContentUrl(model),
-        {
-          contents: [{
-            role: "user",
-            parts: [
-              { text: prompt },
-              ...imageParts,
-            ],
-          }],
-          generationConfig: {
-            responseModalities: ["IMAGE"],
-            imageConfig: { aspectRatio: "1:1", imageSize },
-          },
+  try {
+    geminiRes = await axios.post(
+      getGeminiGenerateContentUrl(model),
+      {
+        contents: [{
+          role: "user",
+          parts: [
+            { text: prompt },
+            ...imageParts,
+          ],
+        }],
+        generationConfig: {
+          responseModalities: ["IMAGE"],
+          imageConfig: { aspectRatio: "1:1", imageSize },
         },
-        {
-          headers: { "x-goog-api-key": config.geminiApiKey },
-          timeout: 120000,
-        }
-      );
-      break;
-    } catch (err: any) {
-      lastErrorMsg = err.response?.data?.error?.message || err.message;
-      const status = err.response?.status;
-      const apiError = err.response?.data?.error;
-      console.error("[PackPreview] Gemini error (attempt " + attempt + "/" + PACK_PREVIEW_GEMINI_MAX_ATTEMPTS + "):", lastErrorMsg, status ? `[HTTP ${status}]` : "", apiError ? JSON.stringify(apiError) : "");
-      const isRetryable = /high demand|try again later/i.test(lastErrorMsg);
-      if (attempt < PACK_PREVIEW_GEMINI_MAX_ATTEMPTS && isRetryable) {
-        console.log("[PackPreview] Retrying in", PACK_PREVIEW_GEMINI_RETRY_DELAY_MS / 1000, "s...");
-        await new Promise((r) => setTimeout(r, PACK_PREVIEW_GEMINI_RETRY_DELAY_MS));
-      } else {
-        break;
+      },
+      {
+        headers: { "x-goog-api-key": config.geminiApiKey },
+        timeout: 120000,
       }
-    }
+    );
+  } catch (err: any) {
+    lastErrorMsg = err.response?.data?.error?.message || err.message;
+    const status = err.response?.status;
+    const apiError = err.response?.data?.error;
+    console.error("[PackPreview] Gemini error:", lastErrorMsg, status ? `[HTTP ${status}]` : "", apiError ? JSON.stringify(apiError) : "");
   }
 
   if (!geminiRes) {
     const errorMsg = lastErrorMsg || "Unknown error";
-    console.error("[PackPreview] Gemini failed after", PACK_PREVIEW_GEMINI_MAX_ATTEMPTS, "attempts");
+    console.error("[PackPreview] Gemini request failed");
 
     // Refund 1 credit
     await supabase
@@ -958,35 +927,7 @@ ${packTaskBlock}`
   let imageBase64 = extractGeminiImageBase64(geminiRes.data);
   if (!imageBase64) {
     const finishReason = geminiRes.data?.candidates?.[0]?.finishReason || "unknown";
-    console.warn("[PackPreview] Gemini returned no image on first attempt, retrying once. finishReason:", finishReason);
-    try {
-      const retryRes = await axios.post(
-        getGeminiGenerateContentUrl(model),
-        {
-          contents: [{
-            role: "user",
-            parts: [
-              { text: `${prompt}\n\n[RETRY]\nPrevious response had no image bytes. Return IMAGE output.` },
-              ...imageParts,
-            ],
-          }],
-          generationConfig: {
-            responseModalities: ["IMAGE"],
-            imageConfig: { aspectRatio: "1:1", imageSize },
-          },
-        },
-        {
-          headers: { "x-goog-api-key": config.geminiApiKey },
-          timeout: 120000,
-        }
-      );
-      imageBase64 = extractGeminiImageBase64(retryRes.data);
-      if (!imageBase64) {
-        console.error("[PackPreview] Retry also returned no image. Response:", JSON.stringify(retryRes.data, null, 2));
-      }
-    } catch (retryErr: any) {
-      console.error("[PackPreview] Retry failed:", retryErr?.response?.data || retryErr?.message || retryErr);
-    }
+    console.warn("[PackPreview] Gemini returned no image. finishReason:", finishReason);
   }
   if (!imageBase64) {
     console.error("[PackPreview] Gemini returned no image");
@@ -1653,9 +1594,6 @@ async function runJob(job: any) {
   if (selectedStyleRenderMode) {
     promptForGeneration = applyRenderModePolicy(promptForGeneration, selectedStyleRenderMode);
   }
-  if (generationType === "style") {
-    promptForGeneration = applyStyleSafetyPolicy(promptForGeneration);
-  }
   const isImportedSticker = Boolean(session.edit_sticker_file_id);
   if (isImportedSticker && (generationType === "emotion" || generationType === "motion")) {
     const changeType = generationType === "emotion" ? "emotion/facial expression" : "motion/body pose";
@@ -2098,54 +2036,24 @@ async function runJob(job: any) {
 
   if (!imageBase64) {
     const firstFinishReason = geminiRes.data?.candidates?.[0]?.finishReason || "unknown";
-    const prohibitedOnFirstTry = isSafetyFinishReason(firstFinishReason);
-    const retryBasePrompt =
-      generationType === "style" && prohibitedOnFirstTry
-        ? applyStyleSafetyPolicy(promptForGeneration)
-        : promptForGeneration;
-    const retryHint = prohibitedOnFirstTry
-      ? "[RETRY SAFETY]\nPrevious response was safety-blocked or returned no image. Keep output strictly non-sexual and policy-safe. Return IMAGE output (inlineData)."
-      : "[RETRY]\nPrevious response had no image bytes. Return IMAGE output (inlineData).";
-    const noImageRetryPrompt = `${retryBasePrompt}\n\n${retryHint}`;
-    console.warn("[Generation] No image from Gemini, retrying once. finishReason:", firstFinishReason);
-    try {
-      const retryNoImageRes = await callGeminiImage(noImageRetryPrompt, activeModel, "no_image_retry");
-      const retryBlockReason = retryNoImageRes.data?.promptFeedback?.blockReason;
-      if (!retryBlockReason) {
-        const retryImageBase64 = extractGeminiImageBase64(retryNoImageRes.data);
-        if (retryImageBase64) {
-          imageBase64 = retryImageBase64;
-          finalPromptUsed = noImageRetryPrompt;
-          console.log("[Generation] No-image retry succeeded");
-        } else {
-          console.error("[Generation] No-image retry still has no image. Response:", JSON.stringify(retryNoImageRes.data, null, 2));
-        }
-      } else {
-        console.warn("[Generation] No-image retry blocked:", retryBlockReason);
-      }
-    } catch (retryNoImageErr: any) {
-      console.error("[Generation] No-image retry failed:", retryNoImageErr?.response?.data || retryNoImageErr?.message || retryNoImageErr);
-    }
-
-    if (!imageBase64) {
-      console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
-      const geminiText = geminiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No text response";
-      await sendAlert({
-        type: "generation_failed",
-        message: "Gemini returned no image",
-        details: { 
-          user: `@${user?.username || telegramId}`,
-          sessionId: session.id, 
-          generationType,
-          styleGroup: session.selected_style_group || "-",
-          styleId: session.selected_style_id || "-",
-          userInput: (session.user_input || "").slice(0, 100),
-          finishReason: firstFinishReason,
-          geminiResponse: geminiText.slice(0, 200),
-        },
-      });
-      throw new Error("Gemini returned no image");
-    }
+    console.warn("[Generation] No image from Gemini. finishReason:", firstFinishReason);
+    console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
+    const geminiText = geminiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No text response";
+    await sendAlert({
+      type: "generation_failed",
+      message: "Gemini returned no image",
+      details: { 
+        user: `@${user?.username || telegramId}`,
+        sessionId: session.id, 
+        generationType,
+        styleGroup: session.selected_style_group || "-",
+        styleId: session.selected_style_id || "-",
+        userInput: (session.user_input || "").slice(0, 100),
+        finishReason: firstFinishReason,
+        geminiResponse: geminiText.slice(0, 200),
+      },
+    });
+    throw new Error("Gemini returned no image");
   }
 
   }
@@ -2166,7 +2074,7 @@ async function runJob(job: any) {
     );
 
     if (mismatch) {
-      console.warn("[subject-postcheck] mismatch detected, retrying once:", {
+      console.warn("[subject-postcheck] mismatch detected:", {
         sessionId: session.id,
         expectedMode: subjectProfile.subjectMode,
         detectedMode: detected.subjectMode,
@@ -2175,7 +2083,7 @@ async function runJob(job: any) {
 
       await sendAlert({
         type: "generation_failed",
-        message: "Subject postcheck mismatch on first output, retrying",
+        message: "Subject postcheck mismatch",
         details: {
           user: `@${user?.username || telegramId}`,
           sessionId: session.id,
@@ -2185,50 +2093,9 @@ async function runJob(job: any) {
           generationType,
         },
       });
-
-      const retryPrompt = `${promptForGeneration}\n\n[SUBJECT POSTCHECK RETRY]\nCRITICAL: Previous output had subject-count mismatch. Keep EXACT source subject count. Do NOT add or remove people.`;
-      let retryRes: any;
-      try {
-        if (!callGeminiImage) {
-          throw new Error("Gemini image caller not initialized for postcheck retry");
-        }
-        retryRes = await callGeminiImage(retryPrompt, activeModel, "postcheck_retry");
-      } catch (retryErr: any) {
-        const retryMsg = retryErr.response?.data?.error?.message || retryErr.message || "retry_failed";
-        throw new Error(`Subject postcheck retry failed: ${retryMsg}`);
-      }
-
-      const retryBlockReason = retryRes.data?.promptFeedback?.blockReason;
-      if (retryBlockReason) {
-        throw new Error(`Subject postcheck retry blocked: ${retryBlockReason}`);
-      }
-
-      const retryImageBase64 = extractGeminiImageBase64(retryRes.data);
-      if (!retryImageBase64) {
-        throw new Error("Subject postcheck retry returned no image");
-      }
-
-      const retryGeneratedBuffer = Buffer.from(retryImageBase64, "base64");
-      const retryDetected = await detectSubjectProfileFromImageBuffer(retryGeneratedBuffer, "image/png");
-      const retryMismatch = isSubjectPostcheckMismatch(
-        subjectProfile.subjectMode,
-        retryDetected.subjectMode,
-        retryDetected.subjectCount
+      throw new Error(
+        `Subject postcheck mismatch: expected=${subjectProfile.subjectMode} actual=${detected.subjectMode} count=${detected.subjectCount ?? "null"}`
       );
-      if (retryMismatch) {
-        throw new Error(
-          `Subject postcheck mismatch after retry: expected=${subjectProfile.subjectMode} actual=${retryDetected.subjectMode} count=${retryDetected.subjectCount ?? "null"}`
-        );
-      }
-
-      imageBase64 = retryImageBase64;
-      finalPromptUsed = retryPrompt;
-      console.log("[subject-postcheck] retry accepted:", {
-        sessionId: session.id,
-        expectedMode: subjectProfile.subjectMode,
-        detectedMode: retryDetected.subjectMode,
-        detectedCount: retryDetected.subjectCount,
-      });
     }
   }
 
