@@ -469,6 +469,7 @@ interface HolidayTheme {
 // Cache for style_presets_v2
 let stylePresetsV2Cache: { data: StylePresetV2[]; timestamp: number } | null = null;
 const STYLE_PRESETS_V2_CACHE_TTL = 5 * 60 * 1000;
+const stylePreviewMessageBySession = new Map<string, { chatId: number; messageId: number }>();
 
 async function getStylePresetsV2(groupId?: string): Promise<StylePresetV2[]> {
   const now = Date.now();
@@ -493,6 +494,12 @@ async function getStylePresetsV2(groupId?: string): Promise<StylePresetV2[]> {
 async function getStylePresetV2ById(id: string): Promise<StylePresetV2 | null> {
   const presets = await getStylePresetsV2();
   return presets.find(p => p.id === id) || null;
+}
+
+async function getDefaultStylePresetV2(): Promise<StylePresetV2 | null> {
+  const presets = await getStylePresetsV2();
+  if (!presets.length) return null;
+  return presets.find((preset) => (preset as any).is_default) || presets[0];
 }
 
 // Pick style for ideas: user's last style > default > random
@@ -8762,6 +8769,64 @@ bot.action("noop", async (ctx) => {
 // Styles v2 handlers (isolated, only for enabled users)
 // ============================================
 
+async function renderSingleFlowStyleScreen(
+  ctx: any,
+  lang: string,
+  session: any,
+  preset: StylePresetV2,
+  options?: {
+    menuMessageIdToDelete?: number;
+    extraButtons?: any[][];
+  }
+) {
+  const chatId = resolveTelegramChatId(ctx);
+  if (chatId && session?.id) {
+    const prev = stylePreviewMessageBySession.get(session.id);
+    if (prev?.chatId === chatId && prev.messageId) {
+      await ctx.telegram.deleteMessage(chatId, prev.messageId).catch(() => {});
+    }
+  }
+
+  if (chatId && options?.menuMessageIdToDelete) {
+    await ctx.telegram.deleteMessage(chatId, options.menuMessageIdToDelete).catch(() => {});
+  }
+
+  let previewMessageId: number | null = null;
+  try {
+    const fileId = await getStyleStickerFileId(preset.id);
+    if (fileId) {
+      const stickerMsg = await ctx.replyWithSticker(fileId);
+      previewMessageId = stickerMsg.message_id;
+    }
+  } catch (err: any) {
+    console.warn("[StylePreview] single-flow example send failed:", err?.message || err);
+  }
+  if (chatId && session?.id && previewMessageId) {
+    stylePreviewMessageBySession.set(session.id, { chatId, messageId: previewMessageId });
+  }
+
+  const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
+  const styleDescription = lang === "ru"
+    ? (preset.description_ru || preset.prompt_hint || "")
+    : (preset.description_ru || preset.prompt_hint || "");
+  const headerText = lang === "ru"
+    ? `${preset.emoji} Стиль: ${styleName}\n\n${styleDescription}\n\nВыбери стиль ниже или нажми «Попробовать с ${styleName}».`
+    : `${preset.emoji} Style: ${styleName}\n\n${styleDescription}\n\nPick another style below or tap “Try with ${styleName}”.`;
+
+  const sessionRef = formatCallbackSessionRef(session.id, Number(session.session_rev || 1));
+  const tryText = lang === "ru" ? `✅ Попробовать с ${styleName}` : `✅ Try with ${styleName}`;
+  const tryCallback = appendSessionRefIfFits(`style_v2:${preset.id}`, sessionRef);
+
+  await sendStyleKeyboardFlat(ctx, lang, undefined, {
+    headerText,
+    selectedStyleId: preset.id,
+    sessionId: session.id,
+    sessionRev: Number(session.session_rev || 1),
+    bottomButtons: [[{ text: tryText, callback_data: tryCallback }]],
+    extraButtons: options?.extraButtons,
+  });
+}
+
 // Callback: style group selected (v2)
 bot.action(/^style_group:(.+)$/, async (ctx) => {
   try {
@@ -8855,18 +8920,6 @@ bot.action(/^style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
         console.warn("[StylePreview] style_source_kind dropped due to schema cache mismatch");
       }
 
-      const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
-      const styleDescription = lang === "ru"
-        ? (preset.description_ru || preset.prompt_hint || "")
-        : (preset.description_ru || preset.prompt_hint || "");
-      const headerText = lang === "ru"
-        ? `${preset.emoji} Стиль: ${styleName}\n\n${styleDescription}\n\nВыбери стиль ниже или нажми «Попробовать с ${styleName}».`
-        : `${preset.emoji} Style: ${styleName}\n\n${styleDescription}\n\nPick another style below or tap “Try with ${styleName}”.`;
-
-      const sessionRef = formatCallbackSessionRef(session.id, nextRev);
-      const tryText = lang === "ru" ? `✅ Попробовать с ${styleName}` : `✅ Try with ${styleName}`;
-      const tryCallback = appendSessionRefIfFits(`style_v2:${preset.id}`, sessionRef);
-
       // Preserve only stable non-style rows (e.g. "Back to sticker").
       // Never preserve style callbacks, otherwise stale "Try with ..." rows duplicate.
       const currentRows = ((ctx.callbackQuery as any)?.message?.reply_markup?.inline_keyboard || []) as any[][];
@@ -8878,26 +8931,9 @@ bot.action(/^style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
         })
       );
 
-      // Required order: example sticker -> style text -> style grid -> "Try with ...".
       const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
-      if (currentMessageId) {
-        await ctx.telegram.deleteMessage(ctx.chat!.id, currentMessageId).catch(() => {});
-      }
-      try {
-        const fileId = await getStyleStickerFileId(preset.id);
-        if (fileId) {
-          await ctx.replyWithSticker(fileId);
-        }
-      } catch (err: any) {
-        console.warn("[StylePreview] single-flow example send failed:", err?.message || err);
-      }
-
-      await sendStyleKeyboardFlat(ctx, lang, undefined, {
-        headerText,
-        selectedStyleId: preset.id,
-        sessionId: session.id,
-        sessionRev: nextRev,
-        bottomButtons: [[{ text: tryText, callback_data: tryCallback }]],
+      await renderSingleFlowStyleScreen(ctx, lang, { ...session, session_rev: nextRev }, preset, {
+        menuMessageIdToDelete: currentMessageId,
         extraButtons: preservedRows,
       });
       return;
@@ -9029,6 +9065,11 @@ bot.action(/^style_v2:([^:]+)(?::(.+))?$/, async (ctx) => {
       return;
     }
     console.log("[Styles v2] Substyle selected:", styleId);
+    const previewMessage = stylePreviewMessageBySession.get(session.id);
+    if (previewMessage) {
+      await ctx.telegram.deleteMessage(previewMessage.chatId, previewMessage.messageId).catch(() => {});
+      stylePreviewMessageBySession.delete(session.id);
+    }
 
     const preset = await getStylePresetV2ById(styleId);
     if (!preset) {
@@ -9779,6 +9820,8 @@ bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
+  const defaultPreset = await getDefaultStylePresetV2();
+  const selectedStyleId = defaultPreset?.id || session.selected_style_id || null;
   const nextRev = (session.session_rev || 1) + 1;
   const { error: changeStyleUpdateErr, droppedStyleSourceKind } = await updateSessionWithStyleSourceFallback(
     session.id,
@@ -9794,6 +9837,7 @@ bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
       pending_generation_type: null,
       selected_emotion: null,
       emotion_prompt: null,
+      selected_style_id: selectedStyleId,
       session_rev: nextRev,
     }
   );
@@ -9809,14 +9853,19 @@ bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
   const sessionRef = formatCallbackSessionRef(session.id, nextRev);
   const backCb = appendSessionRefIfFits(`back_to_sticker_menu:${stickerId}`, sessionRef);
   const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
-  if (currentMessageId) {
-    await ctx.telegram.deleteMessage(ctx.chat!.id, currentMessageId).catch(() => {});
+  const backButtons = [[{ text: lang === "ru" ? "↩️ Назад" : "↩️ Back", callback_data: backCb }]];
+  if (defaultPreset) {
+    await renderSingleFlowStyleScreen(ctx, lang, { ...session, id: session.id, session_rev: nextRev }, defaultPreset, {
+      menuMessageIdToDelete: currentMessageId,
+      extraButtons: backButtons,
+    });
+    return;
   }
   await sendStyleKeyboardFlat(ctx, lang, undefined, {
-    selectedStyleId: session.selected_style_id || null,
+    selectedStyleId,
     sessionId: session.id,
     sessionRev: nextRev,
-    extraButtons: [[{ text: lang === "ru" ? "↩️ Назад" : "↩️ Back", callback_data: backCb }]],
+    extraButtons: backButtons,
   });
 });
 
@@ -10156,6 +10205,13 @@ bot.action(/^back_to_sticker_menu:([^:]+)(?::(.+))?$/, async (ctx) => {
   if (strictRevEnabled && session?.id && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
     await rejectSessionEvent(ctx, lang, "back_to_sticker_menu", "stale_callback");
     return;
+  }
+  if (session?.id) {
+    const previewMessage = stylePreviewMessageBySession.get(session.id);
+    if (previewMessage) {
+      await ctx.telegram.deleteMessage(previewMessage.chatId, previewMessage.messageId).catch(() => {});
+      stylePreviewMessageBySession.delete(session.id);
+    }
   }
 
   const replyMarkup = await buildStickerButtons(lang, stickerId, {
