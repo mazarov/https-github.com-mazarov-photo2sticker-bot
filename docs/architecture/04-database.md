@@ -287,7 +287,7 @@ wait_photo, wait_style, processing, canceled
 confirm_sticker, wait_emotion, wait_custom_emotion, processing_emotion,
 wait_custom_style, wait_text, processing_text, wait_text_overlay,
 assistant_wait_photo, assistant_wait_idea, assistant_chat, wait_assistant_confirm,
-wait_first_purchase, wait_buy_credit
+wait_first_purchase, wait_buy_credit, wait_replace_face
 ```
 
 ## RPC-функции
@@ -334,3 +334,7 @@ FOR UPDATE SKIP LOCKED — предотвращает двойную обраб�
 Миграция `124_facemint_replace_face.sql` добавляет:
 
 - `app_config.facemint_replace_face_enabled` (default `false`) для безопасного rollout нового face-swap провайдера.
+
+Миграция `126_wait_replace_face_state.sql` добавляет:
+
+- `session_state.wait_replace_face` — единое состояние flow замены лица (ожидание identity-фото и/или sticker reference).
