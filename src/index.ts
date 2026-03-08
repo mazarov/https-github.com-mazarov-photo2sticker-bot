@@ -1407,7 +1407,8 @@ async function ensureSubjectProfileForGeneration(
     const filePath = await getFilePath(sourceFileId);
     const fileBuffer = await downloadFile(filePath);
     const mimeType = getMimeTypeByTelegramPath(filePath);
-    const detected = await detectSubjectProfileFromImageBuffer(fileBuffer, mimeType);
+    const sourceFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
+    const detected = await detectSubjectProfileFromImageBuffer(fileBuffer, mimeType, sourceFileUrl);
 
     const subjectMode = detected.subjectMode;
     const nextProfile: SubjectProfile = {
@@ -12601,6 +12602,7 @@ async function generatePackIdeas(opts: {
   const fileBuffer = await downloadFile(filePath);
   const base64 = fileBuffer.toString("base64");
   const mimeType = filePath.endsWith(".webp") ? "image/webp" : filePath.endsWith(".png") ? "image/png" : "image/jpeg";
+  const sourceFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
 
   // Get style info
   let styleName = stylePresetId || "custom";
@@ -12775,9 +12777,9 @@ Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sar
             parts: [
               { text: "Analyze this sticker and generate 8 unique ideas for a sticker pack." },
               {
-                inlineData: {
+                fileData: {
                   mimeType,
-                  data: base64,
+                  fileUri: sourceFileUrl,
                 },
               },
             ],

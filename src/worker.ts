@@ -393,7 +393,8 @@ async function ensureSubjectProfileForSource(
   sourceFileId: string,
   sourceKind: SubjectSourceKind,
   sourceBuffer: Buffer,
-  sourceMime: string
+  sourceMime: string,
+  sourceFileUrl?: string | null
 ): Promise<SubjectProfile | null> {
   const profileEnabled = await isSubjectProfileEnabled();
   if (!profileEnabled) return null;
@@ -408,7 +409,7 @@ async function ensureSubjectProfileForSource(
     sourceKind,
     sourceFileId: sourceFileId.substring(0, 30) + "...",
   });
-  const detected = await detectSubjectProfileFromImageBuffer(sourceBuffer, sourceMime);
+  const detected = await detectSubjectProfileFromImageBuffer(sourceBuffer, sourceMime, sourceFileUrl || null);
 
   const nextProfile: SubjectProfile = {
     subjectMode: detected.subjectMode,
@@ -689,13 +690,20 @@ async function runPackPreviewJob(job: any) {
 
   const filePath = await getFilePath(photoFileId);
   const photoBuffer = await downloadFile(filePath);
-  const photoBase64 = photoBuffer.toString("base64");
+  const photoFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
   const photoMime = getMimeTypeByTelegramPath(filePath);
 
   const lockEnabled = await isSubjectLockEnabled();
   let packSubjectProfile = getSessionSubjectProfileForSource(session, photoFileId, "photo");
   if (!packSubjectProfile) {
-    packSubjectProfile = await ensureSubjectProfileForSource(session, photoFileId, "photo", photoBuffer, photoMime);
+    packSubjectProfile = await ensureSubjectProfileForSource(
+      session,
+      photoFileId,
+      "photo",
+      photoBuffer,
+      photoMime,
+      photoFileUrl
+    );
   }
   // Pack: one-character rule only in CRITICAL RULES FOR THE GRID; no SUBJECT LOCK block at start.
   const subjectLockBlock = "";
@@ -772,21 +780,22 @@ async function runPackPreviewJob(job: any) {
   }
 
   // Download collage/style reference image if available
-  let collageBase64: string | null = null;
+  let collageFileUrl: string | null = null;
   let collageMime = "image/png";
   if (template.collage_file_id || template.collage_url) {
     try {
-      let collageBuf: Buffer;
       if (template.collage_file_id) {
         const collagePath = await getFilePath(template.collage_file_id);
-        collageBuf = await downloadFile(collagePath);
+        collageFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${collagePath}`;
+        collageMime = getMimeTypeByTelegramPath(collagePath);
       } else {
-        const resp = await axios.get(template.collage_url, { responseType: "arraybuffer", timeout: 15000 });
-        collageBuf = Buffer.from(resp.data);
+        collageFileUrl = template.collage_url;
+        collageMime = template.collage_url?.endsWith(".png") ? "image/png" : "image/jpeg";
       }
-      collageBase64 = collageBuf.toString("base64");
-      collageMime = template.collage_url?.endsWith(".png") ? "image/png" : "image/jpeg";
-      console.log("[PackPreview] Collage loaded, size:", Math.round(collageBuf.length / 1024), "KB");
+      console.log("[PackPreview] Collage reference ready:", {
+        hasUrl: Boolean(collageFileUrl),
+        mime: collageMime,
+      });
     } catch (collageErr: any) {
       console.warn("[PackPreview] Failed to load collage, proceeding without:", collageErr.message);
     }
@@ -828,7 +837,7 @@ ${selectedStylePromptHint ? `0. STYLE (apply in every cell): ${selectedStyleProm
 9. FRAMING: All characters CHEST-UP (mid-torso to head). Head ~35–45% of cell height. Camera distance slightly closer than natural. Do NOT leave excessive "air" above the head; subject must dominate the frame while respecting padding. No full-body unless the pose requires it.
 10. EXPRESSION: Realistic and subtle. No exaggerated facial muscles, cartoon emotions, or staged poses. Emotion intensity ~60–70% of maximum. Character caught mid-action, not posing for a photo. Consistent camera distance across all cells.`;
 
-  const hasCollage = !!collageBase64;
+  const hasCollage = !!collageFileUrl;
   const prompt = hasCollage
     ? `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}[REFERENCE IMAGE]
 The first image is a reference pack. Match its visual style (rendering, proportions, colors). Do not add outlines, strokes, or borders around the character.
@@ -844,10 +853,10 @@ ${packTaskBlock}`
 
   // Build image parts for Gemini
   const imageParts: any[] = [];
-  if (collageBase64) {
-    imageParts.push({ inlineData: { mimeType: collageMime, data: collageBase64 } });
+  if (collageFileUrl) {
+    imageParts.push({ fileData: { mimeType: collageMime, fileUri: collageFileUrl } });
   }
-  imageParts.push({ inlineData: { mimeType: photoMime, data: photoBase64 } });
+  imageParts.push({ fileData: { mimeType: photoMime, fileUri: photoFileUrl } });
 
   // Call Gemini (model and output resolution from app_config)
   const model = await getAppConfig("gemini_model_pack", "gemini-2.5-flash-image");
@@ -1587,7 +1596,14 @@ async function runJob(job: any) {
   const lockEnabled = await isSubjectLockEnabled();
   let subjectProfile = getSessionSubjectProfileForSource(session, sourceFileId, sourceKind);
   if (!subjectProfile) {
-    subjectProfile = await ensureSubjectProfileForSource(session, sourceFileId, sourceKind, fileBuffer, mimeType);
+    subjectProfile = await ensureSubjectProfileForSource(
+      session,
+      sourceFileId,
+      sourceKind,
+      fileBuffer,
+      mimeType,
+      sourceFileUrl
+    );
   }
   let promptForGeneration =
     lockEnabled && subjectProfile
@@ -1650,7 +1666,7 @@ async function runJob(job: any) {
                   `Be very specific about colors (use hex if possible), positions (top/bottom/left/right), and sizes.\n` +
                   `Output a concise but complete description in 3-5 sentences.`,
               },
-              { inlineData: { mimeType, data: base64 } },
+              { fileData: { mimeType, fileUri: sourceFileUrl } },
             ],
           }],
         },
