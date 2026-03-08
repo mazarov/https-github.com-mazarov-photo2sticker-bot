@@ -94,7 +94,16 @@ export function resolveGenerationSource(
   session: any,
   generationType: "style" | "emotion" | "motion" | "text" | "replace_subject"
 ): { sourceFileId: string | null; sourceKind: SubjectSourceKind } {
-  if (generationType === "emotion" || generationType === "motion" || generationType === "text") {
+  const styleSourceKind = String(session?.style_source_kind || "").trim().toLowerCase() === "sticker"
+    ? "sticker"
+    : "photo";
+  if (generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject") {
+    return {
+      sourceFileId: session?.last_sticker_file_id || null,
+      sourceKind: "sticker",
+    };
+  }
+  if (generationType === "style" && styleSourceKind === "sticker") {
     return {
       sourceFileId: session?.last_sticker_file_id || null,
       sourceKind: "sticker",
@@ -508,7 +517,8 @@ const DETECTOR_MAX_ATTEMPTS = 2;
 
 export async function detectSubjectProfileFromImageBuffer(
   imageBuffer: Buffer,
-  mimeType: string
+  mimeType: string,
+  sourceFileUrl?: string | null
 ): Promise<{
   subjectMode: SubjectMode;
   subjectCount: number | null;
@@ -543,12 +553,19 @@ export async function detectSubjectProfileFromImageBuffer(
                 role: "user",
                 parts: [
                   { text: prompt },
-                  {
-                    inlineData: {
-                      mimeType,
-                      data: imageBuffer.toString("base64"),
-                    },
-                  },
+                  sourceFileUrl
+                    ? {
+                        fileData: {
+                          mimeType,
+                          fileUri: sourceFileUrl,
+                        },
+                      }
+                    : {
+                        inlineData: {
+                          mimeType,
+                          data: imageBuffer.toString("base64"),
+                        },
+                      },
                 ],
               },
             ],

@@ -2,6 +2,8 @@ import axios from "axios";
 import os from "os";
 import FormData from "form-data";
 import sharp from "sharp";
+import { createHash } from "crypto";
+import { execSync } from "child_process";
 import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
@@ -20,6 +22,7 @@ import {
   isSubjectModePackFilterEnabled,
   isSubjectPostcheckEnabled,
   isSubjectProfileEnabled,
+  resolveGenerationSource,
   normalizeSubjectMode,
   normalizeSubjectGender,
   normalizeSubjectSourceKind,
@@ -29,6 +32,19 @@ import {
 
 const geminiRoute = getGeminiRouteInfo();
 console.log("[GeminiRoute][Worker]", geminiRoute);
+
+function resolveRuntimeGitSha(): string {
+  const envSha = String(process.env.APP_GIT_SHA || process.env.GIT_SHA || "").trim();
+  if (envSha) return envSha;
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+    }).trim() || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
@@ -156,6 +172,7 @@ function getRetryReadyState(generationType?: string | null): string {
 
 const WORKER_ID = `${os.hostname()}-${process.pid}-${Date.now()}`;
 console.log(`Worker started: ${WORKER_ID}`);
+console.log("[Build][Worker] git_sha:", resolveRuntimeGitSha(), "app_env:", config.appEnv);
 if (!config.alertChannelId) {
   console.warn("[Config] Alert channel: NOT SET — set ALERT_CHANNEL_ID (or PROD_ALERT_CHANNEL_ID when APP_ENV=test). Pack/alerts will be skipped.");
 } else {
@@ -184,6 +201,53 @@ function getMimeTypeByTelegramPath(filePath: string): string {
   return "image/jpeg";
 }
 
+type RenderMode = "stylize" | "photoreal";
+
+function normalizeRenderMode(value: unknown): RenderMode {
+  return String(value || "").trim().toLowerCase() === "photoreal" ? "photoreal" : "stylize";
+}
+
+function buildRenderModePolicy(mode: RenderMode): string {
+  if (mode === "photoreal") {
+    return `[RENDER MODE: PHOTOREAL]
+Keep photorealistic rendering.
+Do NOT convert to illustration, cartoon, anime, manga, manhwa, chibi, 3D toon, or painterly style.
+Preserve natural skin texture, realistic lighting, camera-like details, and photo-like material appearance.`;
+  }
+  return `[RENDER MODE: STYLIZE]
+Apply STRONG style transfer to the target style.
+Keep identity (facial features/person) but DO NOT preserve source artistic rendering.
+Re-render the image fully in the target style language (linework, shading, proportions, color treatment).`;
+}
+
+function applyRenderModePolicy(prompt: string, mode: RenderMode): string {
+  const cleanPrompt = String(prompt || "").trim();
+  if (/\[RENDER MODE:\s*(PHOTOREAL|STYLIZE)\]/i.test(cleanPrompt)) {
+    return cleanPrompt;
+  }
+  const policy = buildRenderModePolicy(mode);
+  return cleanPrompt ? `${policy}\n\n${cleanPrompt}` : policy;
+}
+
+async function getStyleRenderMode(styleId?: string | null): Promise<RenderMode | null> {
+  if (!styleId) return null;
+  const { data, error } = await supabase
+    .from("style_presets_v2")
+    .select("render_mode")
+    .eq("id", styleId)
+    .maybeSingle();
+  if (error) {
+    const unknownColumn =
+      error.code === "42703" ||
+      /column .*render_mode/.test(String(error.message || "").toLowerCase());
+    if (!unknownColumn) {
+      console.warn("[style.render_mode] failed to fetch render_mode:", error.message);
+    }
+    return null;
+  }
+  return normalizeRenderMode((data as any)?.render_mode);
+}
+
 function extractGeminiImageBase64(responseData: any): string | null {
   const candidates = Array.isArray(responseData?.candidates) ? responseData.candidates : [];
   for (const candidate of candidates) {
@@ -194,6 +258,25 @@ function extractGeminiImageBase64(responseData: any): string | null {
     }
   }
   return null;
+}
+
+function sha256Hex(input: Buffer): string {
+  return createHash("sha256").update(input).digest("hex");
+}
+
+function logLongValue(tag: string, value: string, chunkSize = 900): void {
+  const text = String(value ?? "");
+  if (!text) {
+    console.log(`${tag}: <empty>`);
+    return;
+  }
+  const total = Math.ceil(text.length / chunkSize);
+  for (let i = 0; i < total; i++) {
+    const start = i * chunkSize;
+    const end = Math.min(start + chunkSize, text.length);
+    const part = text.slice(start, end);
+    console.log(`${tag} [part ${i + 1}/${total}]`, part);
+  }
 }
 
 function normalizePackSetSubjectMode(value: any): "single" | "multi" | "any" {
@@ -310,7 +393,8 @@ async function ensureSubjectProfileForSource(
   sourceFileId: string,
   sourceKind: SubjectSourceKind,
   sourceBuffer: Buffer,
-  sourceMime: string
+  sourceMime: string,
+  sourceFileUrl?: string | null
 ): Promise<SubjectProfile | null> {
   const profileEnabled = await isSubjectProfileEnabled();
   if (!profileEnabled) return null;
@@ -325,7 +409,7 @@ async function ensureSubjectProfileForSource(
     sourceKind,
     sourceFileId: sourceFileId.substring(0, 30) + "...",
   });
-  const detected = await detectSubjectProfileFromImageBuffer(sourceBuffer, sourceMime);
+  const detected = await detectSubjectProfileFromImageBuffer(sourceBuffer, sourceMime, sourceFileUrl || null);
 
   const nextProfile: SubjectProfile = {
     subjectMode: detected.subjectMode,
@@ -579,6 +663,7 @@ async function runPackPreviewJob(job: any) {
   let styleBlock = promptFinalRaw;
   let selectedStyleName = "";
   let selectedStylePromptHint = "";
+  const selectedStyleRenderMode = await getStyleRenderMode(session.selected_style_id || null);
   if (session.selected_style_id) {
     const { data: stylePreset } = await supabase
       .from("style_presets_v2")
@@ -605,19 +690,27 @@ async function runPackPreviewJob(job: any) {
 
   const filePath = await getFilePath(photoFileId);
   const photoBuffer = await downloadFile(filePath);
-  const photoBase64 = photoBuffer.toString("base64");
+  const photoFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
   const photoMime = getMimeTypeByTelegramPath(filePath);
 
   const lockEnabled = await isSubjectLockEnabled();
   let packSubjectProfile = getSessionSubjectProfileForSource(session, photoFileId, "photo");
   if (!packSubjectProfile) {
-    packSubjectProfile = await ensureSubjectProfileForSource(session, photoFileId, "photo", photoBuffer, photoMime);
+    packSubjectProfile = await ensureSubjectProfileForSource(
+      session,
+      photoFileId,
+      "photo",
+      photoBuffer,
+      photoMime,
+      photoFileUrl
+    );
   }
   // Pack: one-character rule only in CRITICAL RULES FOR THE GRID; no SUBJECT LOCK block at start.
   const subjectLockBlock = "";
   let styleBlockWithSubject = styleBlock;
   // For photo-realistic style: avoid "illustration" so the model outputs a photo, not a drawing
   const isPhotoRealisticStyle =
+    selectedStyleRenderMode === "photoreal" ||
     session.selected_style_id === "photo_realistic" ||
     /\bphoto-realistic\b|photo_realistic/i.test(styleBlock);
   if (isPhotoRealisticStyle) {
@@ -629,6 +722,9 @@ async function runPackPreviewJob(job: any) {
       styleBlockWithSubject +=
         "\n\nOutput MUST be a photograph, not a drawing, illustration, or stylized art.";
     }
+  }
+  if (selectedStyleRenderMode) {
+    styleBlockWithSubject = applyRenderModePolicy(styleBlockWithSubject, selectedStyleRenderMode);
   }
   const subjectModeForPrompt = packSubjectProfile?.subjectMode || normalizeSubjectMode(session.object_mode ?? session.subject_mode);
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
@@ -684,21 +780,22 @@ async function runPackPreviewJob(job: any) {
   }
 
   // Download collage/style reference image if available
-  let collageBase64: string | null = null;
+  let collageFileUrl: string | null = null;
   let collageMime = "image/png";
   if (template.collage_file_id || template.collage_url) {
     try {
-      let collageBuf: Buffer;
       if (template.collage_file_id) {
         const collagePath = await getFilePath(template.collage_file_id);
-        collageBuf = await downloadFile(collagePath);
+        collageFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${collagePath}`;
+        collageMime = getMimeTypeByTelegramPath(collagePath);
       } else {
-        const resp = await axios.get(template.collage_url, { responseType: "arraybuffer", timeout: 15000 });
-        collageBuf = Buffer.from(resp.data);
+        collageFileUrl = template.collage_url;
+        collageMime = template.collage_url?.endsWith(".png") ? "image/png" : "image/jpeg";
       }
-      collageBase64 = collageBuf.toString("base64");
-      collageMime = template.collage_url?.endsWith(".png") ? "image/png" : "image/jpeg";
-      console.log("[PackPreview] Collage loaded, size:", Math.round(collageBuf.length / 1024), "KB");
+      console.log("[PackPreview] Collage reference ready:", {
+        hasUrl: Boolean(collageFileUrl),
+        mime: collageMime,
+      });
     } catch (collageErr: any) {
       console.warn("[PackPreview] Failed to load collage, proceeding without:", collageErr.message);
     }
@@ -740,7 +837,7 @@ ${selectedStylePromptHint ? `0. STYLE (apply in every cell): ${selectedStyleProm
 9. FRAMING: All characters CHEST-UP (mid-torso to head). Head ~35–45% of cell height. Camera distance slightly closer than natural. Do NOT leave excessive "air" above the head; subject must dominate the frame while respecting padding. No full-body unless the pose requires it.
 10. EXPRESSION: Realistic and subtle. No exaggerated facial muscles, cartoon emotions, or staged poses. Emotion intensity ~60–70% of maximum. Character caught mid-action, not posing for a photo. Consistent camera distance across all cells.`;
 
-  const hasCollage = !!collageBase64;
+  const hasCollage = !!collageFileUrl;
   const prompt = hasCollage
     ? `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}[REFERENCE IMAGE]
 The first image is a reference pack. Match its visual style (rendering, proportions, colors). Do not add outlines, strokes, or borders around the character.
@@ -756,62 +853,49 @@ ${packTaskBlock}`
 
   // Build image parts for Gemini
   const imageParts: any[] = [];
-  if (collageBase64) {
-    imageParts.push({ inlineData: { mimeType: collageMime, data: collageBase64 } });
+  if (collageFileUrl) {
+    imageParts.push({ fileData: { mimeType: collageMime, fileUri: collageFileUrl } });
   }
-  imageParts.push({ inlineData: { mimeType: photoMime, data: photoBase64 } });
+  imageParts.push({ fileData: { mimeType: photoMime, fileUri: photoFileUrl } });
 
   // Call Gemini (model and output resolution from app_config)
   const model = await getAppConfig("gemini_model_pack", "gemini-2.5-flash-image");
   const imageSize = await getAppConfig("gemini_image_size_pack", "1K");
   console.log("[PackPreview] Using model:", model, "imageSize:", imageSize);
 
-  const PACK_PREVIEW_GEMINI_MAX_ATTEMPTS = 3;
-  const PACK_PREVIEW_GEMINI_RETRY_DELAY_MS = 12000;
-
   let geminiRes: any = null;
   let lastErrorMsg = "";
-  for (let attempt = 1; attempt <= PACK_PREVIEW_GEMINI_MAX_ATTEMPTS; attempt++) {
-    try {
-      geminiRes = await axios.post(
-        getGeminiGenerateContentUrl(model),
-        {
-          contents: [{
-            role: "user",
-            parts: [
-              { text: prompt },
-              ...imageParts,
-            ],
-          }],
-          generationConfig: {
-            responseModalities: ["IMAGE"],
-            imageConfig: { aspectRatio: "1:1", imageSize },
-          },
+  try {
+    geminiRes = await axios.post(
+      getGeminiGenerateContentUrl(model),
+      {
+        contents: [{
+          role: "user",
+          parts: [
+            { text: prompt },
+            ...imageParts,
+          ],
+        }],
+        generationConfig: {
+          responseModalities: ["IMAGE"],
+          imageConfig: { aspectRatio: "1:1", imageSize },
         },
-        {
-          headers: { "x-goog-api-key": config.geminiApiKey },
-          timeout: 120000,
-        }
-      );
-      break;
-    } catch (err: any) {
-      lastErrorMsg = err.response?.data?.error?.message || err.message;
-      const status = err.response?.status;
-      const apiError = err.response?.data?.error;
-      console.error("[PackPreview] Gemini error (attempt " + attempt + "/" + PACK_PREVIEW_GEMINI_MAX_ATTEMPTS + "):", lastErrorMsg, status ? `[HTTP ${status}]` : "", apiError ? JSON.stringify(apiError) : "");
-      const isRetryable = /high demand|try again later/i.test(lastErrorMsg);
-      if (attempt < PACK_PREVIEW_GEMINI_MAX_ATTEMPTS && isRetryable) {
-        console.log("[PackPreview] Retrying in", PACK_PREVIEW_GEMINI_RETRY_DELAY_MS / 1000, "s...");
-        await new Promise((r) => setTimeout(r, PACK_PREVIEW_GEMINI_RETRY_DELAY_MS));
-      } else {
-        break;
+      },
+      {
+        headers: { "x-goog-api-key": config.geminiApiKey },
+        timeout: 120000,
       }
-    }
+    );
+  } catch (err: any) {
+    lastErrorMsg = err.response?.data?.error?.message || err.message;
+    const status = err.response?.status;
+    const apiError = err.response?.data?.error;
+    console.error("[PackPreview] Gemini error:", lastErrorMsg, status ? `[HTTP ${status}]` : "", apiError ? JSON.stringify(apiError) : "");
   }
 
   if (!geminiRes) {
     const errorMsg = lastErrorMsg || "Unknown error";
-    console.error("[PackPreview] Gemini failed after", PACK_PREVIEW_GEMINI_MAX_ATTEMPTS, "attempts");
+    console.error("[PackPreview] Gemini request failed");
 
     // Refund 1 credit
     await supabase
@@ -867,35 +951,7 @@ ${packTaskBlock}`
   let imageBase64 = extractGeminiImageBase64(geminiRes.data);
   if (!imageBase64) {
     const finishReason = geminiRes.data?.candidates?.[0]?.finishReason || "unknown";
-    console.warn("[PackPreview] Gemini returned no image on first attempt, retrying once. finishReason:", finishReason);
-    try {
-      const retryRes = await axios.post(
-        getGeminiGenerateContentUrl(model),
-        {
-          contents: [{
-            role: "user",
-            parts: [
-              { text: `${prompt}\n\n[RETRY]\nPrevious response had no image bytes. Return IMAGE output.` },
-              ...imageParts,
-            ],
-          }],
-          generationConfig: {
-            responseModalities: ["IMAGE"],
-            imageConfig: { aspectRatio: "1:1", imageSize },
-          },
-        },
-        {
-          headers: { "x-goog-api-key": config.geminiApiKey },
-          timeout: 120000,
-        }
-      );
-      imageBase64 = extractGeminiImageBase64(retryRes.data);
-      if (!imageBase64) {
-        console.error("[PackPreview] Retry also returned no image. Response:", JSON.stringify(retryRes.data, null, 2));
-      }
-    } catch (retryErr: any) {
-      console.error("[PackPreview] Retry failed:", retryErr?.response?.data || retryErr?.message || retryErr);
-    }
+    console.warn("[PackPreview] Gemini returned no image. finishReason:", finishReason);
   }
   if (!imageBase64) {
     console.error("[PackPreview] Gemini returned no image");
@@ -1477,15 +1533,14 @@ async function runJob(job: any) {
     console.log("[single.gen.worker] job_start", singleTrace);
   }
 
-  const sourceFileId =
-    generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject"
-      ? session.last_sticker_file_id
-      : session.current_photo_file_id || photos[photos.length - 1];
+  const { sourceFileId, sourceKind } = resolveGenerationSource(session, generationType);
 
   // Debug logging for source file
   console.log("[Worker] Source file debug:", {
     generationType,
     sourceFileId: sourceFileId?.substring(0, 30) + "...",
+    styleSourceKind: session.style_source_kind || "photo(default)",
+    resolvedSourceKind: sourceKind,
     "session.current_photo_file_id": session.current_photo_file_id?.substring(0, 30) + "...",
     "session.last_sticker_file_id": session.last_sticker_file_id?.substring(0, 30) + "...",
     "photos.length": photos.length,
@@ -1499,19 +1554,27 @@ async function runJob(job: any) {
   await updateProgress(2);
   const filePath = await getFilePath(sourceFileId);
   const fileBuffer = await downloadFile(filePath);
+  const sourceFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
 
   const base64 = fileBuffer.toString("base64");
   const mimeType = getMimeTypeByTelegramPath(filePath);
+  const sourceSha256 = sha256Hex(fileBuffer);
   let replaceReferenceBase64: string | null = null;
   let replaceReferenceMimeType: string | null = null;
   let replaceReferenceBuffer: Buffer | null = null;
+  let replaceReferencePath: string | null = null;
+  let replaceReferenceUrl: string | null = null;
+  let replaceReferenceSha256: string | null = null;
   if (generationType === "replace_subject" && session.current_photo_file_id) {
     try {
       const refPath = await getFilePath(session.current_photo_file_id);
+      replaceReferencePath = refPath;
+      replaceReferenceUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${refPath}`;
       const refBuffer = await downloadFile(refPath);
       replaceReferenceBase64 = refBuffer.toString("base64");
       replaceReferenceMimeType = getMimeTypeByTelegramPath(refPath);
       replaceReferenceBuffer = refBuffer;
+      replaceReferenceSha256 = sha256Hex(refBuffer);
       console.log("[ReplaceSubject] loaded identity photo reference:", {
         hasRef: true,
         refMime: replaceReferenceMimeType,
@@ -1521,10 +1584,6 @@ async function runJob(job: any) {
       console.warn("[ReplaceSubject] failed to load identity photo, fallback to single input:", err?.message || err);
     }
   }
-  const sourceKind: SubjectSourceKind =
-    generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject"
-      ? "sticker"
-      : "photo";
   const facemintReplaceFaceEnabled = generationType === "replace_subject"
     ? isConfigEnabled(await getAppConfig("facemint_replace_face_enabled", "false"))
     : false;
@@ -1537,14 +1596,23 @@ async function runJob(job: any) {
   const lockEnabled = await isSubjectLockEnabled();
   let subjectProfile = getSessionSubjectProfileForSource(session, sourceFileId, sourceKind);
   if (!subjectProfile) {
-    subjectProfile = await ensureSubjectProfileForSource(session, sourceFileId, sourceKind, fileBuffer, mimeType);
+    subjectProfile = await ensureSubjectProfileForSource(
+      session,
+      sourceFileId,
+      sourceKind,
+      fileBuffer,
+      mimeType,
+      sourceFileUrl
+    );
   }
   let promptForGeneration =
     lockEnabled && subjectProfile
       ? appendSubjectLock(session.prompt_final || "", buildSubjectLockBlock(subjectProfile))
       : (session.prompt_final || "");
   // For photo-realistic style: avoid "illustration" so the model outputs a photo, not a drawing
+  const selectedStyleRenderMode = await getStyleRenderMode(session.selected_style_id || null);
   const isPhotoRealistic =
+    selectedStyleRenderMode === "photoreal" ||
     session.selected_style_id === "photo_realistic" ||
     /\bphoto-realistic\b|photo_realistic/i.test(promptForGeneration);
   if (isPhotoRealistic) {
@@ -1553,6 +1621,9 @@ async function runJob(job: any) {
       promptForGeneration +=
         "\n\nOutput MUST be a photograph, not a drawing, illustration, or stylized art.";
     }
+  }
+  if (selectedStyleRenderMode) {
+    promptForGeneration = applyRenderModePolicy(promptForGeneration, selectedStyleRenderMode);
   }
   const isImportedSticker = Boolean(session.edit_sticker_file_id);
   if (isImportedSticker && (generationType === "emotion" || generationType === "motion")) {
@@ -1595,7 +1666,7 @@ async function runJob(job: any) {
                   `Be very specific about colors (use hex if possible), positions (top/bottom/left/right), and sizes.\n` +
                   `Output a concise but complete description in 3-5 sentences.`,
               },
-              { inlineData: { mimeType, data: base64 } },
+              { fileData: { mimeType, fileUri: sourceFileUrl } },
             ],
           }],
         },
@@ -1747,19 +1818,8 @@ async function runJob(job: any) {
     generationType === "motion"  ? await getAppConfig("gemini_model_motion",  "gemini-2.5-flash-image") :
     generationType === "replace_subject" ? await getAppConfig("gemini_model_replace_face", "gemini-2.5-flash-image") :
     await getAppConfig("gemini_model_style", "gemini-3-pro-image-preview");
-  const fallbackModel: string | null = (() => {
-    // Style must also have a fallback because gemini-2.5-flash-image can return finishReason=OTHER with no inlineData.
-    const styleFallback: string = "gemini-3-pro-image-preview";
-    const altFallback: string = "gemini-2.5-flash-image";
-    if (generationType === "style") {
-      if (primaryModel !== styleFallback) return styleFallback;
-      return primaryModel !== altFallback ? altFallback : null;
-    }
-    return primaryModel !== styleFallback ? styleFallback : (primaryModel !== altFallback ? altFallback : null);
-  })();
   activeModel = primaryModel;
   console.log("Using model:", activeModel, "generationType:", generationType);
-
   callGeminiImage = async (promptText: string, modelName: string, stage: string) => {
     if (isSingleFlowGeneration) {
       console.log("[single.gen.worker] model_call", {
@@ -1769,25 +1829,23 @@ async function runJob(job: any) {
         promptLen: promptText.length,
       });
     }
-    const res = await axios.post(
-      getGeminiGenerateContentUrl(modelName),
-      {
+    const requestBody = {
         contents: [
           {
             role: "user",
             parts: [
               { text: promptText },
               {
-                inlineData: {
+                fileData: {
                   mimeType,
-                  data: base64,
+                  fileUri: sourceFileUrl,
                 },
               },
-              ...(generationType === "replace_subject" && replaceReferenceBase64
+              ...(generationType === "replace_subject" && replaceReferenceUrl
                 ? [{
-                    inlineData: {
+                    fileData: {
                       mimeType: replaceReferenceMimeType || "image/jpeg",
-                      data: replaceReferenceBase64,
+                      fileUri: replaceReferenceUrl,
                     },
                   }]
                 : []),
@@ -1798,7 +1856,43 @@ async function runJob(job: any) {
           responseModalities: ["IMAGE", "TEXT"],
           imageConfig: { aspectRatio: "1:1" },
         },
+      };
+    const requestUrl = getGeminiGenerateContentUrl(modelName);
+    const requestImagePayload = {
+      sessionId: session.id,
+      jobId: job.id,
+      stage,
+      model: modelName,
+      requestUrl,
+      generationType,
+      promptLength: promptText.length,
+      promptText,
+      inputImage: {
+        transport: "fileData",
+        fileId: sourceFileId,
+        filePath,
+        sourceFileUrl,
+        mimeType,
+        bytes: fileBuffer.length,
+        sha256: sourceSha256,
       },
+      replaceReferenceImage: replaceReferenceUrl
+        ? {
+            transport: "fileData",
+            fileId: session.current_photo_file_id,
+            filePath: replaceReferencePath,
+            sourceFileUrl: replaceReferenceUrl,
+            mimeType: replaceReferenceMimeType || "image/jpeg",
+            bytes: replaceReferenceBuffer?.length || 0,
+            sha256: replaceReferenceSha256,
+          }
+        : null,
+    };
+
+    logLongValue("[GeminiDebug] request_image_payload_json", JSON.stringify(requestImagePayload));
+    const res = await axios.post(
+      requestUrl,
+      requestBody,
       {
         headers: { "x-goog-api-key": config.geminiApiKey },
       }
@@ -1913,83 +2007,24 @@ async function runJob(job: any) {
 
   if (!imageBase64) {
     const firstFinishReason = geminiRes.data?.candidates?.[0]?.finishReason || "unknown";
-    const noImageRetryPrompt =
-      `${promptForGeneration}\n\n[RETRY]\nPrevious response had no image bytes. Return IMAGE output (inlineData).`;
-    console.warn("[Generation] No image from Gemini, retrying once. finishReason:", firstFinishReason);
-    try {
-      const retryNoImageRes = await callGeminiImage(noImageRetryPrompt, activeModel, "no_image_retry");
-      const retryBlockReason = retryNoImageRes.data?.promptFeedback?.blockReason;
-      if (!retryBlockReason) {
-        const retryImageBase64 = extractGeminiImageBase64(retryNoImageRes.data);
-        if (retryImageBase64) {
-          imageBase64 = retryImageBase64;
-          finalPromptUsed = noImageRetryPrompt;
-          console.log("[Generation] No-image retry succeeded");
-        } else {
-          console.error("[Generation] No-image retry still has no image. Response:", JSON.stringify(retryNoImageRes.data, null, 2));
-        }
-      } else {
-        console.warn("[Generation] No-image retry blocked:", retryBlockReason);
-      }
-    } catch (retryNoImageErr: any) {
-      console.error("[Generation] No-image retry failed:", retryNoImageErr?.response?.data || retryNoImageErr?.message || retryNoImageErr);
-    }
-
-    // Fallback model for emotion/motion/text when primary model repeatedly returns finishReason OTHER with no image.
-    if (!imageBase64 && fallbackModel && fallbackModel !== activeModel) {
-      console.warn("[Generation] Switching to fallback model after no-image retries:", {
+    console.warn("[Generation] No image from Gemini. finishReason:", firstFinishReason);
+    console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
+    const geminiText = geminiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No text response";
+    await sendAlert({
+      type: "generation_failed",
+      message: "Gemini returned no image",
+      details: { 
+        user: `@${user?.username || telegramId}`,
+        sessionId: session.id, 
         generationType,
-        primaryModel: activeModel,
-        fallbackModel,
-      });
-      activeModel = fallbackModel;
-      try {
-        const fallbackRes = await callGeminiImage(promptForGeneration, activeModel, "fallback_primary_prompt");
-        const fallbackBlockReason = fallbackRes.data?.promptFeedback?.blockReason;
-        if (!fallbackBlockReason) {
-          const fallbackImageBase64 = extractGeminiImageBase64(fallbackRes.data);
-          if (fallbackImageBase64) {
-            imageBase64 = fallbackImageBase64;
-            console.log("[Generation] Fallback model produced image");
-          } else {
-            console.error("[Generation] Fallback model still returned no image. Response:", JSON.stringify(fallbackRes.data, null, 2));
-          }
-        } else {
-          console.warn("[Generation] Fallback model blocked:", fallbackBlockReason);
-        }
-      } catch (fallbackErr: any) {
-        console.error("[Generation] Fallback model request failed:", fallbackErr?.response?.data || fallbackErr?.message || fallbackErr);
-        if (isSingleFlowGeneration) {
-          console.error("[single.gen.worker] model_error", {
-            ...singleTrace,
-            stage: "fallback",
-            model: activeModel,
-            status: fallbackErr?.response?.status || null,
-            message: fallbackErr?.message || "unknown_error",
-          });
-        }
-      }
-    }
-
-    if (!imageBase64) {
-      console.error("Gemini response:", JSON.stringify(geminiRes.data, null, 2));
-      const geminiText = geminiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No text response";
-      await sendAlert({
-        type: "generation_failed",
-        message: "Gemini returned no image",
-        details: { 
-          user: `@${user?.username || telegramId}`,
-          sessionId: session.id, 
-          generationType,
-          styleGroup: session.selected_style_group || "-",
-          styleId: session.selected_style_id || "-",
-          userInput: (session.user_input || "").slice(0, 100),
-          finishReason: firstFinishReason,
-          geminiResponse: geminiText.slice(0, 200),
-        },
-      });
-      throw new Error("Gemini returned no image");
-    }
+        styleGroup: session.selected_style_group || "-",
+        styleId: session.selected_style_id || "-",
+        userInput: (session.user_input || "").slice(0, 100),
+        finishReason: firstFinishReason,
+        geminiResponse: geminiText.slice(0, 200),
+      },
+    });
+    throw new Error("Gemini returned no image");
   }
 
   }
@@ -2010,7 +2045,7 @@ async function runJob(job: any) {
     );
 
     if (mismatch) {
-      console.warn("[subject-postcheck] mismatch detected, retrying once:", {
+      console.warn("[subject-postcheck] mismatch detected:", {
         sessionId: session.id,
         expectedMode: subjectProfile.subjectMode,
         detectedMode: detected.subjectMode,
@@ -2019,7 +2054,7 @@ async function runJob(job: any) {
 
       await sendAlert({
         type: "generation_failed",
-        message: "Subject postcheck mismatch on first output, retrying",
+        message: "Subject postcheck mismatch",
         details: {
           user: `@${user?.username || telegramId}`,
           sessionId: session.id,
@@ -2029,50 +2064,9 @@ async function runJob(job: any) {
           generationType,
         },
       });
-
-      const retryPrompt = `${promptForGeneration}\n\n[SUBJECT POSTCHECK RETRY]\nCRITICAL: Previous output had subject-count mismatch. Keep EXACT source subject count. Do NOT add or remove people.`;
-      let retryRes: any;
-      try {
-        if (!callGeminiImage) {
-          throw new Error("Gemini image caller not initialized for postcheck retry");
-        }
-        retryRes = await callGeminiImage(retryPrompt, activeModel, "postcheck_retry");
-      } catch (retryErr: any) {
-        const retryMsg = retryErr.response?.data?.error?.message || retryErr.message || "retry_failed";
-        throw new Error(`Subject postcheck retry failed: ${retryMsg}`);
-      }
-
-      const retryBlockReason = retryRes.data?.promptFeedback?.blockReason;
-      if (retryBlockReason) {
-        throw new Error(`Subject postcheck retry blocked: ${retryBlockReason}`);
-      }
-
-      const retryImageBase64 = extractGeminiImageBase64(retryRes.data);
-      if (!retryImageBase64) {
-        throw new Error("Subject postcheck retry returned no image");
-      }
-
-      const retryGeneratedBuffer = Buffer.from(retryImageBase64, "base64");
-      const retryDetected = await detectSubjectProfileFromImageBuffer(retryGeneratedBuffer, "image/png");
-      const retryMismatch = isSubjectPostcheckMismatch(
-        subjectProfile.subjectMode,
-        retryDetected.subjectMode,
-        retryDetected.subjectCount
+      throw new Error(
+        `Subject postcheck mismatch: expected=${subjectProfile.subjectMode} actual=${detected.subjectMode} count=${detected.subjectCount ?? "null"}`
       );
-      if (retryMismatch) {
-        throw new Error(
-          `Subject postcheck mismatch after retry: expected=${subjectProfile.subjectMode} actual=${retryDetected.subjectMode} count=${retryDetected.subjectCount ?? "null"}`
-        );
-      }
-
-      imageBase64 = retryImageBase64;
-      finalPromptUsed = retryPrompt;
-      console.log("[subject-postcheck] retry accepted:", {
-        sessionId: session.id,
-        expectedMode: subjectProfile.subjectMode,
-        detectedMode: retryDetected.subjectMode,
-        detectedCount: retryDetected.subjectCount,
-      });
     }
   }
 
@@ -2084,14 +2078,13 @@ async function runJob(job: any) {
   await updateProgress(5);
 
   const skipBgRemoval =
-    (isImportedSticker && (generationType === "emotion" || generationType === "motion"))
-    || (usedFacemintReplaceFace && generationType === "replace_subject");
+    isImportedSticker && (generationType === "emotion" || generationType === "motion");
   let noBgBuffer: Buffer | undefined;
 
   if (skipBgRemoval) {
     console.log("[bgRemoval] SKIPPED — preserving original background", {
       generationType,
-      reason: usedFacemintReplaceFace ? "facemint_replace_subject" : "imported_sticker_edit",
+      reason: "imported_sticker_edit",
     });
     noBgBuffer = generatedBuffer;
   } else {
@@ -2243,6 +2236,7 @@ async function runJob(job: any) {
   console.log("onboarding_step:", onboardingStep, "isOnboardingFirstSticker:", isOnboardingFirstSticker, "isOnboardingEmotion:", isOnboardingEmotion);
 
   const addToPackText = await getText(lang, "btn.add_to_pack");
+  const changeStyleText = await getText(lang, "btn.change_style");
   const changeEmotionText = lang === "ru" ? "😊 Эмоция" : await getText(lang, "btn.change_emotion");
   const changeMotionText = lang === "ru" ? "🏃 Движение" : await getText(lang, "btn.change_motion");
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
@@ -2255,6 +2249,7 @@ async function runJob(job: any) {
   const replyMarkup = {
     inline_keyboard: [
       [{ text: addToPackText, callback_data: stickerId ? `add_to_pack:${stickerId}` : "add_to_pack" }],
+      [{ text: changeStyleText, callback_data: stickerId ? `change_style:${stickerId}` : "change_style" }],
       [
         { text: changeEmotionText, callback_data: stickerId ? `change_emotion:${stickerId}` : "change_emotion" },
         { text: changeMotionText, callback_data: stickerId ? `change_motion:${stickerId}` : "change_motion" },
@@ -2301,15 +2296,10 @@ async function runJob(job: any) {
     console.log("onboarding_step updated to", newStep);
   }
 
-  // Post-generation CTA: show after first sticker (both assistant and manual mode)
-  // Only for style generation (not emotion/motion iterations)
+  // Post-generation onboarding CTA is disabled.
+  // Keep onboarding completion behavior without sending extra text.
   if (!isAvatarDemo && onboardingStep <= 1 && generationType === "style" && stickerId) {
-    const onboardingText = lang === "ru"
-      ? "👇 Попробуй прямо сейчас:\n😊 **Изменить эмоцию** — сделай грустного, злого, влюблённого\n🏃 **Добавить движение** — танец, прыжок, бег\n💡 **Идеи для пака** — AI подберёт идеи для целого стикерпака!"
-      : "👇 Try it now:\n😊 **Change emotion** — make it sad, angry, in love\n🏃 **Add motion** — dance, jump, run\n💡 **Pack ideas** — AI will suggest ideas for a whole sticker pack!";
-    
-    await sendMessage(telegramId, onboardingText);
-    console.log("post-generation CTA sent, onboardingStep:", onboardingStep);
+    console.log("post-generation CTA skipped, onboardingStep:", onboardingStep);
 
     // Mark onboarding complete
     if (onboardingStep < 2) {

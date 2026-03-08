@@ -11,12 +11,9 @@
 ```mermaid
 stateDiagram-v2
     [*] --> wait_pack_carousel: /start (default entrypoint)
-    [*] --> assistant_wait_photo: legacy assistant entry (скрытая кнопка/текст)
-    [*] --> assistant_wait_idea: legacy assistant entry (есть last_photo_file_id)
-    assistant_wait_photo --> assistant_wait_idea: Фото получено
-    assistant_wait_idea --> assistant_chat: Пропустить идеи / skip
-    assistant_wait_idea --> processing: Сгенерировать идею
-    assistant_wait_idea --> wait_style: Сменить стиль
+    [*] --> assistant_wait_photo: Создать стикер (нет фото)
+    [*] --> wait_style: Создать стикер (есть last_photo_file_id)
+    assistant_wait_photo --> wait_style: Фото получено
     assistant_chat --> processing: Параметры собраны + confirm
 
     [*] --> wait_photo: Ручной режим
@@ -45,15 +42,14 @@ stateDiagram-v2
 | Состояние | Описание |
 |-----------|----------|
 | `assistant_wait_photo` | Ассистент ждёт фото от пользователя |
-| `assistant_wait_idea` | Показаны идеи стикеров — пользователь может сгенерировать, пропустить или сменить стиль |
 | `assistant_chat` | Активный диалог с ассистентом (сбор стиля/эмоции/позы) |
 | `wait_photo` | Ручной режим — ждём фото |
 | `wait_style` | Фото есть — ждём выбор стиля (карусель) |
-| `wait_custom_style_v2` | Ждём текстовое описание своего стиля |
 | `wait_emotion` | Ждём выбор эмоции |
 | `wait_custom_emotion` | Ждём текстовое описание своей эмоции |
 | `wait_custom_motion` | Ждём текстовое описание своего движения |
 | `wait_text_overlay` | Ждём текст для наложения на стикер |
+| `wait_replace_face` | Unified flow замены лица: ждём фото и/или стикер-референс |
 | `wait_first_purchase` | Paywall — новый пользователь, первая покупка |
 | `wait_buy_credit` | Paywall — нужны кредиты |
 | `processing` | Генерация стикера (стиль) |
@@ -107,7 +103,7 @@ flowchart TD
 
     CHECK_STATE -->|assistant_chat| UPDATE_PHOTO[Обновить фото<br/>уведомить ассистента]
     CHECK_STATE -->|assistant_wait_photo| HAS_ASESSION{Есть assistant_session?}
-    HAS_ASESSION -->|Да| ASSISTANT_FLOW[Сохранить фото<br/>→ assistant_wait_idea<br/>показать идеи]
+    HAS_ASESSION -->|Да| ASSISTANT_FLOW[Сохранить фото<br/>→ wait_style<br/>показать выбор стиля]
     HAS_ASESSION -->|Нет| FALLBACK[Сбросить в wait_photo<br/>→ ручной режим]
 
     CHECK_STATE -->|другое| REROUTE{Есть активный<br/>assistant?}
@@ -116,7 +112,7 @@ flowchart TD
 ```
 
 Дополнительно для активных flow:
-- `assistant_chat` и `assistant_wait_idea`: новое фото не ломает flow, бот спрашивает "новое или текущее фото" (`assistant_new_photo` / `assistant_keep_photo`).
+- `assistant_chat` и `wait_style`: новое фото не ломает flow, бот спрашивает "новое или текущее фото" (`assistant_new_photo` / `assistant_keep_photo` для assistant_chat; `single_new_photo` / `single_keep_photo` для wait_style).
 - `wait_pack_preview_payment` и `wait_pack_approval`: аналогичный выбор для pack flow (`pack_new_photo` / `pack_keep_photo`) с продолжением pack-сценария.
 
 ### Обработка текста (`bot.on("text")`)
@@ -124,7 +120,7 @@ flowchart TD
 Маршрутизация по `session.state`:
 - `assistant_wait_photo` → AI чат (пользователь может описывать цель до фото)
 - `assistant_chat` → AI чат (основной диалог)
-- `wait_custom_style_v2` → Приём описания стиля → генерация
+- `wait_style` + текст -> текстовый стиль отключён, бот возвращает пользователя к preset-кнопкам выбора стиля
 - `wait_custom_emotion` → Приём описания эмоции → генерация
 - `wait_custom_motion` → Приём описания движения → генерация
 - `wait_text_overlay` → Наложение текста на стикер (без AI)
@@ -180,7 +176,7 @@ flowchart TD
 - `pack_regenerate:SESSION_ID[:REV]` — перегенерировать preview (1 кредит)
 - `pack_cancel:SESSION_ID[:REV]` — отменить pack flow
 
-#### Идеи стикеров (ассистент, assistant_wait_idea)
+#### Идеи стикеров (legacy, assistant_wait_idea — шаг «идея» удалён, flow переведён на выбор стиля)
 - `asst_idea_gen:INDEX[:SESSION_ID[:REV]]` — сгенерировать выбранную идею
 - `asst_idea_next:INDEX[:SESSION_ID[:REV]]` — следующая идея
 - `asst_idea_restyle:STYLE_ID:INDEX[:SESSION_ID[:REV]]` — сменить стиль
@@ -214,9 +210,19 @@ flowchart TD
 - Источник "рабочего фото" централизован: `session.current_photo_file_id || user.last_photo_file_id`.
 
 ### Subject/Object Profile Contract (phase 1 -> v2 compatible)
-- Перед генерацией API определяет source по `generation_type`:
-  - `style` -> `current_photo_file_id` (photo),
+- Перед генерацией API определяет source через общий resolver `resolveGenerationSource(...)`:
+  - `style` -> зависит от `sessions.style_source_kind`:
+    - `photo` -> `current_photo_file_id`,
+    - `sticker` -> `last_sticker_file_id`;
   - `emotion`/`motion`/`text` -> `last_sticker_file_id` (sticker).
+- Маршрутизация style-source:
+  - стиль из меню действий/по фото -> `style_source_kind=photo`,
+  - стиль из карточки готового стикера (`change_style:ID`) -> `style_source_kind=sticker`.
+- Для sticker-target callbacks (`change_style|change_emotion|change_motion`) photo-context нормализуется через единый resolver:
+  - если `stickers.source_photo_file_id` выглядит как Telegram photo (`AgAC...`) — берём его;
+  - иначе берём fallback `users.last_photo_file_id` (или текущий `sessions.current_photo_file_id`);
+  - в `sessions.photos` хранится нормализованный список из одного активного фото (`[current_photo_file_id]`), а второе значение допускается только как временный `pending_photo_file_id` во время confirm-сценария "new vs keep photo".
+- Для sticker callback с `SESSION_ID:REV` используется strict stale-check (`strict_session_rev_enabled`), чтобы старые inline-кнопки не перезаписывали актуальный photo/sticker context.
 - При включенном `subject_profile_enabled` API сохраняет в `sessions` профиль субъекта:
   `subject_mode`, `subject_count`, `subject_confidence`, `subject_source_file_id`, `subject_source_kind`, `subject_detected_at`.
 - При наличии object-v2 колонок API делает dual-write в `object_*` с fallback на legacy `subject_*`.
@@ -232,7 +238,7 @@ flowchart TD
 
 ### `startAssistantDialog(ctx, user, lang)`
 Инициализирует AI-ассистента. Закрывает старые сессии, создаёт новую.
-Если есть `last_photo_file_id` — создаёт сессию в `assistant_wait_idea` и сразу показывает идеи стикеров. Иначе — `assistant_wait_photo`.
+Если есть `last_photo_file_id` — создаёт сессию в `wait_style` и сразу показывает выбор стиля. Иначе — `assistant_wait_photo`.
 Сейчас не используется как default entrypoint из `/start` (вход по умолчанию переведен в pack flow).
 
 ### `handlePackMenuEntry(ctx, options?)`
@@ -297,6 +303,14 @@ flowchart TD
 - API создаёт новую single-session в состоянии `wait_edit_sticker`.
 - Отдельный `bot.on("sticker")` handler принимает статичный Telegram sticker, сохраняет его как импортированный record в `stickers` и переводит session в `wait_edit_action`.
 - Под импортированным стикером показываются стандартные кнопки (`change_emotion`, `change_motion`, `toggle_border`, `add_text`) + новая `replace_face`.
-- Callback `replace_face:<stickerId>`:
-  - если в сессии/пользователе нет рабочего фото -> state `wait_edit_photo` и запросить фото;
-  - если фото есть -> выставить `current_photo_file_id` (identity), `last_sticker_file_id` (pose/style reference) и запустить `startGeneration(..., generationType="replace_subject")`.
+- Callback `replace_face:<stickerId>` переводит в единый flow `wait_replace_face`:
+  - сохраняется `edit_replace_sticker_id` (целевой стикер);
+  - бот всегда просит фото identity;
+  - после фото generation `replace_subject` запускается сразу (без промежуточных кнопок).
+
+## Replace Face (unified flow)
+
+- Entry A: `action_replace_face` (из меню действий по фото) → `wait_replace_face` → бот просит фото → затем просит стикер.
+- Entry B: `replace_face:<stickerId>` (из меню под стикером) → `wait_replace_face` с заполненным `edit_replace_sticker_id` → бот просит фото.
+- После получения обоих входов (identity photo + sticker reference) запускается `startGeneration(..., generationType="replace_subject")`.
+- Source of truth: одно состояние `wait_replace_face`, без разветвления по `wait_edit_photo`/`wait_replace_face_sticker`.
