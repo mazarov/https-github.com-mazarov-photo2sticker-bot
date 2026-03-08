@@ -1922,6 +1922,34 @@ async function runJob(job: any) {
         },
       };
     const requestUrl = getGeminiGenerateContentUrl(modelName);
+    const requestImagePayload = {
+      sessionId: session.id,
+      jobId: job.id,
+      stage,
+      generationType,
+      inputImage: {
+        fileId: sourceFileId,
+        filePath,
+        mimeType,
+        bytes: fileBuffer.length,
+        sha256: sourceSha256,
+        inlineDataBase64Length: base64.length,
+        inlineDataBase64Preview: base64.slice(0, 64),
+        inlineDataBase64Suffix: base64.slice(-64),
+      },
+      replaceReferenceImage: replaceReferenceBase64
+        ? {
+            fileId: session.current_photo_file_id,
+            filePath: replaceReferencePath,
+            mimeType: replaceReferenceMimeType || "image/jpeg",
+            bytes: replaceReferenceBuffer?.length || 0,
+            sha256: replaceReferenceSha256,
+            inlineDataBase64Length: replaceReferenceBase64.length,
+            inlineDataBase64Preview: replaceReferenceBase64.slice(0, 64),
+            inlineDataBase64Suffix: replaceReferenceBase64.slice(-64),
+          }
+        : null,
+    };
     const requestPreview = {
       sessionId: session.id,
       jobId: job.id,
@@ -1951,6 +1979,7 @@ async function runJob(job: any) {
     };
     logLongValue("[GeminiDebug] request_url", requestUrl);
     logLongValue("[GeminiDebug] request_prompt", promptText);
+    logLongValue("[GeminiDebug] request_image_payload_json", JSON.stringify(requestImagePayload));
     logLongValue("[GeminiDebug] request_preview_json", JSON.stringify(requestPreview));
     const res = await axios.post(
       requestUrl,
