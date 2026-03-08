@@ -8710,7 +8710,7 @@ bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const stickerId = ctx.match[1];
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   console.log("stickerId:", stickerId);
 
   // Get sticker from DB by ID
@@ -8823,7 +8823,7 @@ bot.action(/^emotion_(?!make_example)([^:]+)(?::(.+))?$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const emotionId = ctx.match[1];
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, "emotion_select", "session_not_found");
@@ -9050,7 +9050,8 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
   if (!user?.id) return;
   const lang = user.lang || "en";
 
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  // action_* callbacks have a single optional capture group with sessionRef
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const session = await resolveSessionForCallback(user.id, explicitSessionId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, `action_${action}`, "session_not_found");
