@@ -1967,6 +1967,7 @@ async function buildStickerButtons(
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
+  const styleCb = appendSessionRefIfFits(`change_style:${stickerId}`, sessionRef);
   const emotionCb = appendSessionRefIfFits(`change_emotion:${stickerId}`, sessionRef);
   const motionCb = appendSessionRefIfFits(`change_motion:${stickerId}`, sessionRef);
   const replaceFaceCb = appendSessionRefIfFits(`replace_face:${stickerId}`, sessionRef);
@@ -1975,7 +1976,7 @@ async function buildStickerButtons(
   return {
     inline_keyboard: [
       [{ text: addToPackText, callback_data: `add_to_pack:${stickerId}` }],
-      [{ text: changeStyleText, callback_data: `change_style:${stickerId}` }],
+      [{ text: changeStyleText, callback_data: styleCb }],
       [
         { text: changeEmotionText, callback_data: emotionCb },
         { text: changeMotionText, callback_data: motionCb },
@@ -9416,7 +9417,7 @@ bot.action("add_to_pack", async (ctx) => {
 });
 
 // Callback: change style (new format with sticker ID)
-bot.action(/^change_style:(.+)$/, async (ctx) => {
+bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
   console.log("=== change_style:ID callback ===");
   console.log("callback_data:", ctx.match?.[0]);
   safeAnswerCbQuery(ctx);
@@ -9428,6 +9429,7 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const stickerId = ctx.match[1];
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   console.log("stickerId:", stickerId);
 
   // Get sticker from DB by ID
@@ -9450,19 +9452,40 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
     return;
   }
 
-  // Get or create active session
-  let session = await getActiveSession(user.id);
+  // Get or create active session.
+  // For sticker-targeted callbacks we can recover safely without explicit session_id,
+  // because sticker ownership is already validated above.
+  let session = explicitSessionId
+    ? await getSessionByIdForUser(user.id, explicitSessionId)
+    : await getActiveSession(user.id);
   if (!session?.id) {
-    // Create new session
-    const { data: newSession } = await supabase
+    const { data: newSession, error: createSessionErr } = await supabase
       .from("sessions")
-      .insert({ user_id: user.id, state: "wait_style", is_active: true, style_source_kind: "sticker", env: config.appEnv })
+      .insert({
+        user_id: user.id,
+        state: "wait_style",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: 1,
+        style_source_kind: "sticker",
+        env: config.appEnv,
+      })
       .select()
       .single();
+    if (createSessionErr) {
+      console.error("[change_style] failed to create session:", createSessionErr.message);
+      await ctx.reply(await getText(lang, "error.technical"));
+      return;
+    }
     session = newSession;
   }
 
   if (!session?.id) return;
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, "change_style", "stale_callback");
+    return;
+  }
 
   const sourcePhotoId = String(sticker.source_photo_file_id || "");
   const restoredPhotoFileId = sourcePhotoId.startsWith("AgAC")
