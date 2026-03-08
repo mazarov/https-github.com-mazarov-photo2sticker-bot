@@ -769,8 +769,22 @@ async function runPackPreviewJob(job: any) {
 
   const filePath = await getFilePath(photoFileId);
   const photoBuffer = await downloadFile(filePath);
-  const photoFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
+  let photoFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
   const photoMime = getMimeTypeByTelegramPath(filePath);
+  const packGeminiRoute = await getGeminiRouteInfoRuntime();
+  const packNeedsPublicSourceUrl = !packGeminiRoute.viaProxy;
+  if (packNeedsPublicSourceUrl) {
+    try {
+      const temp = await uploadTempStickerSourceAndGetPublicUrl(photoBuffer, session, photoFileId, photoMime);
+      photoFileUrl = temp.publicUrl;
+      console.log("[PackPreview] Using temp public photo URL for direct Gemini route:", {
+        storagePath: temp.storagePath,
+        bucket: temp.bucket,
+      });
+    } catch (err: any) {
+      console.warn("[PackPreview] Failed to upload temp photo source, fallback to Telegram URL:", err?.message || err);
+    }
+  }
 
   const lockEnabled = await isSubjectLockEnabled();
   let packSubjectProfile = getSessionSubjectProfileForSource(session, photoFileId, "photo");
@@ -865,8 +879,23 @@ async function runPackPreviewJob(job: any) {
     try {
       if (template.collage_file_id) {
         const collagePath = await getFilePath(template.collage_file_id);
-        collageFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${collagePath}`;
         collageMime = getMimeTypeByTelegramPath(collagePath);
+        if (packNeedsPublicSourceUrl) {
+          const collageBuffer = await downloadFile(collagePath);
+          const temp = await uploadTempStickerSourceAndGetPublicUrl(
+            collageBuffer,
+            session,
+            template.collage_file_id,
+            collageMime
+          );
+          collageFileUrl = temp.publicUrl;
+          console.log("[PackPreview] Using temp public collage URL for direct Gemini route:", {
+            storagePath: temp.storagePath,
+            bucket: temp.bucket,
+          });
+        } else {
+          collageFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${collagePath}`;
+        }
       } else {
         collageFileUrl = template.collage_url;
         collageMime = template.collage_url?.endsWith(".png") ? "image/png" : "image/jpeg";
@@ -1634,14 +1663,35 @@ async function runJob(job: any) {
   const filePath = await getFilePath(sourceFileId);
   const fileBuffer = await downloadFile(filePath);
   const telegramSourceFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
+  const geminiRoute = await getGeminiRouteInfoRuntime();
+  const needsPublicSourceUrl = !geminiRoute.viaProxy;
 
   const base64 = fileBuffer.toString("base64");
   const mimeType = getMimeTypeByTelegramPath(filePath);
   const sourceSha256 = sha256Hex(fileBuffer);
-  const resolvedSource =
-    sourceKind === "sticker"
-      ? await resolveStickerSourceUrl(session, sourceFileId, fileBuffer, mimeType, telegramSourceFileUrl)
-      : { sourceFileUrl: telegramSourceFileUrl, transport: "telegram-fallback" as const, storagePath: null };
+  let resolvedSource:
+    { sourceFileUrl: string; transport: "storage-result" | "storage-temp" | "telegram-fallback"; storagePath?: string | null };
+  if (needsPublicSourceUrl) {
+    try {
+      const temp = await uploadTempStickerSourceAndGetPublicUrl(fileBuffer, session, sourceFileId, mimeType);
+      resolvedSource = {
+        sourceFileUrl: temp.publicUrl,
+        transport: "storage-temp",
+        storagePath: temp.storagePath,
+      };
+    } catch (err: any) {
+      console.warn("[Worker] direct Gemini route: temp source upload failed, fallback to default source resolver:", err?.message || err);
+      resolvedSource =
+        sourceKind === "sticker"
+          ? await resolveStickerSourceUrl(session, sourceFileId, fileBuffer, mimeType, telegramSourceFileUrl)
+          : { sourceFileUrl: telegramSourceFileUrl, transport: "telegram-fallback", storagePath: null };
+    }
+  } else {
+    resolvedSource =
+      sourceKind === "sticker"
+        ? await resolveStickerSourceUrl(session, sourceFileId, fileBuffer, mimeType, telegramSourceFileUrl)
+        : { sourceFileUrl: telegramSourceFileUrl, transport: "telegram-fallback", storagePath: null };
+  }
   const sourceFileUrl = resolvedSource.sourceFileUrl;
   console.log("[Worker] source_file_url_resolved:", {
     generationType,
@@ -1667,6 +1717,23 @@ async function runJob(job: any) {
       replaceReferenceMimeType = getMimeTypeByTelegramPath(refPath);
       replaceReferenceBuffer = refBuffer;
       replaceReferenceSha256 = sha256Hex(refBuffer);
+      if (needsPublicSourceUrl) {
+        try {
+          const temp = await uploadTempStickerSourceAndGetPublicUrl(
+            refBuffer,
+            session,
+            session.current_photo_file_id,
+            replaceReferenceMimeType
+          );
+          replaceReferenceUrl = temp.publicUrl;
+          console.log("[ReplaceSubject] using temp public reference URL for direct Gemini route:", {
+            storagePath: temp.storagePath,
+            bucket: temp.bucket,
+          });
+        } catch (uploadErr: any) {
+          console.warn("[ReplaceSubject] failed to upload temp reference URL, fallback to Telegram URL:", uploadErr?.message || uploadErr);
+        }
+      }
       console.log("[ReplaceSubject] loaded identity photo reference:", {
         hasRef: true,
         refMime: replaceReferenceMimeType,
