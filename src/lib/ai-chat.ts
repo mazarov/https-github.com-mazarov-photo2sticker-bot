@@ -1,5 +1,6 @@
 import axios from "axios";
-import { config, getGeminiGenerateContentUrl } from "../config";
+import { config } from "../config";
+import { getGeminiGenerateContentUrlRuntime } from "./gemini-route";
 
 // ============================================
 // Types
@@ -401,7 +402,7 @@ async function callGemini(
   };
 
   const response = await axios.post(
-    getGeminiGenerateContentUrl(MODEL),
+    await getGeminiGenerateContentUrlRuntime(MODEL),
     body,
     {
       headers: { "x-goog-api-key": config.geminiApiKey },

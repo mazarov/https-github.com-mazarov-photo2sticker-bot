@@ -299,6 +299,13 @@ flowchart TD
 | Motion presets | 5 мин | `getMotionPresets()` |
 | Bot texts (i18n) | 5 мин | `getText()` |
 
+### Gemini route switch (runtime)
+
+- Все Gemini-вызовы в API выбирают base URL через `app_config.gemini_use_proxy` (TTL cache 60s):
+  - `true` -> `GEMINI_PROXY_BASE_URL` (proxy route),
+  - `false` -> direct Google endpoint `https://generativelanguage.googleapis.com`.
+- Лог `[GeminiRoute][API]` показывает фактический runtime-маршрут (`baseUrl`, `host`, `viaProxy`) на старте процесса.
+
 ## Edit Sticker Flow (menu: "🎨 Изменить стикер")
 
 - Новый entrypoint из persistent menu: `🎨 Изменить стикер` / `🎨 Edit sticker`.

@@ -238,6 +238,7 @@ Presets: waving, thumbs_up, facepalm, praying, flexing, shrugging, peace, heart_
 | `gemini_model_emotion` | Смена эмоции | `gemini-2.5-flash-image` |
 | `gemini_model_motion` | Смена движения | `gemini-2.5-flash-image` |
 | `gemini_model_subject_detector` | Детектор объектов/людей на фото | `gemini-2.0-flash` |
+| `gemini_use_proxy` | Маршрут Gemini API | `true` / `false` (`true` = через `GEMINI_PROXY_BASE_URL`, `false` = direct Google endpoint) |
 
 Формат: ровно как в таблице, без пробелов. Пример: `gemini-2.5-flash-image`. Кэш app_config в воркере/API: 60 сек.
 
@@ -265,6 +266,9 @@ Presets: waving, thumbs_up, facepalm, praying, flexing, shrugging, peace, heart_
 
 Ключи для Replace Face rollout:
 - `facemint_replace_face_enabled` — переключатель `replace_subject` с Gemini на Facemint API (default `false`)
+
+Ключи для Gemini transport rollout:
+- `gemini_use_proxy` — runtime-переключатель прокси-маршрута для всех Gemini-вызовов в API/worker/lib
 
 ### Вспомогательные таблицы
 

@@ -1,6 +1,7 @@
 import axios from "axios";
-import { config, getGeminiGenerateContentUrl } from "../config";
+import { config } from "../config";
 import { getAppConfig } from "./app-config";
+import { getGeminiGenerateContentUrlRuntime } from "./gemini-route";
 
 export type SubjectMode = "single" | "multi" | "unknown";
 export type SubjectSourceKind = "photo" | "sticker";
@@ -546,7 +547,7 @@ export async function detectSubjectProfileFromImageBuffer(
     for (let attempt = 1; attempt <= DETECTOR_MAX_ATTEMPTS; attempt++) {
       try {
         const response = await axios.post(
-          getGeminiGenerateContentUrl(model),
+          await getGeminiGenerateContentUrlRuntime(model),
           {
             contents: [
               {

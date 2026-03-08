@@ -4,13 +4,14 @@ import FormData from "form-data";
 import sharp from "sharp";
 import { createHash } from "crypto";
 import { execSync } from "child_process";
-import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
+import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification, sendPackPreviewAlert, sendPackCompletedLandingAlert } from "./lib/alerts";
 // chromaKey logic removed — rembg handles background removal directly
 import { getAppConfig } from "./lib/app-config";
+import { getGeminiGenerateContentUrlRuntime, getGeminiRouteInfoRuntime } from "./lib/gemini-route";
 import { addTextToSticker, fitStickerIn512WithMargin, addWhiteBorder } from "./lib/image-utils";
 import { createFaceSwapTask, waitForFaceSwapTask } from "./lib/facemint";
 import {
@@ -30,8 +31,9 @@ import {
   type SubjectSourceKind,
 } from "./lib/subject-profile";
 
-const geminiRoute = getGeminiRouteInfo();
-console.log("[GeminiRoute][Worker]", geminiRoute);
+void getGeminiRouteInfoRuntime()
+  .then((route) => console.log("[GeminiRoute][Worker]", route))
+  .catch((err) => console.warn("[GeminiRoute][Worker] route resolve failed:", err?.message || err));
 
 function resolveRuntimeGitSha(): string {
   const envSha = String(process.env.APP_GIT_SHA || process.env.GIT_SHA || "").trim();
@@ -944,7 +946,7 @@ ${packTaskBlock}`
   let lastErrorMsg = "";
   try {
     geminiRes = await axios.post(
-      getGeminiGenerateContentUrl(model),
+      await getGeminiGenerateContentUrlRuntime(model),
       {
         contents: [{
           role: "user",
@@ -1741,7 +1743,7 @@ async function runJob(job: any) {
     try {
       console.log("[ReplaceSubject] Analyzing sticker background...");
       const analyzeRes = await axios.post(
-        getGeminiGenerateContentUrl("gemini-2.0-flash"),
+        await getGeminiGenerateContentUrlRuntime("gemini-2.0-flash"),
         {
           contents: [{
             role: "user",
@@ -1947,7 +1949,7 @@ async function runJob(job: any) {
           imageConfig: { aspectRatio: "1:1" },
         },
       };
-    const requestUrl = getGeminiGenerateContentUrl(modelName);
+    const requestUrl = await getGeminiGenerateContentUrlRuntime(modelName);
     const requestImagePayload = {
       sessionId: session.id,
       jobId: job.id,

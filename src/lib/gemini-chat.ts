@@ -1,5 +1,6 @@
 import axios from "axios";
-import { config, getGeminiGenerateContentUrl } from "../config";
+import { config } from "../config";
+import { getGeminiGenerateContentUrlRuntime } from "./gemini-route";
 
 // ============================================
 // Types
@@ -305,7 +306,7 @@ export async function callGeminiChat(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const response = await axios.post(
-        getGeminiGenerateContentUrl(GEMINI_CHAT_MODEL),
+        await getGeminiGenerateContentUrlRuntime(GEMINI_CHAT_MODEL),
         body,
         {
           headers: { "x-goog-api-key": config.geminiApiKey },
@@ -371,7 +372,7 @@ ${conversationText}`;
 
   try {
     const response = await axios.post(
-      getGeminiGenerateContentUrl(GEMINI_CHAT_MODEL),
+      await getGeminiGenerateContentUrlRuntime(GEMINI_CHAT_MODEL),
       {
         contents: [{ role: "user", parts: [{ text: extractionPrompt }] }],
         generationConfig: {
