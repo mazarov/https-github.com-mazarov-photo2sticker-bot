@@ -2660,33 +2660,6 @@ async function resolveSessionForIncomingPhoto(userId: string, traceId?: string |
     return activeSession;
   }
 
-  // Replace-face source-of-truth fallback:
-  // these states must survive even when is_active was dropped by side-effects,
-  // otherwise photo messages are incorrectly recovered into wait_action.
-  const REPLACE_FACE_RECOVERY_STATES = [
-    "wait_replace_face_sticker",
-    "wait_edit_sticker",
-    "wait_edit_photo",
-    "wait_edit_action",
-  ];
-  const { data: replaceFaceSession } = await supabase
-    .from("sessions")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("env", config.appEnv)
-    .in("state", REPLACE_FACE_RECOVERY_STATES as unknown as string[])
-    .order("updated_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (replaceFaceSession?.id) {
-    logSessionTrace("resolveSessionForIncomingPhoto.pick_replace_face_fallback", {
-      userId,
-      session: sessionTraceSnapshot(replaceFaceSession),
-    }, traceId);
-    return replaceFaceSession;
-  }
-
   // Strong fallback: pick the latest non-assistant active-like session first.
   // This protects manual flows from being hijacked by stale assistant recovery sessions.
   const NON_ASSISTANT_FALLBACK_STATES = SESSION_FALLBACK_ACTIVE_STATES.filter(
@@ -2714,6 +2687,34 @@ async function resolveSessionForIncomingPhoto(userId: string, traceId?: string |
       session: sessionTraceSnapshot(latestNonAssistantSession),
     }, traceId);
     return latestNonAssistantSession;
+  }
+
+  // Replace-face fallback (fresh-only):
+  // only recover recent replace-face/edit sessions so stale old sessions do not
+  // hijack "new photo" flow in action menu.
+  const REPLACE_FACE_RECOVERY_STATES = [
+    "wait_replace_face_sticker",
+    "wait_edit_sticker",
+    "wait_edit_photo",
+    "wait_edit_action",
+  ];
+  const replaceFaceRecentCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  const { data: replaceFaceSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .in("state", REPLACE_FACE_RECOVERY_STATES as unknown as string[])
+    .gte("created_at", replaceFaceRecentCutoff)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (replaceFaceSession?.id) {
+    logSessionTrace("resolveSessionForIncomingPhoto.pick_replace_face_fallback", {
+      userId,
+      session: sessionTraceSnapshot(replaceFaceSession),
+    }, traceId);
+    return replaceFaceSession;
   }
 
   // Prefer latest single-flow session before assistant recovery to avoid hijacking
