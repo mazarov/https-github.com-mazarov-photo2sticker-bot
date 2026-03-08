@@ -1779,15 +1779,15 @@ function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const row1 =
     lang === "ru"
       ? showAdminMakeExample
-        ? ["✨ Создать стикер", "🎨 Изменить стикер", "📦 Создать пак", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
+        ? ["⚡ Действия", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
         : showAdminGenerate
-          ? ["✨ Создать стикер", "🎨 Изменить стикер", "📦 Создать пак", "🔄 Сгенерировать пак"]
-          : ["✨ Создать стикер", "🎨 Изменить стикер", "📦 Создать пак"]
+          ? ["⚡ Действия", "🔄 Сгенерировать пак"]
+          : ["⚡ Действия"]
       : showAdminMakeExample
-        ? ["✨ Create sticker", "🎨 Edit sticker", "📦 Create pack", "🔄 Generate pack", "⭐ Make as example"]
+        ? ["⚡ Actions", "🔄 Generate pack", "⭐ Make as example"]
         : showAdminGenerate
-          ? ["✨ Create sticker", "🎨 Edit sticker", "📦 Create pack", "🔄 Generate pack"]
-          : ["✨ Create sticker", "🎨 Edit sticker", "📦 Create pack"];
+          ? ["⚡ Actions", "🔄 Generate pack"]
+          : ["⚡ Actions"];
   const row2 =
     lang === "ru"
       ? ["💰 Ваш баланс", "💬 Поддержка"]
@@ -3958,6 +3958,75 @@ bot.on("photo", async (ctx) => {
 // ============================================
 // Persistent menu handlers (Reply Keyboard)
 // ============================================
+
+// Menu: ⚡ Действия / ⚡ Actions — open action menu for latest photo
+bot.hears(["⚡ Действия", "⚡ Actions"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user) {
+    const lang = (ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en";
+    await ctx.reply(await getText(lang, "start.need_start"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    return;
+  }
+
+  const lang = user.lang || "en";
+  const lastPhotoFromSessions = await getLatestSessionPhotoFileId(user.id);
+  const existingPhoto = lastPhotoFromSessions || user.last_photo_file_id || null;
+  if (lastPhotoFromSessions && !user.last_photo_file_id) {
+    await supabase.from("users").update({ last_photo_file_id: lastPhotoFromSessions }).eq("id", user.id);
+    user.last_photo_file_id = lastPhotoFromSessions;
+  }
+
+  const activeAssistant = await getActiveAssistantSession(user.id);
+  if (activeAssistant) {
+    await updateAssistantSession(activeAssistant.id, { status: "completed" });
+  }
+  await supabase.from("sessions").update({ is_active: false }).eq("user_id", user.id).eq("is_active", true).eq("env", config.appEnv);
+
+  if (!existingPhoto) {
+    const { data: newSession, error: sessErr } = await supabase
+      .from("sessions")
+      .insert({
+        user_id: user.id,
+        state: "wait_photo",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: 1,
+        env: config.appEnv,
+      })
+      .select()
+      .single();
+    if (sessErr || !newSession) {
+      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+      return;
+    }
+    await ctx.reply(await getText(lang, "photo.need_photo"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    return;
+  }
+
+  const { data: newSession, error: sessErr } = await supabase
+    .from("sessions")
+    .insert({
+      user_id: user.id,
+      state: "wait_action",
+      is_active: true,
+      flow_kind: "single",
+      session_rev: 1,
+      current_photo_file_id: existingPhoto,
+      photos: [existingPhoto],
+      env: config.appEnv,
+    })
+    .select()
+    .single();
+  if (sessErr || !newSession) {
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    return;
+  }
+
+  await sendActionMenu(ctx, lang, newSession.id, newSession.session_rev || 1);
+});
 
 // Menu: ✨ Создать стикер — launch or continue AI assistant dialog
 bot.hears(["✨ Создать стикер", "✨ Create sticker"], async (ctx) => {
