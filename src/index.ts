@@ -6448,18 +6448,35 @@ bot.on("text", async (ctx) => {
     // Generic fallback for text-input states (single/assistant/manual text steps),
     // because some environments occasionally flip is_active=false unexpectedly.
     const recentCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    const { data: textFlowSession } = await supabase
+    const shortCutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5 min for add_text flow
+
+    // Priority 1: wait_text_overlay (user just clicked "Add text" — must not be hijacked by assistant)
+    const { data: waitTextSession } = await supabase
       .from("sessions")
       .select("*")
       .eq("user_id", user.id)
       .eq("env", config.appEnv)
-      .in("state", recoverableTextStates)
-      .gte("updated_at", recentCutoff)
+      .eq("state", "wait_text_overlay")
+      .gte("updated_at", shortCutoff)
       .order("updated_at", { ascending: false, nullsFirst: false })
-      .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    let recoveredSession = textFlowSession;
+
+    let recoveredSession = waitTextSession;
+    if (!recoveredSession?.id) {
+      const { data: textFlowSession } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("env", config.appEnv)
+        .in("state", recoverableTextStates)
+        .gte("updated_at", recentCutoff)
+        .order("updated_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      recoveredSession = textFlowSession;
+    }
     if (!recoveredSession?.id) {
       // Legacy custom-idea flow uses a separate waiting flag without dedicated state.
       const { data: customIdeaSession } = await supabase
@@ -6928,36 +6945,6 @@ bot.on("text", async (ctx) => {
 
     await ctx.reply(ideaText, { parse_mode: "HTML", reply_markup: keyboard });
     return;
-  }
-
-  // === AI Assistant: re-route to assistant after sticker generation ===
-  // If user was in assistant flow and sticker was generated, session.state moved to
-  // confirm_sticker/wait_style/etc. but assistant_session is still active.
-  // Route text back to assistant so user can request changes or continue dialog.
-  if (!session.state?.startsWith("assistant_") && !["processing", "processing_emotion", "processing_motion", "processing_text", "wait_text_overlay"].includes(session.state)) {
-    let activeAssistant = await getActiveAssistantSession(user.id);
-    console.log("Re-route check: state=", session.state, "activeAssistant=", activeAssistant?.id || "null", "status=", activeAssistant?.status || "n/a");
-
-    // Fallback: if no active session found, check for recently-updated session (may have been unexpectedly closed)
-    if (!activeAssistant) {
-      const recent = await getRecentAssistantSession(user.id);
-      if (recent) {
-        console.log("Re-route fallback: found recent session", recent.id, "status:", recent.status, "updated:", recent.updated_at);
-        // Reactivate it so the user can continue dialog
-        await reactivateAssistantSession(recent.id);
-        activeAssistant = { ...recent, status: "active" };
-      }
-    }
-
-    if (activeAssistant) {
-      console.log("Assistant re-route: state was", session.state, "→ switching to assistant_chat, aSession:", activeAssistant.id);
-      await supabase.from("sessions")
-        .update({ state: "assistant_chat", is_active: true })
-        .eq("id", session.id);
-      // Update local session object for downstream handlers
-      session.state = "assistant_chat";
-      session.is_active = true;
-    }
   }
 
   // === AI Assistant: waiting for photo but got text — forward to AI ===
@@ -9063,8 +9050,21 @@ bot.action(/^add_text:(.+)$/, async (ctx) => {
     return;
   }
 
-  // Get or create active session
-  let session = await getActiveSession(user.id);
+  // Prefer session that owns this sticker (last_sticker_file_id set by worker after generation)
+  const { data: ownerSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("env", config.appEnv)
+    .eq("last_sticker_file_id", sticker.telegram_file_id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  let session = ownerSession;
+  if (!session?.id) {
+    session = await getActiveSession(user.id);
+  }
   if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
