@@ -918,6 +918,15 @@ async function sendEmotionKeyboard(
       return;
     } catch (err: any) {
       console.warn("[sendEmotionKeyboard] edit failed, fallback to reply:", err?.message || err);
+      // Sticker messages cannot be edited to text, but we can still remove old inline buttons.
+      try {
+        await ctx.telegram.editMessageReplyMarkup(
+          chatId,
+          options.messageId,
+          undefined,
+          { inline_keyboard: [] }
+        );
+      } catch {}
     }
   }
 
@@ -1010,6 +1019,15 @@ async function sendMotionKeyboard(
       return;
     } catch (err: any) {
       console.warn("[sendMotionKeyboard] edit failed, fallback to reply:", err?.message || err);
+      // Sticker messages cannot be edited to text, but we can still remove old inline buttons.
+      try {
+        await ctx.telegram.editMessageReplyMarkup(
+          chatId,
+          options.messageId,
+          undefined,
+          { inline_keyboard: [] }
+        );
+      } catch {}
     }
   }
 
@@ -6060,7 +6078,7 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_preview_payment", "wait_pack_carousel"],
