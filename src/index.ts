@@ -9909,7 +9909,7 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
   }
 
   if (action === "replace_face") {
-    // One active session: deactivate others so getActiveSession returns this one when user sends sticker
+    // Photo already exists (from wait_action). Ask for sticker only.
     await supabase
       .from("sessions")
       .update({ is_active: false })
@@ -9926,7 +9926,7 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
         session_rev: nextRev,
       })
       .eq("id", session.id);
-    await ctx.reply(await getText(lang, "edit.need_photo"));
+    await ctx.reply(await getText(lang, "action.replace_face_send_sticker"));
     return;
   }
 
@@ -10000,6 +10000,15 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
+  const identityPhotoFileId = session.current_photo_file_id
+    || (Array.isArray(session.photos) && session.photos.length > 0 ? session.photos[session.photos.length - 1] : null)
+    || user.last_photo_file_id || null;
+
+  if (!identityPhotoFileId) {
+    await ctx.reply(await getText(lang, "edit.replace_face_no_photo"));
+    return;
+  }
+
   const nextRev = (session.session_rev || 1) + 1;
   await supabase
     .from("sessions")
@@ -10015,12 +10024,39 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
       flow_kind: "single",
       edit_replace_sticker_id: stickerId,
       last_sticker_file_id: sticker.telegram_file_id,
+      current_photo_file_id: identityPhotoFileId,
       selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
       session_rev: nextRev,
     })
     .eq("id", session.id);
 
-  await ctx.reply(await getText(lang, "edit.need_photo"));
+  const { data: freshSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("id", session.id)
+    .maybeSingle();
+  const patchedSession = freshSession || {
+    ...session,
+    current_photo_file_id: identityPhotoFileId,
+    last_sticker_file_id: sticker.telegram_file_id,
+    edit_replace_sticker_id: stickerId,
+    selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
+    session_rev: nextRev,
+  };
+
+  const replacePrompt =
+    "You are given two references: (1) identity photo, (2) sticker reference. " +
+    "Generate one sticker with identity from photo and pose/expression/style from sticker reference. " +
+    "Keep one subject only, preserve the same vibe and composition, no text, no borders or outlines.";
+
+  const earlyMsgId = await sendEarlyProgress(ctx, lang);
+  await startGeneration(ctx, user, patchedSession, lang, {
+    generationType: "replace_subject",
+    promptFinal: replacePrompt,
+    selectedStyleId: sticker.style_preset_id || session.selected_style_id || null,
+    userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
+    earlyProgressMessageId: earlyMsgId,
+  });
 });
 
 // Callback: remove background from sticker (edit-sticker flow)

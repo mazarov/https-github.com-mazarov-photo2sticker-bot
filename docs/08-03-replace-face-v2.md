@@ -10,100 +10,80 @@
 4. **Множество промежуточных состояний** (`wait_replace_face_sticker`, `wait_edit_photo`, `wait_edit_sticker`, `wait_edit_action`) каждое из которых нужно поддерживать в fallback-массивах, роутерах, и корректно обрабатывать в 3+ хендлерах.
 5. **Два разных entry point** — из action menu (фото уже есть, нужен стикер) и из post-sticker menu (стикер уже есть, нужно фото) — удваивают сложность.
 
-## Предложение: единый линейный flow
+## Предложение: единый линейный flow (фото уже есть)
 
 ### Принцип
 
-Вместо двустороннего сбора (фото ↔ стикер) — **всегда линейная цепочка с одним входом**:
+**Фото берётся из ранее присланного** (action menu показывается только когда есть фото). Пользователь присылает **только стикер**:
 
 ```
-Entry point: кнопка "Заменить лицо"
+Entry point: кнопка "Заменить лицо" (из action menu)
      │
+     │  Фото уже есть: session.current_photo_file_id
      ▼
-Бот: "Пришли фото с лицом 📸"
-     │
-     ▼  (пользователь шлёт фото)
-Бот: "Теперь пришли стикер, в который вставить лицо"
+Бот: "Пришли стикер, в который вставить лицо 👇"
      │
      ▼  (пользователь шлёт стикер)
      → startGeneration(replace_subject)
 ```
 
+**Entry из post-sticker menu** (`replace_face:STICKER_ID`): стикер уже выбран, фото берём из сессии/пользователя → **сразу генерация**.
+
 ### Почему это лучше
 
-- **Одно состояние вместо четырёх**: `wait_replace_face` (два подшага хранятся в поле `replace_face_step: "photo" | "sticker"`).
-- **Фото-хендлер и стикер-хендлер проверяют одно состояние** — нет путаницы с роутингом.
-- **Не нужны fallback-массивы** для 4 разных `wait_edit_*` состояний.
-- **Нет race condition с `session_rev`** — данные обновляются последовательно, `startGeneration` вызывается сразу после сохранения стикера.
+- **Один шаг вместо двух**: не просим фото — оно уже есть.
+- **Одно состояние** `wait_replace_face` — ждём только стикер (для action menu).
+- **Меньше точек отказа** — нет зависимости от photo handler для входа в flow.
+- **replace_face:STICKER_ID** — сразу генерация, без дополнительных шагов.
 
 ## Детальный дизайн
 
 ### Состояния
 
-| Состояние | Подшаг (`replace_face_step`) | Ожидаемый ввод |
-|---|---|---|
-| `wait_replace_face` | `photo` | Фото с лицом |
-| `wait_replace_face` | `sticker` | Стикер-референс |
+| Состояние | Ожидаемый ввод |
+|---|---|
+| `wait_replace_face` | Стикер (фото уже в сессии) |
 
 ### Entry points
 
 #### 1. Из action menu (кнопка «🧑 Заменить лицо»)
 
+Фото уже есть в `session.current_photo_file_id` (пользователь прислал его для action menu).
+
 ```
 action_replace_face callback:
   1. session.state = "wait_replace_face"
-  2. session.replace_face_step = "photo"
+  2. session.edit_replace_sticker_id = null
   3. session.is_active = true
   4. Деактивировать остальные сессии
-  5. ctx.reply("📸 Пришли фото с лицом:")
+  5. ctx.reply("Пришли стикер, в который вставить лицо 👇")
 ```
 
 #### 2. Из post-sticker menu (кнопка «🧑 Заменить лицо» после генерации)
 
+Стикер уже выбран. Фото берём из `session.current_photo_file_id` или `user.last_photo_file_id`.
+
 ```
 replace_face:STICKER_ID callback:
-  1. Сохранить стикер: session.last_sticker_file_id = sticker.telegram_file_id
-  2. session.edit_replace_sticker_id = stickerId
-  3. session.state = "wait_replace_face"
-  4. session.replace_face_step = "photo"  ← всегда просим фото
-  5. session.is_active = true
-  6. Деактивировать остальные сессии
-  7. ctx.reply("📸 Пришли фото с лицом:")
+  1. Сохранить стикер: session.last_sticker_file_id, edit_replace_sticker_id
+  2. Фото: session.current_photo_file_id || user.last_photo_file_id
+  3. Если фото есть → сразу startGeneration(replace_subject)
+  4. Если фото нет → ctx.reply("Сначала отправь фото") (fallback)
 ```
-
-**Ключевое отличие**: стикер из post-sticker menu уже сохранён в сессию, поэтому после фото — сразу генерация (шаг «пришли стикер» пропускается).
 
 ### Photo handler (`bot.on("photo")`)
 
-```typescript
-if (session.state === "wait_replace_face") {
-  // Сохраняем фото
-  session.current_photo_file_id = photo.file_id;
-  
-  if (session.edit_replace_sticker_id) {
-    // Стикер уже есть (entry из post-sticker menu) → сразу генерация
-    startGeneration(ctx, user, session, lang, {
-      generationType: "replace_subject",
-      ...
-    });
-  } else {
-    // Стикера ещё нет → просим стикер
-    session.replace_face_step = "sticker";
-    ctx.reply("Теперь пришли стикер, в который нужно вставить лицо:");
-  }
-}
-```
+Для `wait_replace_face` с `edit_replace_sticker_id === null`: ждём стикер, не фото. Если пользователь по ошибке пришлёт фото — обновляем `current_photo_file_id` и снова просим стикер (опционально).
 
 ### Sticker handler (`bot.on("sticker")`)
 
 ```typescript
-if (session.state === "wait_replace_face" && session.replace_face_step === "sticker") {
-  // Сохраняем стикер
+if (session.state === "wait_replace_face" && !session.edit_replace_sticker_id) {
+  // Сохраняем стикер, фото уже есть в session.current_photo_file_id
   session.last_sticker_file_id = stickerFileId;
   session.edit_replace_sticker_id = importedSticker.id;
   
-  // Оба входа есть → генерация
-  startGeneration(ctx, user, session, lang, {
+  startGeneration(ctx, user, freshSession, lang, {
     generationType: "replace_subject",
     ...
   });
@@ -112,30 +92,11 @@ if (session.state === "wait_replace_face" && session.replace_face_step === "stic
 
 ### Решение проблемы `session_rev`
 
-В обоих хендлерах (photo и sticker) — **не создавать `patchedSession`**, а перечитывать сессию из БД после update:
-
-```typescript
-await supabase.from("sessions").update({ ... }).eq("id", session.id);
-const { data: freshSession } = await supabase
-  .from("sessions").select("*").eq("id", session.id).single();
-await startGeneration(ctx, user, freshSession, lang, { ... });
-```
-
-Это полностью устраняет проблему рассинхрона `session_rev`.
+В sticker handler — перечитывать сессию из БД после update перед `startGeneration`.
 
 ### Решение проблемы `is_active`
 
-При входе в flow — **деактивировать ВСЕ остальные сессии** пользователя:
-
-```typescript
-await supabase.from("sessions")
-  .update({ is_active: false })
-  .eq("user_id", user.id)
-  .eq("env", config.appEnv)
-  .neq("id", session.id);
-```
-
-И в `SESSION_FALLBACK_ACTIVE_STATES` достаточно одного состояния `wait_replace_face`.
+При входе в flow — деактивировать все остальные сессии пользователя.
 
 ## Миграция
 
@@ -146,24 +107,20 @@ await supabase.from("sessions")
 ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'wait_replace_face';
 ```
 
-### Колонка `replace_face_step`
+### `edit_replace_sticker_id`
 
-Новая колонка НЕ нужна — используем `edit_replace_sticker_id`:
-- Если `NULL` → ждём фото, потом стикер
-- Если заполнен → ждём только фото, потом сразу генерация
+- `NULL` → ждём стикер (entry из action menu)
+- Заполнен → стикер уже есть (entry из replace_face:ID) → сразу генерация
 
 ## Точки правки
 
 | Файл | Что изменить |
 |------|-------------|
-| `src/index.ts` | `handleActionMenuCallback` → action `replace_face`: деактивация + `wait_replace_face` |
-| `src/index.ts` | `replace_face:STICKER_ID` callback: сохранить стикер + `wait_replace_face` |
-| `src/index.ts` | Photo handler: ветка `wait_replace_face` |
-| `src/index.ts` | Sticker handler: ветка `wait_replace_face` (вместо `wait_replace_face_sticker`) |
-| `src/index.ts` | Удалить ветки `wait_edit_photo`, `wait_edit_sticker`, `wait_edit_action` |
-| `src/index.ts` | `SESSION_FALLBACK_ACTIVE_STATES`: заменить 4 состояния на одно `wait_replace_face` |
-| `src/lib/texts.ts` | Обновить тексты |
-| `sql/` | Миграция нового enum value |
+| `src/index.ts` | `handleActionMenuCallback` → action `replace_face`: деактивация + `wait_replace_face` + просим стикер (не фото) |
+| `src/index.ts` | `replace_face:STICKER_ID` callback: если фото есть → сразу генерация; иначе fallback "Сначала отправь фото" |
+| `src/index.ts` | Photo handler: опционально — если в wait_replace_face пришло фото, обновить и снова просим стикер |
+| `src/index.ts` | Sticker handler: ветка `wait_replace_face` (edit_replace_sticker_id === null) |
+| `src/lib/texts.ts` | Использовать `action.replace_face_send_sticker` для запроса стикера |
 
 ## Обратная совместимость
 
