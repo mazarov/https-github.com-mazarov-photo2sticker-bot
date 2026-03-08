@@ -569,7 +569,20 @@ async function sendStyleKeyboardFlat(
   }
 ) {
   const allPresets = await getStylePresetsV2();
-  const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
+  let sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
+  if (!sessionRef && ctx?.from?.id) {
+    try {
+      const user = await getUser(ctx.from.id);
+      if (user?.id) {
+        const styleSession = await getSessionForStyleSelection(user.id);
+        if (styleSession?.id) {
+          sessionRef = formatCallbackSessionRef(styleSession.id, styleSession.session_rev);
+        }
+      }
+    } catch (err: any) {
+      console.warn("[sendStyleKeyboardFlat] auto sessionRef resolve failed:", err?.message || err);
+    }
+  }
 
   // 2 styles per row
   const buttons: any[][] = [];
