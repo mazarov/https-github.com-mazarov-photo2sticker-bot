@@ -69,9 +69,10 @@ const bot = new Telegraf(config.telegramBotToken, {
 const traceContext = new AsyncLocalStorage<{ traceId: string }>();
 
 bot.use(async (ctx, next) => {
-  if (!ctx.state) ctx.state = {};
-  const traceId = (ctx.state.trace_id as string | undefined) || randomUUID().split("-")[0];
-  ctx.state.trace_id = traceId;
+  const state = (ctx.state as Record<string, unknown> | undefined) || undefined;
+  const existingTraceId = typeof state?.trace_id === "string" ? (state.trace_id as string) : null;
+  const traceId = existingTraceId || randomUUID().split("-")[0];
+  if (state && !existingTraceId) state.trace_id = traceId;
   return await traceContext.run({ traceId }, async () => {
     console.log("[trace.start]", {
       trace_id: traceId,
@@ -143,16 +144,11 @@ function safeAnswerCbQuery(ctx: any, payload?: any) {
 
 function getOrCreateTraceId(ctx: any): string {
   const fromStore = traceContext.getStore()?.traceId;
-  if (fromStore) {
-    if (!ctx?.state) ctx.state = {};
-    if (!ctx.state.trace_id) ctx.state.trace_id = fromStore;
-    return fromStore;
-  }
-  if (!ctx?.state) ctx.state = {};
-  if (!ctx.state.trace_id) {
-    ctx.state.trace_id = randomUUID().split("-")[0];
-  }
-  return ctx.state.trace_id;
+  const state = (ctx?.state as Record<string, unknown> | undefined) || undefined;
+  const existingTraceId = typeof state?.trace_id === "string" ? (state.trace_id as string) : null;
+  const traceId = existingTraceId || fromStore || randomUUID().split("-")[0];
+  if (state && !existingTraceId) state.trace_id = traceId;
+  return traceId;
 }
 
 async function getPackSegments(): Promise<{ id: string; sort_order: number }[]> {
