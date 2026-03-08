@@ -6454,8 +6454,6 @@ bot.on("sticker", async (ctx) => {
   }
 
   if (!stickerFileId) return;
-  const stickerFileId = sticker?.file_id as string | undefined;
-  if (!stickerFileId) return;
 
   if (sticker?.is_animated || sticker?.is_video) {
     await ctx.reply(
