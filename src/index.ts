@@ -2224,7 +2224,11 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
   // If photo already exists — show style selection immediately
   if (lastPhoto) {
     console.log("startAssistantDialog: lastPhoto exists, showing style selection");
-    await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: newSession.selected_style_id || null });
+    await sendStyleKeyboardFlat(ctx, lang, undefined, {
+      selectedStyleId: newSession.selected_style_id || null,
+      sessionId: newSession.id,
+      sessionRev: Number(newSession.session_rev || 1),
+    });
   }
 }
 
@@ -4532,7 +4536,11 @@ bot.on("photo", async (ctx) => {
       "style"
     ).catch((err) => console.warn("[assistant_photo] subject profile failed:", err?.message || err));
 
-    await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
+    await sendStyleKeyboardFlat(ctx, lang, undefined, {
+      selectedStyleId: session.selected_style_id || null,
+      sessionId: session.id,
+      sessionRev: step1Rev,
+    });
     return;
   }
 
@@ -4900,7 +4908,11 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
     .eq("id", session.id);
 
   // Show flat style list (unified with ideas flow)
-  await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
+  await sendStyleKeyboardFlat(ctx, lang, undefined, {
+    selectedStyleId: session.selected_style_id || null,
+    sessionId: session.id,
+    sessionRev: Number(session.session_rev || 1),
+  });
 });
 
 // Menu: 💰 Ваш баланс — show balance + credit packs
@@ -8486,7 +8498,10 @@ bot.on("text", async (ctx) => {
         session_rev: (session.session_rev || 1) + 1,
       })
       .eq("id", session.id);
-    await sendStyleKeyboardFlat(ctx, lang);
+    await sendStyleKeyboardFlat(ctx, lang, undefined, {
+      sessionId: session?.id || null,
+      sessionRev: Number(session?.session_rev || 1),
+    });
     await ctx.reply(lang === "ru"
       ? "✍️ Свой стиль больше недоступен. Выбери стиль из списка."
       : "✍️ Custom style is no longer available. Please choose a style from the list.");
@@ -8519,7 +8534,10 @@ bot.on("text", async (ctx) => {
   }
 
   // Custom free-text style is removed: user should pick a preset style.
-  await sendStyleKeyboardFlat(ctx, lang);
+  await sendStyleKeyboardFlat(ctx, lang, undefined, {
+    sessionId: session.id,
+    sessionRev: Number(session.session_rev || 1),
+  });
   await ctx.reply(lang === "ru"
     ? "✍️ Текстовый ввод стиля отключен. Выбери стиль из списка кнопок."
     : "✍️ Text style input is disabled. Please choose a style from the preset list.");
@@ -8557,7 +8575,11 @@ bot.action(/^style_(?!v2:|example|custom|group)([^:]+)$/, async (ctx) => {
     // Custom style flow is removed.
     if (preset.id === "custom") {
       const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
-      await sendStyleKeyboardFlat(ctx, lang, currentMessageId, { selectedStyleId: session.selected_style_id || null });
+      await sendStyleKeyboardFlat(ctx, lang, currentMessageId, {
+        selectedStyleId: session.selected_style_id || null,
+        sessionId: session.id,
+        sessionRev: Number(session.session_rev || 1),
+      });
       await ctx.reply(lang === "ru"
         ? "✍️ Свой стиль больше недоступен. Выбери стиль из списка."
         : "✍️ Custom style is no longer available. Please choose a style from the list.");
@@ -8681,7 +8703,12 @@ bot.action(/^style_carousel_next:(\d+):(.*)$/, async (ctx) => {
     // Delete the text+buttons message (current message)
     await ctx.deleteMessage().catch(() => {});
 
-    await sendStyleKeyboardFlat(ctx, lang);
+    const session = await getSessionForStyleSelection(user.id);
+    await sendStyleKeyboardFlat(ctx, lang, undefined, {
+      selectedStyleId: session?.selected_style_id || null,
+      sessionId: session?.id || null,
+      sessionRev: Number(session?.session_rev || 1),
+    });
   } catch (err) {
     console.error("[StyleCarousel] Next error:", err);
   }
@@ -8710,6 +8737,8 @@ bot.action(/^style_group:(.+)$/, async (ctx) => {
     const session = await getActiveSession(user.id);
     await sendStyleKeyboardFlat(ctx, lang, ctx.callbackQuery?.message?.message_id, {
       selectedStyleId: session?.selected_style_id || null,
+      sessionId: session?.id || null,
+      sessionRev: Number(session?.session_rev || 1),
     });
   } catch (err) {
     console.error("Style group callback error:", err);
@@ -8960,6 +8989,8 @@ bot.action(/^style_groups_back(:.*)?$/, async (ctx) => {
     const session = await getActiveSession(user.id);
     await sendStyleKeyboardFlat(ctx, lang, ctx.callbackQuery?.message?.message_id, {
       selectedStyleId: session?.selected_style_id || null,
+      sessionId: session?.id || null,
+      sessionRev: Number(session?.session_rev || 1),
     });
   } catch (err) {
     console.error("Style groups back callback error:", err);
@@ -9140,7 +9171,12 @@ bot.action(/^back_to_substyles_v2:(.+)$/, async (ctx) => {
 
     // Delete current message and show style list
     await ctx.deleteMessage().catch(() => {});
-    await sendStyleKeyboardFlat(ctx, lang);
+    const session = await getSessionForStyleSelection(user.id);
+    await sendStyleKeyboardFlat(ctx, lang, undefined, {
+      selectedStyleId: session?.selected_style_id || null,
+      sessionId: session?.id || null,
+      sessionRev: Number(session?.session_rev || 1),
+    });
   } catch (err) {
     console.error("Back to styles from example error:", err);
   }
@@ -9250,7 +9286,11 @@ bot.action("style_custom_v2", async (ctx) => {
     const session = await getActiveSession(user.id);
     if (!session?.id) return;
     const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
-    await sendStyleKeyboardFlat(ctx, lang, currentMessageId, { selectedStyleId: session.selected_style_id || null });
+    await sendStyleKeyboardFlat(ctx, lang, currentMessageId, {
+      selectedStyleId: session.selected_style_id || null,
+      sessionId: session.id,
+      sessionRev: Number(session.session_rev || 1),
+    });
     await ctx.reply(lang === "ru"
       ? "✍️ Свой стиль больше недоступен. Выбери стиль из списка."
       : "✍️ Custom style is no longer available. Please choose a style from the list.");
@@ -9623,9 +9663,9 @@ bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
   }
 
   const nextRev = (session.session_rev || 1) + 1;
-  await supabase
-    .from("sessions")
-    .update({
+  const { error: changeStyleUpdateErr, droppedStyleSourceKind } = await updateSessionWithStyleSourceFallback(
+    session.id,
+    {
       state: "wait_style",
       is_active: true,
       current_photo_file_id: restoredPhotoFileId,
@@ -9638,14 +9678,24 @@ bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
       selected_emotion: null,
       emotion_prompt: null,
       session_rev: nextRev,
-    })
-    .eq("id", session.id);
+    }
+  );
+  if (changeStyleUpdateErr) {
+    console.error("[change_style] failed to switch session to wait_style:", changeStyleUpdateErr.message);
+    await ctx.reply(await getText(lang, "error.technical"));
+    return;
+  }
+  if (droppedStyleSourceKind) {
+    console.warn("[change_style] style_source_kind dropped due to schema cache mismatch");
+  }
 
   const sessionRef = formatCallbackSessionRef(session.id, nextRev);
   const backCb = appendSessionRefIfFits(`back_to_sticker_menu:${stickerId}`, sessionRef);
   const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
   await sendStyleKeyboardFlat(ctx, lang, currentMessageId, {
     selectedStyleId: session.selected_style_id || null,
+    sessionId: session.id,
+    sessionRev: nextRev,
     extraButtons: [[{ text: lang === "ru" ? "↩️ Назад" : "↩️ Back", callback_data: backCb }]],
   });
 });
@@ -9681,7 +9731,10 @@ bot.action("change_style", async (ctx) => {
     })
     .eq("id", session.id);
 
-  await sendStyleKeyboardFlat(ctx, lang);
+  await sendStyleKeyboardFlat(ctx, lang, undefined, {
+    sessionId: session.id,
+    sessionRev: Number(session.session_rev || 1),
+  });
 });
 
 // Callback: change emotion (new format with sticker ID)
@@ -14182,7 +14235,12 @@ bot.action("back_to_styles", async (ctx) => {
   // Delete current message
   await ctx.deleteMessage().catch(() => {});
 
-  await sendStyleKeyboardFlat(ctx, lang);
+  const session = await getSessionForStyleSelection(user.id);
+  await sendStyleKeyboardFlat(ctx, lang, undefined, {
+    selectedStyleId: session?.selected_style_id || null,
+    sessionId: session?.id || null,
+    sessionRev: Number(session?.session_rev || 1),
+  });
 });
 
 // Callback: onboarding emotion selection
