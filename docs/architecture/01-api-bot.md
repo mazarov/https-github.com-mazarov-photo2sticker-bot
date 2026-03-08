@@ -268,6 +268,8 @@ flowchart TD
 - В callback поддерживаются форматы `action:sid` и `action:sid:rev`.
 - При `session_router_enabled=true` legacy fallback на "текущую активную сессию" отключается: callback без `sid` отклоняется как `session_not_found`.
 - При включенном флаге `strict_session_rev_enabled=true` stale-кнопки отбрасываются с user-facing reason через `answerCbQuery`.
+- Для `style_preview`/`style_v2` также используется `sid:rev`: explicit callback на неактивную сессию отклоняется как stale, чтобы старые клавиатуры не перехватывали новый photo-context.
+- В переходах single-style (`wait_action -> wait_style`, `wait_style -> wait_buy_credit|processing`) обновления `sessions` имеют fallback без `style_source_kind`, если schema cache окружения временно не видит колонку `style_source_kind`.
 - Для pack callback-reject (`session_not_found`, `wrong_state`, `stale_callback`) используется явный `show_alert=true`, чтобы убрать "тихие" клики.
 - На переходах в `generating_pack_preview` и `processing_pack` UI-клавиатура lock-ится до `noop`-кнопки (`⏳ ...`), чтобы снизить повторные/конфликтующие клики.
 
