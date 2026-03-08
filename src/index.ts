@@ -2878,6 +2878,17 @@ async function rejectPackEvent(
   await ctx.answerCbQuery(message, { show_alert: true }).catch(() => {});
 }
 
+async function callTelegramBotMethodOrThrow(method: string, payload: Record<string, unknown>) {
+  const res = await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/${method}`, payload, { timeout: 15000 });
+  if (!res.data?.ok) {
+    const description = res.data?.description || `${method} failed`;
+    const error: any = new Error(description);
+    error.response = { data: res.data };
+    throw error;
+  }
+  return res.data?.result;
+}
+
 type PackUiLockStage = "preview" | "assemble";
 
 async function lockPackUiForProcessing(ctx: any, session: any, lang: string, stage: PackUiLockStage) {
@@ -8882,12 +8893,12 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
 
   const createStickerSet = async (name: string, fileId: string) => {
     console.log("add_to_pack: creating new sticker set:", name);
-    await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`, {
+    await callTelegramBotMethodOrThrow("createNewStickerSet", {
       user_id: telegramId,
       name,
       title: packTitle,
       stickers: [{ sticker: fileId, format: "static", emoji_list: ["🔥"] }],
-    }, { timeout: 15000 });
+    });
     await supabase.from("users").update({ sticker_set_name: name }).eq("id", user.id);
     console.log("add_to_pack: sticker set created:", name);
   };
@@ -8911,11 +8922,11 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
       // Add to existing sticker set
       console.log("add_to_pack: adding to existing set:", stickerSetName);
       try {
-        await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/addStickerToSet`, {
+        await callTelegramBotMethodOrThrow("addStickerToSet", {
           user_id: telegramId,
           name: stickerSetName,
           sticker: { sticker: sticker.telegram_file_id, format: "static", emoji_list: ["🔥"] },
-        }, { timeout: 15000 });
+        });
         console.log("add_to_pack: sticker added to existing set");
       } catch (addErr: any) {
         const desc = (addErr.response?.data?.description || "").toLowerCase();
@@ -8985,12 +8996,12 @@ bot.action("add_to_pack", async (ctx) => {
 
   const createStickerSet = async (name: string, fileId: string) => {
     console.log("add_to_pack(old): creating new sticker set:", name);
-    await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/createNewStickerSet`, {
+    await callTelegramBotMethodOrThrow("createNewStickerSet", {
       user_id: telegramId,
       name,
       title: packTitle,
       stickers: [{ sticker: fileId, format: "static", emoji_list: ["🔥"] }],
-    }, { timeout: 15000 });
+    });
     await supabase.from("users").update({ sticker_set_name: name }).eq("id", user.id);
     console.log("add_to_pack(old): sticker set created:", name);
   };
@@ -9011,11 +9022,11 @@ bot.action("add_to_pack", async (ctx) => {
     } else {
       console.log("add_to_pack(old): adding to existing set:", stickerSetName);
       try {
-        await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/addStickerToSet`, {
+        await callTelegramBotMethodOrThrow("addStickerToSet", {
           user_id: telegramId,
           name: stickerSetName,
           sticker: { sticker: session.last_sticker_file_id, format: "static", emoji_list: ["🔥"] },
-        }, { timeout: 15000 });
+        });
         console.log("add_to_pack(old): sticker added to existing set");
       } catch (addErr: any) {
         const desc = (addErr.response?.data?.description || "").toLowerCase();
