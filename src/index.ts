@@ -6989,6 +6989,21 @@ bot.on("sticker", async (ctx) => {
     }
   }
   if (!session?.id) {
+    // Last-resort: order by created_at only (some DB setups have null updated_at)
+    const { data: lastResortSession } = await supabase
+      .from("sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .in("state", ["wait_replace_face", "wait_replace_face_sticker"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lastResortSession?.id) {
+      session = lastResortSession;
+    }
+  }
+  if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
       .insert({
@@ -9990,6 +10005,21 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
   let session = explicitSessionId
     ? await getSessionByIdForUser(user.id, explicitSessionId)
     : await getActiveSession(user.id);
+  if (!session?.id) {
+    // Fallback: callback_data often exceeds 64 chars (replace_face:uuid:uuid:rev) so session ref is dropped
+    const { data: fallbackSession } = await supabase
+      .from("sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .in("state", ["wait_replace_face", "wait_action", "wait_edit_sticker"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (fallbackSession?.id) {
+      session = fallbackSession;
+    }
+  }
   if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
