@@ -9987,29 +9987,51 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
       })),
     });
 
-    // Photo already exists (from wait_action). Ask for sticker only.
+    // Canonical replace-face entrypoint:
+    // always create a fresh wait_replace_face session from latest known photo.
+    // This avoids stale callback session ids hijacking the flow.
+    const latestSessionPhotoFileId = await getLatestSessionPhotoFileId(user.id);
+    const candidatePhotoFileId =
+      session.current_photo_file_id
+      || (Array.isArray(session.photos) && session.photos.length > 0 ? session.photos[session.photos.length - 1] : null)
+      || latestSessionPhotoFileId
+      || user.last_photo_file_id
+      || null;
+    if (!candidatePhotoFileId) {
+      await ctx.reply(await getText(lang, "photo.need_photo"));
+      return;
+    }
+
     const { error: deactivateErr } = await supabase
       .from("sessions")
       .update({ is_active: false })
       .eq("user_id", user.id)
-      .eq("env", config.appEnv)
-      .neq("id", session.id);
-    const { error: promoteErr } = await supabase
+      .eq("env", config.appEnv);
+    const { data: createdReplaceSession, error: createErr } = await supabase
       .from("sessions")
-      .update({
+      .insert({
+        user_id: user.id,
         state: "wait_replace_face",
         edit_replace_sticker_id: null,
         is_active: true,
         flow_kind: "single",
-        session_rev: nextRev,
+        session_rev: 1,
+        current_photo_file_id: candidatePhotoFileId,
+        photos: [candidatePhotoFileId],
+        env: config.appEnv,
       })
-      .eq("id", session.id);
-
-    const { data: sessionAfter } = await supabase
-      .from("sessions")
       .select("id,state,is_active,flow_kind,session_rev,current_photo_file_id,edit_replace_sticker_id,created_at,updated_at")
-      .eq("id", session.id)
-      .maybeSingle();
+      .single();
+    if (createErr || !createdReplaceSession?.id) {
+      console.error("[replace_face.debug][action_replace_face.create_failed]", {
+        trace_id: traceId,
+        userId: user.id,
+        createErr: createErr?.message || null,
+      });
+      await ctx.reply(await getText(lang, "error.technical"));
+      return;
+    }
+
     const { data: afterSessions } = await supabase
       .from("sessions")
       .select("id,state,is_active,flow_kind,session_rev,created_at,updated_at,current_photo_file_id,edit_replace_sticker_id")
@@ -10021,20 +10043,20 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
       trace_id: traceId,
       userId: user.id,
       deactivateErr: deactivateErr?.message || null,
-      promoteErr: promoteErr?.message || null,
-      expectedSessionId: session.id,
-      expectedNextRev: nextRev,
-      sessionAfter: sessionAfter
+      promoteErr: null,
+      expectedSessionId: createdReplaceSession.id,
+      expectedNextRev: 1,
+      sessionAfter: createdReplaceSession
         ? {
-            id: sessionAfter.id,
-            state: sessionAfter.state,
-            is_active: sessionAfter.is_active,
-            flow_kind: sessionAfter.flow_kind,
-            session_rev: sessionAfter.session_rev,
-            current_photo_file_id: sessionAfter.current_photo_file_id ? "set" : null,
-            edit_replace_sticker_id: sessionAfter.edit_replace_sticker_id || null,
-            created_at: sessionAfter.created_at || null,
-            updated_at: sessionAfter.updated_at || null,
+            id: createdReplaceSession.id,
+            state: createdReplaceSession.state,
+            is_active: createdReplaceSession.is_active,
+            flow_kind: createdReplaceSession.flow_kind,
+            session_rev: createdReplaceSession.session_rev,
+            current_photo_file_id: createdReplaceSession.current_photo_file_id ? "set" : null,
+            edit_replace_sticker_id: createdReplaceSession.edit_replace_sticker_id || null,
+            created_at: createdReplaceSession.created_at || null,
+            updated_at: createdReplaceSession.updated_at || null,
           }
         : null,
       sessions: (afterSessions || []).map((s: any) => ({
