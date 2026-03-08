@@ -151,6 +151,14 @@ function getOrCreateTraceId(ctx: any): string {
   return traceId;
 }
 
+function resolveTelegramChatId(ctx: any): number | undefined {
+  return (
+    (ctx?.chat?.id as number | undefined)
+    || ((ctx?.callbackQuery as any)?.message?.chat?.id as number | undefined)
+    || ((ctx?.message as any)?.chat?.id as number | undefined)
+  );
+}
+
 async function getPackSegments(): Promise<{ id: string; sort_order: number }[]> {
   const now = Date.now();
   if (packSegmentsCache && now - packSegmentsCache.timestamp < PACK_SEGMENTS_CACHE_TTL) {
@@ -564,27 +572,29 @@ async function sendStyleKeyboardFlat(
   }
 
   const text = options?.headerText || await getText(lang, "photo.ask_style");
+  const chatId = resolveTelegramChatId(ctx);
 
-  if (messageId) {
+  if (messageId && chatId) {
     try {
       await ctx.telegram.editMessageText(
-        ctx.chat?.id,
+        chatId,
         messageId,
         undefined,
         text,
         { reply_markup: { inline_keyboard: buttons } }
       );
+      return;
     } catch (err: any) {
       const msg = String(err?.message || "");
       console.error("sendStyleKeyboardFlat error:", msg);
       // Fallback for stale/non-editable messages: send a fresh style list instead of failing silently.
-      if (msg.includes("message can't be edited")) {
+      if (msg.includes("message can't be edited") || msg.includes("message to edit not found")) {
         await ctx.reply(text, Markup.inlineKeyboard(buttons)).catch(() => {});
+        return;
       }
     }
-  } else {
-    await ctx.reply(text, Markup.inlineKeyboard(buttons));
   }
+  await ctx.reply(text, Markup.inlineKeyboard(buttons));
 }
 
 /** Action menu after photo: 4 actions (photo->sticker, replace face, change style, make pack). */
@@ -894,11 +904,12 @@ async function sendEmotionKeyboard(
 
   const caption = await getText(lang, "emotion.choose");
   const replyMarkup = Markup.inlineKeyboard(buttons);
+  const chatId = resolveTelegramChatId(ctx);
 
-  if (options?.messageId && ctx.chat?.id) {
+  if (options?.messageId && chatId) {
     try {
       await ctx.telegram.editMessageText(
-        ctx.chat.id,
+        chatId,
         options.messageId,
         undefined,
         caption,
@@ -986,10 +997,11 @@ async function sendMotionKeyboard(
 
   const text = await getText(lang, "motion.choose");
   const keyboard = Markup.inlineKeyboard(buttons);
-  if (options?.messageId && ctx.chat?.id) {
+  const chatId = resolveTelegramChatId(ctx);
+  if (options?.messageId && chatId) {
     try {
       await ctx.telegram.editMessageText(
-        ctx.chat.id,
+        chatId,
         options.messageId,
         undefined,
         text,
