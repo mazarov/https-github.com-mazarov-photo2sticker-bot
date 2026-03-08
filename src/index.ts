@@ -8861,7 +8861,7 @@ bot.action(/^style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
       const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
       const styleDescription = lang === "ru"
         ? (preset.description_ru || preset.prompt_hint || "")
-        : (preset.description_en || preset.description_ru || preset.prompt_hint || "");
+        : (preset.description_ru || preset.prompt_hint || "");
       const headerText = lang === "ru"
         ? `${preset.emoji} Стиль: ${styleName}\n\n${styleDescription}\n\nВыбери стиль ниже или нажми «Попробовать с ${styleName}».`
         : `${preset.emoji} Style: ${styleName}\n\n${styleDescription}\n\nPick another style below or tap “Try with ${styleName}”.`;
