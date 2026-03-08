@@ -50,6 +50,7 @@ stateDiagram-v2
 | `wait_custom_emotion` | Ждём текстовое описание своей эмоции |
 | `wait_custom_motion` | Ждём текстовое описание своего движения |
 | `wait_text_overlay` | Ждём текст для наложения на стикер |
+| `wait_replace_face` | Unified flow замены лица: ждём фото и/или стикер-референс |
 | `wait_first_purchase` | Paywall — новый пользователь, первая покупка |
 | `wait_buy_credit` | Paywall — нужны кредиты |
 | `processing` | Генерация стикера (стиль) |
@@ -293,6 +294,14 @@ flowchart TD
 - API создаёт новую single-session в состоянии `wait_edit_sticker`.
 - Отдельный `bot.on("sticker")` handler принимает статичный Telegram sticker, сохраняет его как импортированный record в `stickers` и переводит session в `wait_edit_action`.
 - Под импортированным стикером показываются стандартные кнопки (`change_emotion`, `change_motion`, `toggle_border`, `add_text`) + новая `replace_face`.
-- Callback `replace_face:<stickerId>`:
-  - если в сессии/пользователе нет рабочего фото -> state `wait_edit_photo` и запросить фото;
-  - если фото есть -> выставить `current_photo_file_id` (identity), `last_sticker_file_id` (pose/style reference) и запустить `startGeneration(..., generationType="replace_subject")`.
+- Callback `replace_face:<stickerId>` переводит в единый flow `wait_replace_face`:
+  - сохраняется `edit_replace_sticker_id` (целевой стикер);
+  - бот всегда просит фото identity;
+  - после фото generation `replace_subject` запускается сразу (без промежуточных кнопок).
+
+## Replace Face (unified flow)
+
+- Entry A: `action_replace_face` (из меню действий по фото) → `wait_replace_face` → бот просит фото → затем просит стикер.
+- Entry B: `replace_face:<stickerId>` (из меню под стикером) → `wait_replace_face` с заполненным `edit_replace_sticker_id` → бот просит фото.
+- После получения обоих входов (identity photo + sticker reference) запускается `startGeneration(..., generationType="replace_subject")`.
+- Source of truth: одно состояние `wait_replace_face`, без разветвления по `wait_edit_photo`/`wait_replace_face_sticker`.

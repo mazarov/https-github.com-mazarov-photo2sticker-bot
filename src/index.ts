@@ -2428,6 +2428,7 @@ const SESSION_FALLBACK_ACTIVE_STATES = [
   "wait_custom_emotion",
   "wait_custom_motion",
   "wait_text_overlay",
+  "wait_replace_face",
   "wait_replace_face_sticker",
   "wait_edit_sticker",
   "wait_edit_photo",
@@ -2646,6 +2647,7 @@ async function resolveSessionForIncomingPhoto(userId: string, traceId?: string |
   // these states must survive even when is_active was dropped by side-effects,
   // otherwise photo messages are incorrectly recovered into wait_action.
   const REPLACE_FACE_RECOVERY_STATES = [
+    "wait_replace_face",
     "wait_replace_face_sticker",
     "wait_edit_sticker",
     "wait_edit_photo",
@@ -4021,11 +4023,30 @@ bot.on("photo", async (ctx) => {
     }
   }
 
-  // === Edit sticker flow: waiting for replacement face photo ===
-  if (session.state === "wait_edit_photo") {
+  // === Replace-face flow: waiting for identity photo (and optionally sticker) ===
+  if (["wait_replace_face", "wait_edit_photo", "wait_replace_face_sticker"].includes(String(session.state || ""))) {
     const stickerId = session.edit_replace_sticker_id || null;
     if (!stickerId) {
-      await ctx.reply(lang === "ru" ? "Фото сохранено. Теперь пришли стикер для редактирования." : "Photo saved. Now send a sticker to edit.");
+      const photos = Array.isArray(session.photos) ? session.photos : [];
+      photos.push(photo.file_id);
+      const nextRev = (session.session_rev || 1) + 1;
+      await supabase
+        .from("sessions")
+        .update({
+          state: "wait_replace_face",
+          photos,
+          current_photo_file_id: photo.file_id,
+          flow_kind: "single",
+          is_active: true,
+          session_rev: nextRev,
+        })
+        .eq("id", session.id);
+      logSessionTrace("photo.wait_replace_face.need_sticker", {
+        userId: user.id,
+        sessionId: session.id,
+        nextRev,
+      }, traceId);
+      await ctx.reply(await getText(lang, "action.replace_face_send_sticker"));
       return;
     }
 
@@ -4057,11 +4078,17 @@ bot.on("photo", async (ctx) => {
       })
       .eq("id", session.id);
 
-    const patchedSession = {
+    const { data: freshSession } = await supabase
+      .from("sessions")
+      .select("*")
+      .eq("id", session.id)
+      .maybeSingle();
+    const patchedSession = freshSession || {
       ...session,
       current_photo_file_id: photo.file_id,
       last_sticker_file_id: sticker.telegram_file_id,
       selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
+      session_rev: nextRev,
     };
 
     const replacePrompt =
@@ -4077,31 +4104,6 @@ bot.on("photo", async (ctx) => {
       userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
       earlyProgressMessageId: earlyMsgId,
     });
-    return;
-  }
-
-  // === replace-face (from action menu): user sent identity photo ===
-  if (session.state === "wait_replace_face_sticker") {
-    const photos = Array.isArray(session.photos) ? session.photos : [];
-    photos.push(photo.file_id);
-    const nextRev = (session.session_rev || 1) + 1;
-    await supabase
-      .from("sessions")
-      .update({
-        photos,
-        current_photo_file_id: photo.file_id,
-        flow_kind: "single",
-        is_active: true,
-        session_rev: nextRev,
-      })
-      .eq("id", session.id);
-    logSessionTrace("photo.wait_replace_face_sticker.updated", {
-      userId: user.id,
-      sessionId: session.id,
-      toState: "wait_replace_face_sticker",
-      nextRev,
-    }, traceId);
-    await ctx.reply(await getText(lang, "action.replace_face_send_sticker"));
     return;
   }
 
@@ -6941,7 +6943,7 @@ bot.on("sticker", async (ctx) => {
       .select("*")
       .eq("user_id", user.id)
       .eq("env", config.appEnv)
-      .eq("state", "wait_replace_face_sticker")
+      .in("state", ["wait_replace_face", "wait_replace_face_sticker"])
       .order("updated_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
       .limit(1)
@@ -6981,8 +6983,8 @@ bot.on("sticker", async (ctx) => {
   const sticker = (ctx.message as any)?.sticker;
   const stickerFileId = sticker?.file_id as string | undefined;
 
-  // === wait_replace_face_sticker: user sent sticker to replace face in (photo = identity) ===
-  if (session.state === "wait_replace_face_sticker" && stickerFileId) {
+  // === wait_replace_face: user sent sticker to replace face in (photo = identity) ===
+  if (["wait_replace_face", "wait_replace_face_sticker"].includes(String(session.state || "")) && stickerFileId) {
     const identityPhotoFileId = session.current_photo_file_id || null;
     if (!identityPhotoFileId) {
       await ctx.reply(await getText(lang, "photo.need_photo"));
@@ -7011,21 +7013,29 @@ bot.on("sticker", async (ctx) => {
     await supabase
       .from("sessions")
       .update({
+        state: "wait_replace_face",
         edit_replace_sticker_id: stickerId,
         last_sticker_file_id: stickerFileId,
+        flow_kind: "single",
         is_active: true,
         session_rev: nextRev,
       })
       .eq("id", session.id);
 
     const { data: stickerRow } = await supabase.from("stickers").select("style_preset_id").eq("id", stickerId).maybeSingle();
-    const patchedSession = {
+    const { data: freshSession } = await supabase
+      .from("sessions")
+      .select("*")
+      .eq("id", session.id)
+      .maybeSingle();
+    const patchedSession = freshSession || {
       ...session,
       current_photo_file_id: identityPhotoFileId,
       last_sticker_file_id: stickerFileId,
       edit_replace_sticker_id: stickerId,
       selected_style_id: stickerRow?.style_preset_id || session.selected_style_id || null,
       session_rev: nextRev,
+      state: "wait_replace_face",
     };
     const replacePrompt =
       "You are given two references: (1) identity photo, (2) sticker reference. " +
@@ -9775,7 +9785,12 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
     await rejectSessionEvent(ctx, lang, `action_${action}`, "session_not_found");
     return;
   }
-  if (session.state !== "wait_action") {
+  const hardProcessingStates = new Set(["processing", "processing_emotion", "processing_motion", "processing_text", "generating_pack_preview", "generating_pack_theme", "processing_pack"]);
+  const replaceFaceAllowedStates = new Set(["wait_action", "wait_style", "confirm_sticker", "wait_emotion", "wait_motion", "wait_text_overlay", "wait_replace_face"]);
+  if (
+    (action !== "replace_face" && session.state !== "wait_action")
+    || (action === "replace_face" && (!replaceFaceAllowedStates.has(String(session.state || "")) || hardProcessingStates.has(String(session.state || ""))))
+  ) {
     await rejectSessionEvent(ctx, lang, `action_${action}`, "wrong_state");
     return;
   }
@@ -9873,13 +9888,14 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
     await supabase
       .from("sessions")
       .update({
-        state: "wait_replace_face_sticker",
+        state: "wait_replace_face",
+        edit_replace_sticker_id: null,
         is_active: true,
         flow_kind: "single",
         session_rev: nextRev,
       })
       .eq("id", session.id);
-    await ctx.reply(await getText(lang, "action.replace_face_send_sticker"));
+    await ctx.reply(await getText(lang, "edit.need_photo"));
     return;
   }
 
@@ -9941,7 +9957,7 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
   if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
-      .insert({ user_id: user.id, state: "wait_edit_action", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
+      .insert({ user_id: user.id, state: "wait_replace_face", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
       .select()
       .single();
     session = newSession;
@@ -9956,8 +9972,14 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
   const nextRev = (session.session_rev || 1) + 1;
   await supabase
     .from("sessions")
+    .update({ is_active: false })
+    .eq("user_id", user.id)
+    .eq("env", config.appEnv)
+    .neq("id", session.id);
+  await supabase
+    .from("sessions")
     .update({
-      state: "wait_edit_photo",
+      state: "wait_replace_face",
       is_active: true,
       flow_kind: "single",
       edit_replace_sticker_id: stickerId,
@@ -11298,7 +11320,7 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
   if (!photos.includes(newPhotoFileId)) photos.push(newPhotoFileId);
 
   // Product rule: after switching to a new photo, return to action menu
-  // (except replace-face flow handled in wait_edit_photo branch of photo handler).
+  // (except replace-face flow handled in wait_replace_face branch of photo handler).
   const nextRev = (session.session_rev || 1) + 1;
   await supabase
     .from("sessions")
@@ -12078,7 +12100,7 @@ bot.action(/^retry_generation:(.+)$/, async (ctx) => {
       session.generation_type === "emotion" ? "wait_emotion" :
       session.generation_type === "motion" ? "wait_motion" :
       session.generation_type === "text" ? "wait_text_overlay" :
-      session.generation_type === "replace_subject" ? "wait_edit_action" : "wait_style";
+      session.generation_type === "replace_subject" ? "wait_replace_face" : "wait_style";
 
     await supabase
       .from("sessions")
@@ -13802,7 +13824,7 @@ bot.action("cancel", async (ctx) => {
       session.pending_generation_type === "emotion" ? "wait_emotion" :
       session.pending_generation_type === "motion" ? "wait_motion" :
       session.pending_generation_type === "text" ? "wait_text_overlay" :
-      session.pending_generation_type === "replace_subject" ? "wait_edit_action" : "wait_style";
+      session.pending_generation_type === "replace_subject" ? "wait_replace_face" : "wait_style";
     await supabase
       .from("sessions")
       .update({ state: nextState, is_active: true })
