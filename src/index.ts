@@ -4036,8 +4036,13 @@ bot.on("photo", async (ctx) => {
   }).catch(console.error);
 
   // === AI Assistant: re-route to assistant_wait_photo if assistant is active after generation ===
-  // Skip re-route for pack flow states — pack handles photos independently
-  if (!session.state?.startsWith("assistant_") && !session.state?.startsWith("wait_pack_") && !["processing", "processing_emotion", "processing_motion", "processing_text", "generating_pack_preview", "generating_pack_theme", "processing_pack"].includes(session.state)) {
+  // Skip re-route for pack flow, replace-face flow — they handle photos independently
+  const skipAssistantRerouteStates = [
+    "processing", "processing_emotion", "processing_motion", "processing_text",
+    "generating_pack_preview", "generating_pack_theme", "processing_pack",
+    "wait_replace_face", "wait_replace_face_sticker", "wait_edit_photo",
+  ];
+  if (!session.state?.startsWith("assistant_") && !session.state?.startsWith("wait_pack_") && !skipAssistantRerouteStates.includes(String(session.state || ""))) {
     const activeAssistant = await getActiveAssistantSession(user.id);
     if (activeAssistant && activeAssistant.status === "active") {
       console.log("Assistant photo re-route: state was", session.state, "→ switching to assistant_wait_photo");
