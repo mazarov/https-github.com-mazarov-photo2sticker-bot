@@ -301,6 +301,8 @@ flowchart TD
 | Motion presets | 5 мин | `getMotionPresets()` |
 | Bot texts (i18n) | 5 мин | `getText()` |
 
+`getStylePresets()` сохранён как совместимый API, но читает данные из `style_presets_v2` (legacy зависимость от `style_presets` удалена).
+
 ### Gemini route switch (runtime)
 
 - Все Gemini-вызовы в API выбирают base URL через `app_config.gemini_use_proxy` (TTL cache 60s):

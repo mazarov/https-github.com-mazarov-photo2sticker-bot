@@ -128,10 +128,6 @@ app.use(express.json({ limit: "10mb" }));
 let agentCache: { data: any; timestamp: number } | null = null;
 const AGENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-// Cache for style presets
-let stylePresetsCache: { data: any[]; timestamp: number } | null = null;
-const STYLE_PRESETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
 // Cache for emotion presets
 let emotionPresetsCache: { data: any[]; timestamp: number } | null = null;
 const EMOTION_PRESETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -394,21 +390,17 @@ interface MotionPreset {
 }
 
 async function getStylePresets(): Promise<StylePreset[]> {
-  const now = Date.now();
-  if (stylePresetsCache && now - stylePresetsCache.timestamp < STYLE_PRESETS_CACHE_TTL) {
-    return stylePresetsCache.data;
-  }
-
-  const { data } = await supabase
-    .from("style_presets")
-    .select("*")
-    .eq("is_active", true)
-    .order("sort_order");
-
-  if (data) {
-    stylePresetsCache = { data, timestamp: now };
-  }
-  return data || [];
+  // Backward-compatible adapter: legacy callsites read from v2 source of truth.
+  const presetsV2 = await getStylePresetsV2();
+  return presetsV2.map((preset) => ({
+    id: preset.id,
+    name_ru: preset.name_ru,
+    name_en: preset.name_en,
+    prompt_hint: preset.prompt_hint,
+    emoji: preset.emoji,
+    sort_order: preset.sort_order,
+    is_active: preset.is_active,
+  }));
 }
 
 // Style examples helpers
@@ -564,6 +556,7 @@ async function sendStyleKeyboardFlat(
   messageId?: number,
   options?: {
     topButtons?: any[][];
+    bottomButtons?: any[][];
     extraButtons?: any[][];
     headerText?: string;
     selectedStyleId?: string | null;
@@ -602,6 +595,10 @@ async function sendStyleKeyboardFlat(
       });
     }
     buttons.push(row);
+  }
+
+  if (options?.bottomButtons?.length) {
+    buttons.push(...options.bottomButtons);
   }
 
   if (options?.extraButtons?.length) {
@@ -8870,25 +8867,22 @@ bot.action(/^style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
       const tryText = lang === "ru" ? `✅ Попробовать с ${styleName}` : `✅ Try with ${styleName}`;
       const tryCallback = appendSessionRefIfFits(`style_v2:${preset.id}`, sessionRef);
 
-      // Preserve non-style rows (e.g. "Back to sticker") from current keyboard.
+      // Preserve only stable non-style rows (e.g. "Back to sticker").
+      // Never preserve style callbacks, otherwise stale "Try with ..." rows duplicate.
       const currentRows = ((ctx.callbackQuery as any)?.message?.reply_markup?.inline_keyboard || []) as any[][];
       const preservedRows = currentRows.filter((row) =>
         Array.isArray(row) &&
         row.some((btn: any) => {
           const cb = String(btn?.callback_data || "");
-          return cb && !cb.startsWith("style_preview:");
+          return cb.startsWith("back_to_sticker_menu:");
         })
       );
 
-      await sendStyleKeyboardFlat(ctx, lang, (ctx.callbackQuery as any)?.message?.message_id, {
-        headerText,
-        selectedStyleId: preset.id,
-        sessionId: session.id,
-        sessionRev: nextRev,
-        topButtons: [[{ text: tryText, callback_data: tryCallback }]],
-        extraButtons: preservedRows,
-      });
-
+      // Required order: example sticker -> style text -> style grid -> "Try with ...".
+      const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+      if (currentMessageId) {
+        await ctx.telegram.deleteMessage(ctx.chat!.id, currentMessageId).catch(() => {});
+      }
       try {
         const fileId = await getStyleStickerFileId(preset.id);
         if (fileId) {
@@ -8897,6 +8891,15 @@ bot.action(/^style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
       } catch (err: any) {
         console.warn("[StylePreview] single-flow example send failed:", err?.message || err);
       }
+
+      await sendStyleKeyboardFlat(ctx, lang, undefined, {
+        headerText,
+        selectedStyleId: preset.id,
+        sessionId: session.id,
+        sessionRev: nextRev,
+        bottomButtons: [[{ text: tryText, callback_data: tryCallback }]],
+        extraButtons: preservedRows,
+      });
       return;
     }
 
@@ -9806,7 +9809,10 @@ bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
   const sessionRef = formatCallbackSessionRef(session.id, nextRev);
   const backCb = appendSessionRefIfFits(`back_to_sticker_menu:${stickerId}`, sessionRef);
   const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
-  await sendStyleKeyboardFlat(ctx, lang, currentMessageId, {
+  if (currentMessageId) {
+    await ctx.telegram.deleteMessage(ctx.chat!.id, currentMessageId).catch(() => {});
+  }
+  await sendStyleKeyboardFlat(ctx, lang, undefined, {
     selectedStyleId: session.selected_style_id || null,
     sessionId: session.id,
     sessionRev: nextRev,
