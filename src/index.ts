@@ -510,21 +510,18 @@ async function sendStyleKeyboardFlat(
   lang: string,
   messageId?: number,
   options?: {
-    includeCustom?: boolean;
     extraButtons?: any[][];
     headerText?: string;
     selectedStyleId?: string | null;
   }
 ) {
   const allPresets = await getStylePresetsV2();
-  const customText = await getText(lang, "btn.custom_style");
-  const includeCustom = options?.includeCustom !== false;
 
-  // 3 styles per row (unified layout with ideas flow)
+  // 2 styles per row
   const buttons: any[][] = [];
-  for (let i = 0; i < allPresets.length; i += 3) {
+  for (let i = 0; i < allPresets.length; i += 2) {
     const row: any[] = [];
-    for (let j = i; j < Math.min(i + 3, allPresets.length); j++) {
+    for (let j = i; j < Math.min(i + 2, allPresets.length); j++) {
       const isSelected = options?.selectedStyleId && options.selectedStyleId === allPresets[j].id;
       row.push({
         text: `${isSelected ? "✅ " : ""}${allPresets[j].emoji} ${lang === "ru" ? allPresets[j].name_ru : allPresets[j].name_en}`,
@@ -534,10 +531,6 @@ async function sendStyleKeyboardFlat(
     buttons.push(row);
   }
 
-  // Custom style button
-  if (includeCustom) {
-    buttons.push([{ text: customText, callback_data: "style_custom_v2" }]);
-  }
   if (options?.extraButtons?.length) {
     buttons.push(...options.extraButtons);
   }
@@ -4043,7 +4036,6 @@ async function sendPackStyleSelectionStep(
         : [{ text: cancelBtn, callback_data: targetSessionRef ? `pack_cancel:${targetSessionRef}` : "pack_cancel" }];
 
       return sendStyleKeyboardFlat(ctx, lang, messageId, {
-        includeCustom: false,
         headerText,
         selectedStyleId: selectedStyleId ?? undefined,
         extraButtons: [
@@ -4059,7 +4051,6 @@ async function sendPackStyleSelectionStep(
     : [{ text: cancelBtn, callback_data: targetSessionId ? `pack_cancel:${targetSessionId}` : "pack_cancel" }];
 
   return sendStyleKeyboardFlat(ctx, lang, messageId, {
-    includeCustom: false,
     headerText,
     selectedStyleId: selectedStyleId ?? undefined,
     extraButtons: [
