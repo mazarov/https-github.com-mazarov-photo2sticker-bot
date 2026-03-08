@@ -6935,6 +6935,22 @@ bot.on("sticker", async (ctx) => {
 
   let session = await getActiveSession(user.id);
   if (!session?.id) {
+    // Fallback: replace-face flow may have is_active=false or miss fallback window
+    const { data: replaceFaceSession } = await supabase
+      .from("sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .eq("state", "wait_replace_face_sticker")
+      .order("updated_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (replaceFaceSession?.id) {
+      session = replaceFaceSession;
+    }
+  }
+  if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
       .insert({
@@ -9846,6 +9862,13 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
   }
 
   if (action === "replace_face") {
+    // One active session: deactivate others so getActiveSession returns this one when user sends sticker
+    await supabase
+      .from("sessions")
+      .update({ is_active: false })
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .neq("id", session.id);
     await supabase
       .from("sessions")
       .update({
