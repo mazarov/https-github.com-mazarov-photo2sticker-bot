@@ -2415,7 +2415,7 @@ async function getAssistantFlowRecoverySession(userId: string) {
   const activeAssistant = await getActiveAssistantSession(userId);
   if (activeAssistant?.session_id) {
     const linkedSession = await getSessionByIdForUser(userId, activeAssistant.session_id);
-    if (linkedSession?.id) {
+    if (linkedSession?.id && (linkedSession.flow_kind === "assistant" || String(linkedSession.state || "").startsWith("assistant_"))) {
       return linkedSession;
     }
   }
@@ -2423,7 +2423,7 @@ async function getAssistantFlowRecoverySession(userId: string) {
   const recentAssistant = await getRecentAssistantSession(userId, 30 * 60 * 1000);
   if (recentAssistant?.session_id) {
     const linkedRecentSession = await getSessionByIdForUser(userId, recentAssistant.session_id);
-    if (linkedRecentSession?.id) {
+    if (linkedRecentSession?.id && (linkedRecentSession.flow_kind === "assistant" || String(linkedRecentSession.state || "").startsWith("assistant_"))) {
       return linkedRecentSession;
     }
   }
@@ -10712,7 +10712,34 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
     return;
   }
   const photos = Array.isArray(session.photos) ? session.photos : [];
-  photos.push(newPhotoFileId);
+  if (!photos.includes(newPhotoFileId)) photos.push(newPhotoFileId);
+
+  // Product rule: after switching to a new photo, return to action menu
+  // (except replace-face flow handled in wait_edit_photo branch of photo handler).
+  const nextRev = (session.session_rev || 1) + 1;
+  await supabase
+    .from("sessions")
+    .update({
+      photos,
+      current_photo_file_id: newPhotoFileId,
+      pending_photo_file_id: null,
+      state: "wait_action",
+      is_active: true,
+      flow_kind: "single",
+      session_rev: nextRev,
+    })
+    .eq("id", session.id);
+
+  void ensureSubjectProfileForGeneration(
+    { ...session, current_photo_file_id: newPhotoFileId, photos },
+    "style"
+  ).catch((err) => console.warn("[assistant_new_photo->wait_action] subject profile failed:", err?.message || err));
+
+  if (aSession) {
+    await updateAssistantSession(aSession.id, { pending_photo_file_id: null, status: "completed" });
+  }
+  await sendActionMenu(ctx, lang, session.id, nextRev);
+  return;
 
   // Legacy assistant_wait_idea or any assistant state with new photo: show style selection
   if (session.state === "assistant_wait_idea" || session.state === "assistant_wait_photo") {
@@ -10859,21 +10886,30 @@ bot.action(/^assistant_keep_photo(?::(.+))?$/, async (ctx) => {
     await rejectSessionEvent(ctx, lang, "assistant_keep_photo", "stale_callback");
     return;
   }
+  const currentPhotoFileId = session.current_photo_file_id || user.last_photo_file_id || null;
+  if (!currentPhotoFileId) {
+    await ctx.reply(await getText(lang, "photo.need_photo"));
+    return;
+  }
+  const nextRev = (session.session_rev || 1) + 1;
   await supabase
     .from("sessions")
     .update({
+      state: "wait_action",
+      current_photo_file_id: currentPhotoFileId,
       pending_photo_file_id: null,
       is_active: true,
-      flow_kind: "assistant",
-      session_rev: (session.session_rev || 1) + 1,
+      flow_kind: "single",
+      session_rev: nextRev,
     })
     .eq("id", session.id);
   const aSession = await getActiveAssistantSession(user.id);
   if (aSession) {
-    await updateAssistantSession(aSession.id, { pending_photo_file_id: null });
+    await updateAssistantSession(aSession.id, { pending_photo_file_id: null, status: "completed" });
   }
-  const msg = lang === "ru" ? "Хорошо, работаем с текущим фото!" : "Ok, keeping the current photo!";
+  const msg = lang === "ru" ? "Оставляем текущее фото." : "Keeping current photo.";
   await ctx.reply(msg);
+  await sendActionMenu(ctx, lang, session.id, nextRev);
 });
 
 // Callback: buy_credits
