@@ -2589,6 +2589,26 @@ async function getActiveSession(userId: string, traceId?: string | null) {
   return fallbackByCreatedAt;
 }
 
+async function getPendingPaymentSession(userId: string, traceId?: string | null) {
+  logSessionTrace("getPendingPaymentSession.start", { userId }, traceId);
+  const { data, error } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .in("state", ["wait_buy_credit", "wait_first_purchase"])
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    logSessionTrace("getPendingPaymentSession.error", { userId, error: error.message, code: error.code }, traceId);
+  }
+  logSessionTrace("getPendingPaymentSession.result", { userId, session: sessionTraceSnapshot(data) }, traceId);
+  return data;
+}
+
 const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_preview_payment", "wait_pack_generate_request", "generating_pack_preview", "generating_pack_theme", "wait_pack_approval", "wait_pack_rework_feedback", "processing_pack"] as const;
 
 /** States used in SQL IN(...). Excludes generating_pack_theme until migration 121 is applied (invalid enum on prod otherwise breaks getPackFlowSession and holiday button). */
@@ -14496,9 +14516,27 @@ bot.on("successful_payment", async (ctx) => {
       console.log("[metrika] Conversion skipped, tx:", transaction.id, "reason:", reason);
     }
 
-    // Check if there's a pending session waiting for credits (paywall or normal)
-    const session = await getActiveSession(finalUser.id);
+    // Check if there's a pending session waiting for credits (paywall or normal).
+    // Use payment-specific fallback because such session may be marked inactive by racey updates.
+    let session = await getActiveSession(finalUser.id);
+    if (!session || (session.state !== "wait_buy_credit" && session.state !== "wait_first_purchase")) {
+      const pendingPaymentSession = await getPendingPaymentSession(finalUser.id);
+      if (pendingPaymentSession?.id) {
+        session = pendingPaymentSession;
+      }
+    }
     const isWaitingForCredits = session?.state === "wait_buy_credit" || session?.state === "wait_first_purchase";
+    if (isWaitingForCredits && session?.id && session.is_active !== true) {
+      const { data: reactivated } = await supabase
+        .from("sessions")
+        .update({ is_active: true })
+        .eq("id", session.id)
+        .select("*")
+        .maybeSingle();
+      if (reactivated?.id) {
+        session = reactivated;
+      }
+    }
     console.log("[payment] session:", session?.id, "state:", session?.state, "is_active:", session?.is_active, "prompt_final:", !!session?.prompt_final, "credits_spent:", session?.credits_spent, "isWaitingForCredits:", isWaitingForCredits);
     
     // === AI Assistant: paid after paywall — trigger generation with assistant params ===
