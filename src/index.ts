@@ -3487,36 +3487,60 @@ bot.on("photo", async (ctx) => {
 
   // === Edit sticker flow: waiting for replacement face photo ===
   if (session.state === "wait_edit_photo") {
+    const stickerId = session.edit_replace_sticker_id || null;
+    if (!stickerId) {
+      await ctx.reply(lang === "ru" ? "Фото сохранено. Теперь пришли стикер для редактирования." : "Photo saved. Now send a sticker to edit.");
+      return;
+    }
+
+    const { data: sticker } = await supabase
+      .from("stickers")
+      .select("telegram_file_id, style_preset_id")
+      .eq("id", stickerId)
+      .maybeSingle();
+
+    if (!sticker?.telegram_file_id) {
+      await ctx.reply(await getText(lang, "error.no_stickers_added"));
+      return;
+    }
+
     const photos = Array.isArray(session.photos) ? session.photos : [];
     photos.push(photo.file_id);
     const nextRev = (session.session_rev || 1) + 1;
+
     await supabase
       .from("sessions")
       .update({
         photos,
         current_photo_file_id: photo.file_id,
-        state: "wait_edit_action",
+        last_sticker_file_id: sticker.telegram_file_id,
+        edit_replace_sticker_id: stickerId,
+        selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
         is_active: true,
         session_rev: nextRev,
       })
       .eq("id", session.id);
 
-    const stickerId = session.edit_replace_sticker_id || null;
-    const sessionRef = formatCallbackSessionRef(session.id, nextRev);
-    if (stickerId) {
-      await ctx.reply(
-        await getText(lang, "edit.photo_received"),
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: await getText(lang, "btn.replace_face"), callback_data: appendSessionRefIfFits(`replace_face:${stickerId}`, sessionRef) }],
-            ],
-          },
-        }
-      );
-    } else {
-      await ctx.reply(lang === "ru" ? "Фото сохранено. Теперь пришли стикер для редактирования." : "Photo saved. Now send a sticker to edit.");
-    }
+    const patchedSession = {
+      ...session,
+      current_photo_file_id: photo.file_id,
+      last_sticker_file_id: sticker.telegram_file_id,
+      selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
+    };
+
+    const replacePrompt =
+      "You are given two references: (1) identity photo, (2) sticker reference. " +
+      "Generate one sticker with identity from photo and pose/expression/style from sticker reference. " +
+      "Keep one subject only, preserve the same vibe and composition, no text, no borders or outlines.";
+
+    const earlyMsgId = await sendEarlyProgress(ctx, lang);
+    await startGeneration(ctx, user, patchedSession, lang, {
+      generationType: "replace_subject",
+      promptFinal: replacePrompt,
+      selectedStyleId: sticker.style_preset_id || session.selected_style_id || null,
+      userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
+      earlyProgressMessageId: earlyMsgId,
+    });
     return;
   }
 
@@ -8882,55 +8906,21 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
-  const identityPhotoFileId = session.current_photo_file_id || user.last_photo_file_id || null;
-  if (!identityPhotoFileId) {
-    const nextRev = (session.session_rev || 1) + 1;
-    await supabase
-      .from("sessions")
-      .update({
-        state: "wait_edit_photo",
-        is_active: true,
-        flow_kind: "single",
-        edit_replace_sticker_id: stickerId,
-        session_rev: nextRev,
-      })
-      .eq("id", session.id);
-    await ctx.reply(await getText(lang, "edit.need_photo"));
-    return;
-  }
-
-  const replacePrompt =
-    "You are given two references: (1) identity photo, (2) sticker reference. " +
-    "Generate one sticker with identity from photo and pose/expression/style from sticker reference. " +
-    "Keep one subject only, preserve the same vibe and composition, no text, no borders or outlines.";
-
+  const nextRev = (session.session_rev || 1) + 1;
   await supabase
     .from("sessions")
     .update({
-      current_photo_file_id: identityPhotoFileId,
-      last_sticker_file_id: sticker.telegram_file_id,
-      edit_replace_sticker_id: stickerId,
-      flow_kind: "single",
+      state: "wait_edit_photo",
       is_active: true,
+      flow_kind: "single",
+      edit_replace_sticker_id: stickerId,
+      last_sticker_file_id: sticker.telegram_file_id,
       selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
+      session_rev: nextRev,
     })
     .eq("id", session.id);
 
-  const patchedSession = {
-    ...session,
-    current_photo_file_id: identityPhotoFileId,
-    last_sticker_file_id: sticker.telegram_file_id,
-    selected_style_id: sticker.style_preset_id || session.selected_style_id || null,
-  };
-
-  const earlyMsgId = await sendEarlyProgress(ctx, lang);
-  await startGeneration(ctx, user, patchedSession, lang, {
-    generationType: "replace_subject",
-    promptFinal: replacePrompt,
-    selectedStyleId: sticker.style_preset_id || session.selected_style_id || null,
-    userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
-    earlyProgressMessageId: earlyMsgId,
-  });
+  await ctx.reply(await getText(lang, "edit.need_photo"));
 });
 
 // Callback: remove background from sticker (edit-sticker flow)
