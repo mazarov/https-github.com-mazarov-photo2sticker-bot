@@ -3976,6 +3976,25 @@ function resolveWorkingPhoto(session: any, user: any): { hasWorkingPhoto: boolea
   };
 }
 
+function isTelegramPhotoFileId(fileId: string | null | undefined): boolean {
+  return typeof fileId === "string" && fileId.startsWith("AgAC");
+}
+
+function buildSinglePhotoList(photoFileId: string | null | undefined): string[] {
+  return photoFileId ? [photoFileId] : [];
+}
+
+function resolvePhotoContextFromSticker(
+  stickerSourcePhotoFileId: string | null | undefined,
+  userLastPhotoFileId: string | null | undefined,
+  sessionCurrentPhotoFileId: string | null | undefined
+): string | null {
+  if (isTelegramPhotoFileId(stickerSourcePhotoFileId || null)) {
+    return stickerSourcePhotoFileId || null;
+  }
+  return userLastPhotoFileId || sessionCurrentPhotoFileId || null;
+}
+
 /**
  * Latest known photo for the user from recent sessions.
  * Used as a fallback source-of-truth when users.last_photo_file_id lags behind.
@@ -4272,8 +4291,7 @@ bot.on("photo", async (ctx) => {
 
   // === wait_action: new photo — update and show action menu again ===
   if (session.state === "wait_action") {
-    const photos = Array.isArray(session.photos) ? session.photos : [];
-    photos.push(photo.file_id);
+    const photos = buildSinglePhotoList(photo.file_id);
     const nextRev = (session.session_rev || 1) + 1;
     await supabase
       .from("sessions")
@@ -4326,7 +4344,10 @@ bot.on("photo", async (ctx) => {
       : flowType === "pack"
       ? (lang === "ru" ? "паком" : "pack")
       : (lang === "ru" ? "стикером" : "sticker");
-    const nextPhotos = [...(Array.isArray(session.photos) ? session.photos : []), photo.file_id];
+    const currentPhotoForFlow = session.current_photo_file_id || workingPhotoFileId || null;
+    const nextPhotos = currentPhotoForFlow && currentPhotoForFlow !== photo.file_id
+      ? [currentPhotoForFlow, photo.file_id]
+      : [photo.file_id];
     const nextRev = (session.session_rev || 1) + 1;
     await supabase
       .from("sessions")
@@ -6817,8 +6838,7 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
     await ctx.reply(lang === "ru" ? "Фото не найдено, пришли ещё раз." : "Photo not found, please send again.");
     return;
   }
-  const photos = Array.isArray(session.photos) ? session.photos : [];
-  if (!photos.includes(newPhotoFileId)) photos.push(newPhotoFileId);
+  const photos = buildSinglePhotoList(newPhotoFileId);
   const nextRev = (session.session_rev || 1) + 1;
 
   await supabase
@@ -6957,8 +6977,7 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
     return;
   }
 
-  const photos = Array.isArray(session.photos) ? session.photos : [];
-  if (!photos.includes(newPhotoFileId)) photos.push(newPhotoFileId);
+  const photos = buildSinglePhotoList(newPhotoFileId);
   const nextRev = (session.session_rev || 1) + 1;
   await supabase
     .from("sessions")
@@ -9502,10 +9521,11 @@ bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
     return;
   }
 
-  const sourcePhotoId = String(sticker.source_photo_file_id || "");
-  const restoredPhotoFileId = sourcePhotoId.startsWith("AgAC")
-    ? sourcePhotoId
-    : (user.last_photo_file_id || null);
+  const restoredPhotoFileId = resolvePhotoContextFromSticker(
+    sticker.source_photo_file_id || null,
+    user.last_photo_file_id || null,
+    session.current_photo_file_id || null
+  );
   if (!restoredPhotoFileId) {
     await ctx.reply(await getText(lang, "photo.need_photo"));
     return;
@@ -9518,6 +9538,7 @@ bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
       state: "wait_style",
       is_active: true,
       current_photo_file_id: restoredPhotoFileId,
+      photos: buildSinglePhotoList(restoredPhotoFileId),
       last_sticker_file_id: sticker.telegram_file_id || session.last_sticker_file_id || null,
       style_source_kind: "sticker",
       prompt_final: null,
@@ -9586,7 +9607,7 @@ bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
 
   const lang = user.lang || "en";
   const stickerId = ctx.match[1];
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   console.log("stickerId:", stickerId);
 
   // Get sticker from DB by ID
@@ -9630,6 +9651,11 @@ bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
     await rejectSessionEvent(ctx, lang, "change_emotion", "stale_callback");
     return;
   }
+  const photoContextFileId = resolvePhotoContextFromSticker(
+    sticker.source_photo_file_id || null,
+    user.last_photo_file_id || null,
+    session.current_photo_file_id || null
+  );
 
   await supabase
     .from("sessions")
@@ -9639,7 +9665,8 @@ bot.action(/^change_emotion:([^:]+)(?::(.+))?$/, async (ctx) => {
       flow_kind: "single",
       session_rev: (session.session_rev || 1) + 1,
       last_sticker_file_id: sticker.telegram_file_id,
-      current_photo_file_id: sticker.source_photo_file_id,
+      current_photo_file_id: photoContextFileId,
+      photos: buildSinglePhotoList(photoContextFileId),
       pending_generation_type: null,
     })
     .eq("id", session.id);
@@ -9807,6 +9834,11 @@ bot.action(/^change_motion:([^:]+)(?::(.+))?$/, async (ctx) => {
     await rejectSessionEvent(ctx, lang, "change_motion", "stale_callback");
     return;
   }
+  const photoContextFileId = resolvePhotoContextFromSticker(
+    sticker.source_photo_file_id || null,
+    user.last_photo_file_id || null,
+    session.current_photo_file_id || null
+  );
 
   await supabase
     .from("sessions")
@@ -9816,7 +9848,8 @@ bot.action(/^change_motion:([^:]+)(?::(.+))?$/, async (ctx) => {
       flow_kind: "single",
       session_rev: (session.session_rev || 1) + 1,
       last_sticker_file_id: sticker.telegram_file_id,
-      current_photo_file_id: sticker.source_photo_file_id,
+      current_photo_file_id: photoContextFileId,
+      photos: buildSinglePhotoList(photoContextFileId),
       pending_generation_type: null,
     })
     .eq("id", session.id);
