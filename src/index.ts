@@ -3,6 +3,8 @@ import { Telegraf, Markup, Input } from "telegraf";
 import axios from "axios";
 import sharp from "sharp";
 import FormData from "form-data";
+import { randomUUID } from "crypto";
+import { AsyncLocalStorage } from "async_hooks";
 import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
@@ -64,6 +66,22 @@ const bot = new Telegraf(config.telegramBotToken, {
   handlerTimeout: 600_000, // 10 min
 });
 
+const traceContext = new AsyncLocalStorage<{ traceId: string }>();
+
+bot.use(async (ctx, next) => {
+  if (!ctx.state) ctx.state = {};
+  const traceId = (ctx.state.trace_id as string | undefined) || randomUUID().split("-")[0];
+  ctx.state.trace_id = traceId;
+  return await traceContext.run({ traceId }, async () => {
+    console.log("[trace.start]", {
+      trace_id: traceId,
+      updateType: ctx.updateType || null,
+      telegramId: ctx.from?.id || null,
+    });
+    return await next();
+  });
+});
+
 const geminiRoute = getGeminiRouteInfo();
 console.log("[GeminiRoute][API]", geminiRoute);
 
@@ -121,6 +139,20 @@ function safeAnswerCbQuery(ctx: any, payload?: any) {
   ctx.answerCbQuery(payload).catch((err: any) => {
     console.warn("answerCbQuery failed:", err?.description || err?.message || err);
   });
+}
+
+function getOrCreateTraceId(ctx: any): string {
+  const fromStore = traceContext.getStore()?.traceId;
+  if (fromStore) {
+    if (!ctx?.state) ctx.state = {};
+    if (!ctx.state.trace_id) ctx.state.trace_id = fromStore;
+    return fromStore;
+  }
+  if (!ctx?.state) ctx.state = {};
+  if (!ctx.state.trace_id) {
+    ctx.state.trace_id = randomUUID().split("-")[0];
+  }
+  return ctx.state.trace_id;
 }
 
 async function getPackSegments(): Promise<{ id: string; sort_order: number }[]> {
@@ -1426,11 +1458,12 @@ async function startGeneration(
     earlyProgressMessageId?: number | null;
   }
 ) {
+  const traceId = getOrCreateTraceId(ctx);
   logSessionTrace("generation.start", {
     userId: user?.id || null,
     generationType: options.generationType,
     sessionBefore: sessionTraceSnapshot(session),
-  });
+  }, traceId);
   const creditsNeeded = 1;
   const isPackFlowState =
     String(session?.state || "").startsWith("wait_pack_")
@@ -1486,7 +1519,7 @@ async function startGeneration(
     userId: user?.id || null,
     generationType: options.generationType,
     sessionAfterClaim: sessionTraceSnapshot(session),
-  });
+  }, traceId);
   if (isSingleFlowGeneration) {
     console.log("[single.gen.api] claim_ok", {
       sessionId: session.id,
@@ -1576,7 +1609,7 @@ async function startGeneration(
       sessionId: session.id,
       toState: targetState,
       error: paywallUpdateErr?.message || null,
-    });
+    }, traceId);
     if (paywallUpdateErr) {
       console.error("[startGeneration] Paywall state update FAILED:", paywallUpdateErr.message);
     } else {
@@ -1665,7 +1698,7 @@ async function startGeneration(
     sessionId: session.id,
     fromState: session.state,
     toState: nextState,
-  });
+  }, traceId);
 
   await supabase
     .from("sessions")
@@ -1687,7 +1720,7 @@ async function startGeneration(
     generationType: options.generationType,
     sessionId: session.id,
     toState: nextState,
-  });
+  }, traceId);
   if (isSingleFlowGeneration) {
     console.log("[single.gen.api] session_updated_processing", {
       sessionId: session.id,
@@ -2431,13 +2464,14 @@ function sessionTraceSnapshot(session: any) {
   };
 }
 
-function logSessionTrace(event: string, details: Record<string, unknown>) {
-  console.log("[session.trace]", { event, ...details });
+function logSessionTrace(event: string, details: Record<string, unknown>, traceId?: string | null) {
+  const resolvedTraceId = traceId || traceContext.getStore()?.traceId || null;
+  console.log("[session.trace]", { trace_id: resolvedTraceId, event, ...details });
 }
 
 // Helper: get active session
-async function getActiveSession(userId: string) {
-  logSessionTrace("getActiveSession.start", { userId });
+async function getActiveSession(userId: string, traceId?: string | null) {
+  logSessionTrace("getActiveSession.start", { userId }, traceId);
   const { data, error } = await supabase
     .from("sessions")
     .select("*")
@@ -2449,10 +2483,10 @@ async function getActiveSession(userId: string) {
     .maybeSingle();
   if (error) {
     console.log("getActiveSession error:", error.message, error.code);
-    logSessionTrace("getActiveSession.error", { userId, error: error.message, code: error.code });
+    logSessionTrace("getActiveSession.error", { userId, error: error.message, code: error.code }, traceId);
   }
   if (data) {
-    logSessionTrace("getActiveSession.primary_hit", { userId, session: sessionTraceSnapshot(data) });
+    logSessionTrace("getActiveSession.primary_hit", { userId, session: sessionTraceSnapshot(data) }, traceId);
     return data;
   }
 
@@ -2479,7 +2513,7 @@ async function getActiveSession(userId: string) {
       "is_active:",
       fallbackByUpdatedAt.is_active
     );
-    logSessionTrace("getActiveSession.fallback_updated_at_hit", { userId, session: sessionTraceSnapshot(fallbackByUpdatedAt) });
+    logSessionTrace("getActiveSession.fallback_updated_at_hit", { userId, session: sessionTraceSnapshot(fallbackByUpdatedAt) }, traceId);
     return fallbackByUpdatedAt;
   }
 
@@ -2504,11 +2538,11 @@ async function getActiveSession(userId: string) {
       "is_active:",
       fallbackByCreatedAt.is_active
     );
-    logSessionTrace("getActiveSession.fallback_created_at_hit", { userId, session: sessionTraceSnapshot(fallbackByCreatedAt) });
+    logSessionTrace("getActiveSession.fallback_created_at_hit", { userId, session: sessionTraceSnapshot(fallbackByCreatedAt) }, traceId);
   }
 
   if (!fallbackByCreatedAt) {
-    logSessionTrace("getActiveSession.miss", { userId });
+    logSessionTrace("getActiveSession.miss", { userId }, traceId);
   }
 
   return fallbackByCreatedAt;
@@ -2520,7 +2554,7 @@ const PACK_FLOW_STATES = ["wait_pack_photo", "wait_pack_carousel", "wait_pack_pr
 const PACK_FLOW_STATES_FOR_QUERY = PACK_FLOW_STATES.filter((s) => s !== "generating_pack_theme") as unknown as string[];
 
 /** Get session that is in pack flow (for pack callbacks when user may have is_active assistant session). */
-async function getPackFlowSession(userId: string) {
+async function getPackFlowSession(userId: string, traceId?: string | null) {
   const { data } = await supabase
     .from("sessions")
     .select("*")
@@ -2531,7 +2565,7 @@ async function getPackFlowSession(userId: string) {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  logSessionTrace("getPackFlowSession.result", { userId, session: sessionTraceSnapshot(data) });
+  logSessionTrace("getPackFlowSession.result", { userId, session: sessionTraceSnapshot(data) }, traceId);
   return data;
 }
 
@@ -2540,30 +2574,30 @@ const ASSISTANT_FLOW_RECOVERY_STATES = [
   "assistant_chat",
 ] as const;
 
-async function getAssistantFlowRecoverySession(userId: string) {
-  logSessionTrace("getAssistantFlowRecoverySession.start", { userId });
+async function getAssistantFlowRecoverySession(userId: string, traceId?: string | null) {
+  logSessionTrace("getAssistantFlowRecoverySession.start", { userId }, traceId);
   const activeAssistant = await getActiveAssistantSession(userId);
   if (activeAssistant?.session_id) {
-    const linkedSession = await getSessionByIdForUser(userId, activeAssistant.session_id);
+    const linkedSession = await getSessionByIdForUser(userId, activeAssistant.session_id, traceId);
     if (linkedSession?.id && (linkedSession.flow_kind === "assistant" || String(linkedSession.state || "").startsWith("assistant_"))) {
       logSessionTrace("getAssistantFlowRecoverySession.active_assistant_link_hit", {
         userId,
         assistantSessionId: activeAssistant.id,
         linkedSession: sessionTraceSnapshot(linkedSession),
-      });
+      }, traceId);
       return linkedSession;
     }
   }
 
   const recentAssistant = await getRecentAssistantSession(userId, 30 * 60 * 1000);
   if (recentAssistant?.session_id) {
-    const linkedRecentSession = await getSessionByIdForUser(userId, recentAssistant.session_id);
+    const linkedRecentSession = await getSessionByIdForUser(userId, recentAssistant.session_id, traceId);
     if (linkedRecentSession?.id && (linkedRecentSession.flow_kind === "assistant" || String(linkedRecentSession.state || "").startsWith("assistant_"))) {
       logSessionTrace("getAssistantFlowRecoverySession.recent_assistant_link_hit", {
         userId,
         assistantSessionId: recentAssistant.id,
         linkedSession: sessionTraceSnapshot(linkedRecentSession),
-      });
+      }, traceId);
       return linkedRecentSession;
     }
   }
@@ -2581,7 +2615,7 @@ async function getAssistantFlowRecoverySession(userId: string) {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  logSessionTrace("getAssistantFlowRecoverySession.query_result", { userId, session: sessionTraceSnapshot(data) });
+  logSessionTrace("getAssistantFlowRecoverySession.query_result", { userId, session: sessionTraceSnapshot(data) }, traceId);
   return data;
 }
 
@@ -2589,11 +2623,11 @@ async function getAssistantFlowRecoverySession(userId: string) {
  * Resolve session for inbound photo messages.
  * First use generic active-session resolution, then fallback to latest pack-flow session.
  */
-async function resolveSessionForIncomingPhoto(userId: string) {
-  logSessionTrace("resolveSessionForIncomingPhoto.start", { userId });
-  const activeSession = await getActiveSession(userId);
+async function resolveSessionForIncomingPhoto(userId: string, traceId?: string | null) {
+  logSessionTrace("resolveSessionForIncomingPhoto.start", { userId }, traceId);
+  const activeSession = await getActiveSession(userId, traceId);
   if (activeSession?.id) {
-    logSessionTrace("resolveSessionForIncomingPhoto.pick_active", { userId, session: sessionTraceSnapshot(activeSession) });
+    logSessionTrace("resolveSessionForIncomingPhoto.pick_active", { userId, session: sessionTraceSnapshot(activeSession) }, traceId);
     return activeSession;
   }
 
@@ -2622,7 +2656,7 @@ async function resolveSessionForIncomingPhoto(userId: string) {
     logSessionTrace("resolveSessionForIncomingPhoto.pick_non_assistant_fallback", {
       userId,
       session: sessionTraceSnapshot(latestNonAssistantSession),
-    });
+    }, traceId);
     return latestNonAssistantSession;
   }
 
@@ -2649,11 +2683,11 @@ async function resolveSessionForIncomingPhoto(userId: string) {
     logSessionTrace("resolveSessionForIncomingPhoto.pick_single_fallback", {
       userId,
       session: sessionTraceSnapshot(latestSingleSession),
-    });
+    }, traceId);
     return latestSingleSession;
   }
 
-  const packSession = await getPackFlowSession(userId);
+  const packSession = await getPackFlowSession(userId, traceId);
   if (packSession?.id) {
     console.log(
       "Photo router fallback: using latest pack session:",
@@ -2664,11 +2698,11 @@ async function resolveSessionForIncomingPhoto(userId: string) {
     logSessionTrace("resolveSessionForIncomingPhoto.pick_pack_fallback", {
       userId,
       session: sessionTraceSnapshot(packSession),
-    });
+    }, traceId);
     return packSession;
   }
 
-  const assistantSession = await getAssistantFlowRecoverySession(userId);
+  const assistantSession = await getAssistantFlowRecoverySession(userId, traceId);
   if (assistantSession?.id) {
     console.log(
       "Photo router fallback: using assistant recovery session:",
@@ -2679,11 +2713,11 @@ async function resolveSessionForIncomingPhoto(userId: string) {
     logSessionTrace("resolveSessionForIncomingPhoto.pick_assistant_fallback", {
       userId,
       session: sessionTraceSnapshot(assistantSession),
-    });
+    }, traceId);
     return assistantSession;
   }
 
-  logSessionTrace("resolveSessionForIncomingPhoto.miss", { userId });
+  logSessionTrace("resolveSessionForIncomingPhoto.miss", { userId }, traceId);
   return null;
 }
 
@@ -2756,7 +2790,7 @@ async function rejectSessionEvent(
   await ctx.answerCbQuery(message, { show_alert: false }).catch(() => {});
 }
 
-async function getSessionByIdForUser(userId: string, sessionId?: string | null) {
+async function getSessionByIdForUser(userId: string, sessionId?: string | null, traceId?: string | null) {
   if (!sessionId) return null;
   const { data, error } = await supabase
     .from("sessions")
@@ -2770,7 +2804,7 @@ async function getSessionByIdForUser(userId: string, sessionId?: string | null) 
     sessionId,
     error: error?.message || null,
     session: sessionTraceSnapshot(data),
-  });
+  }, traceId);
   return data;
 }
 
@@ -2790,26 +2824,27 @@ async function getLatestAssistantFlowSession(userId: string) {
 async function resolveSessionForCallback(
   userId: string,
   explicitSessionId?: string | null,
-  fallback?: () => Promise<any | null>
+  fallback?: () => Promise<any | null>,
+  traceId?: string | null
 ) {
-  logSessionTrace("resolveSessionForCallback.start", { userId, explicitSessionId: explicitSessionId || null });
+  logSessionTrace("resolveSessionForCallback.start", { userId, explicitSessionId: explicitSessionId || null }, traceId);
   if (explicitSessionId) {
-    const session = await getSessionByIdForUser(userId, explicitSessionId);
-    logSessionTrace("resolveSessionForCallback.pick_explicit", { userId, session: sessionTraceSnapshot(session) });
+    const session = await getSessionByIdForUser(userId, explicitSessionId, traceId);
+    logSessionTrace("resolveSessionForCallback.pick_explicit", { userId, session: sessionTraceSnapshot(session) }, traceId);
     return session;
   }
   const routerEnabled = await isSessionRouterEnabled();
   if (routerEnabled) {
-    logSessionTrace("resolveSessionForCallback.router_enabled_block", { userId });
+    logSessionTrace("resolveSessionForCallback.router_enabled_block", { userId }, traceId);
     return null;
   }
   if (fallback) {
     const session = await fallback();
-    logSessionTrace("resolveSessionForCallback.pick_custom_fallback", { userId, session: sessionTraceSnapshot(session) });
+    logSessionTrace("resolveSessionForCallback.pick_custom_fallback", { userId, session: sessionTraceSnapshot(session) }, traceId);
     return session;
   }
-  const session = await getActiveSession(userId);
-  logSessionTrace("resolveSessionForCallback.pick_active_default", { userId, session: sessionTraceSnapshot(session) });
+  const session = await getActiveSession(userId, traceId);
+  logSessionTrace("resolveSessionForCallback.pick_active_default", { userId, session: sessionTraceSnapshot(session) }, traceId);
   return session;
 }
 
@@ -3730,6 +3765,7 @@ async function getLatestSessionPhotoFileId(userId: string): Promise<string | nul
 
 // Photo handler
 bot.on("photo", async (ctx) => {
+  const traceId = getOrCreateTraceId(ctx);
   const telegramId = ctx.from?.id;
   console.log("Photo received, telegramId:", telegramId);
   if (!telegramId) return;
@@ -3745,13 +3781,13 @@ bot.on("photo", async (ctx) => {
     telegramId,
     userId: user.id,
     previousLastPhotoExists: Boolean(previousLastPhotoFileId),
-  });
-  const session = await resolveSessionForIncomingPhoto(user.id);
+  }, traceId);
+  const session = await resolveSessionForIncomingPhoto(user.id, traceId);
   console.log("Photo handler - session:", session?.id, "state:", session?.state);
-  logSessionTrace("photo.resolved_session", { userId: user.id, session: sessionTraceSnapshot(session) });
+  logSessionTrace("photo.resolved_session", { userId: user.id, session: sessionTraceSnapshot(session) }, traceId);
   if (!session?.id) {
     console.warn("Photo handler: no session found, creating recovery wait_action session");
-    logSessionTrace("photo.recovery.no_session", { userId: user.id, previousLastPhotoExists: Boolean(previousLastPhotoFileId) });
+    logSessionTrace("photo.recovery.no_session", { userId: user.id, previousLastPhotoExists: Boolean(previousLastPhotoFileId) }, traceId);
     await supabase
       .from("sessions")
       .update({ is_active: false })
@@ -3788,14 +3824,14 @@ bot.on("photo", async (ctx) => {
         .single();
       if (sessErr || !recoverySession?.id) {
         console.error("Photo recovery session create failed:", sessErr?.message);
-        logSessionTrace("photo.recovery.create_confirm_failed", { userId: user.id, error: sessErr?.message || null });
+        logSessionTrace("photo.recovery.create_confirm_failed", { userId: user.id, error: sessErr?.message || null }, traceId);
         await ctx.reply(await getText(lang, "error.technical"));
         return;
       }
       logSessionTrace("photo.recovery.create_confirm_ok", {
         userId: user.id,
         session: sessionTraceSnapshot(recoverySession),
-      });
+      }, traceId);
       const sessionRef = formatCallbackSessionRef(recoverySession.id, recoverySession.session_rev);
       await ctx.reply(
         lang === "ru"
@@ -3825,14 +3861,14 @@ bot.on("photo", async (ctx) => {
       .single();
     if (sessErr || !recoverySession?.id) {
       console.error("Photo recovery action session create failed:", sessErr?.message);
-      logSessionTrace("photo.recovery.create_action_failed", { userId: user.id, error: sessErr?.message || null });
+      logSessionTrace("photo.recovery.create_action_failed", { userId: user.id, error: sessErr?.message || null }, traceId);
       await ctx.reply(await getText(lang, "error.technical"));
       return;
     }
     logSessionTrace("photo.recovery.create_action_ok", {
       userId: user.id,
       session: sessionTraceSnapshot(recoverySession),
-    });
+    }, traceId);
     await sendActionMenu(ctx, lang, recoverySession.id, recoverySession.session_rev || 1);
     return;
   }
@@ -3861,7 +3897,7 @@ bot.on("photo", async (ctx) => {
   ];
   if (packStatesForReactivation.includes(String(session.state || "")) && !session.is_active) {
     console.log("Pack photo: reactivating fallback session:", session.id);
-    logSessionTrace("photo.pack.reactivate", { userId: user.id, session: sessionTraceSnapshot(session) });
+    logSessionTrace("photo.pack.reactivate", { userId: user.id, session: sessionTraceSnapshot(session) }, traceId);
     await supabase.from("sessions").update({ is_active: true }).eq("id", session.id);
     session.is_active = true;
   }
@@ -3887,7 +3923,7 @@ bot.on("photo", async (ctx) => {
         userId: user.id,
         from: sessionTraceSnapshot(session),
         assistantSessionId: activeAssistant.id,
-      });
+      }, traceId);
       await supabase.from("sessions")
         .update({ state: "assistant_wait_photo", is_active: true })
         .eq("id", session.id);
@@ -3975,7 +4011,7 @@ bot.on("photo", async (ctx) => {
       toState: "wait_action",
       nextRev,
       flow: detectSessionFlow(session),
-    });
+    }, traceId);
     void ensureSubjectProfileForGeneration(
       { ...session, current_photo_file_id: photo.file_id, photos },
       "style"
@@ -4029,7 +4065,7 @@ bot.on("photo", async (ctx) => {
       flowType,
       previousWorkingPhotoExists: Boolean(workingPhotoFileId),
       nextRev,
-    });
+    }, traceId);
     session.photos = nextPhotos;
     session.pending_photo_file_id = photo.file_id;
     session.session_rev = nextRev;
@@ -6464,6 +6500,7 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
 
 // Callback: pack_new_photo — user chose to continue pack with newly sent photo
 bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
+  const traceId = getOrCreateTraceId(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
   const user = await getUser(telegramId);
@@ -6494,6 +6531,7 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
   }
   const photos = Array.isArray(session.photos) ? session.photos : [];
   if (!photos.includes(newPhotoFileId)) photos.push(newPhotoFileId);
+  const nextRev = (session.session_rev || 1) + 1;
 
   await supabase
     .from("sessions")
@@ -6501,14 +6539,23 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
       photos,
       current_photo_file_id: newPhotoFileId,
       pending_photo_file_id: null,
-      state: session.state === "wait_pack_carousel" ? "wait_pack_carousel" : "wait_pack_preview_payment",
+      state: "wait_action",
       pack_batch_id: null,
       pack_sheet_file_id: null,
       is_active: true,
-      flow_kind: "pack",
-      session_rev: (session.session_rev || 1) + 1,
+      flow_kind: "single",
+      session_rev: nextRev,
     })
     .eq("id", session.id);
+
+  logSessionTrace("pack_new_photo.transition_to_wait_action", {
+    userId: user.id,
+    sessionId: session.id,
+    fromState: session.state,
+    toState: "wait_action",
+    flow_kind: "single",
+    nextRev,
+  }, traceId);
 
   // Run subject (gender) detection for the newly selected photo so subject_gender is in DB
   void ensureSubjectProfileForGeneration(
@@ -6516,22 +6563,7 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
     "style"
   ).catch((err) => console.warn("[pack_new_photo] subject profile failed:", err?.message || err));
 
-  if (session.state === "wait_pack_carousel") {
-    const refreshedSession = {
-      ...session,
-      current_photo_file_id: newPhotoFileId,
-      pending_photo_file_id: null,
-      pack_batch_id: null,
-      pack_sheet_file_id: null,
-      is_active: true,
-      flow_kind: "pack",
-      session_rev: (session.session_rev || 1) + 1,
-    };
-    await renderPackCarouselForSession(ctx, refreshedSession, lang);
-    return;
-  }
-
-  await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
+  await sendActionMenu(ctx, lang, session.id, nextRev);
 });
 
 // Callback: pack_keep_photo — user keeps current photo and continues pack flow
