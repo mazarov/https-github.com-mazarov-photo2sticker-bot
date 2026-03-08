@@ -2428,7 +2428,6 @@ const SESSION_FALLBACK_ACTIVE_STATES = [
   "wait_custom_emotion",
   "wait_custom_motion",
   "wait_text_overlay",
-  "wait_replace_face",
   "wait_replace_face_sticker",
   "wait_edit_sticker",
   "wait_edit_photo",
@@ -2647,7 +2646,6 @@ async function resolveSessionForIncomingPhoto(userId: string, traceId?: string |
   // these states must survive even when is_active was dropped by side-effects,
   // otherwise photo messages are incorrectly recovered into wait_action.
   const REPLACE_FACE_RECOVERY_STATES = [
-    "wait_replace_face",
     "wait_replace_face_sticker",
     "wait_edit_sticker",
     "wait_edit_photo",
@@ -2730,7 +2728,6 @@ async function resolveSessionForIncomingPhoto(userId: string, traceId?: string |
   // Last-resort: sessions in replace-face or wait_action, order by created_at only.
   // Some DB setups may have null updated_at, causing earlier fallbacks to miss.
   const REPLACE_FACE_OR_ACTION_STATES = [
-    "wait_replace_face",
     "wait_replace_face_sticker",
     "wait_edit_photo",
     "wait_action",
@@ -7005,15 +7002,23 @@ bot.on("sticker", async (ctx) => {
   // Priority: check for wait_replace_face FIRST (before getActiveSession),
   // because getActiveSession may return a different session (e.g. wait_action from /start)
   // and sticker would be routed to edit-sticker flow instead of replace-face.
-  const { data: replaceFaceSession } = await supabase
+  const { data: replaceFaceSession, error: replaceFaceSessionErr } = await supabase
     .from("sessions")
     .select("*")
     .eq("user_id", user.id)
     .eq("env", config.appEnv)
-    .in("state", ["wait_replace_face", "wait_replace_face_sticker"])
+    .in("state", ["wait_replace_face_sticker"])
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (replaceFaceSessionErr) {
+    console.error("[replace_face.debug][sticker.replace_face_query_error]", {
+      trace_id: traceId,
+      userId: user.id,
+      error: replaceFaceSessionErr.message,
+      code: (replaceFaceSessionErr as any)?.code || null,
+    });
+  }
   let sessionSource = replaceFaceSession?.id ? "replace_face_query" : "none";
   let session: any = replaceFaceSession || null;
   if (!session?.id) {
@@ -10143,15 +10148,23 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
     : await getActiveSession(user.id, traceId);
   if (!session?.id) {
     // Fallback: callback_data often exceeds 64 chars (replace_face:uuid:uuid:rev) so session ref is dropped
-    const { data: fallbackSession } = await supabase
+    const { data: fallbackSession, error: fallbackSessionErr } = await supabase
       .from("sessions")
       .select("*")
       .eq("user_id", user.id)
       .eq("env", config.appEnv)
-      .in("state", ["wait_replace_face", "wait_replace_face_sticker", "wait_action", "wait_edit_sticker"])
+      .in("state", ["wait_replace_face_sticker", "wait_action", "wait_edit_sticker"])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (fallbackSessionErr) {
+      console.error("[replace_face.debug][replace_face_callback.fallback_query_error]", {
+        trace_id: traceId,
+        userId: user.id,
+        error: fallbackSessionErr.message,
+        code: (fallbackSessionErr as any)?.code || null,
+      });
+    }
     if (fallbackSession?.id) {
       session = fallbackSession;
     }
