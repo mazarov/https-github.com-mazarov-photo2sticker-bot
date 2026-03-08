@@ -4069,7 +4069,7 @@ bot.on("photo", async (ctx) => {
       await supabase
         .from("sessions")
         .update({
-          state: "wait_replace_face",
+          state: "wait_replace_face_sticker",
           photos,
           current_photo_file_id: photo.file_id,
           flow_kind: "single",
@@ -7095,7 +7095,7 @@ bot.on("sticker", async (ctx) => {
     await supabase
       .from("sessions")
       .update({
-        state: "wait_replace_face",
+        state: "wait_replace_face_sticker",
         edit_replace_sticker_id: stickerId,
         last_sticker_file_id: stickerFileId,
         flow_kind: "single",
@@ -7117,7 +7117,7 @@ bot.on("sticker", async (ctx) => {
       edit_replace_sticker_id: stickerId,
       selected_style_id: stickerRow?.style_preset_id || session.selected_style_id || null,
       session_rev: nextRev,
-      state: "wait_replace_face",
+      state: "wait_replace_face_sticker",
     };
     const replacePrompt =
       "You are given two references: (1) identity photo, (2) sticker reference. " +
@@ -9869,7 +9869,7 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
     return;
   }
   const hardProcessingStates = new Set(["processing", "processing_emotion", "processing_motion", "processing_text", "generating_pack_preview", "generating_pack_theme", "processing_pack"]);
-  const replaceFaceAllowedStates = new Set(["wait_action", "wait_style", "confirm_sticker", "wait_emotion", "wait_motion", "wait_text_overlay", "wait_replace_face"]);
+  const replaceFaceAllowedStates = new Set(["wait_action", "wait_style", "confirm_sticker", "wait_emotion", "wait_motion", "wait_text_overlay", "wait_replace_face", "wait_replace_face_sticker"]);
   if (
     (action !== "replace_face" && session.state !== "wait_action")
     || (action === "replace_face" && (!replaceFaceAllowedStates.has(String(session.state || "")) || hardProcessingStates.has(String(session.state || ""))))
@@ -10011,7 +10011,7 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
       .from("sessions")
       .insert({
         user_id: user.id,
-        state: "wait_replace_face",
+        state: "wait_replace_face_sticker",
         edit_replace_sticker_id: null,
         is_active: true,
         flow_kind: "single",
@@ -10148,7 +10148,7 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
       .select("*")
       .eq("user_id", user.id)
       .eq("env", config.appEnv)
-      .in("state", ["wait_replace_face", "wait_action", "wait_edit_sticker"])
+      .in("state", ["wait_replace_face", "wait_replace_face_sticker", "wait_action", "wait_edit_sticker"])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -10159,7 +10159,7 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
   if (!session?.id) {
     const { data: newSession } = await supabase
       .from("sessions")
-      .insert({ user_id: user.id, state: "wait_replace_face", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
+      .insert({ user_id: user.id, state: "wait_replace_face_sticker", is_active: true, flow_kind: "single", session_rev: 1, env: config.appEnv })
       .select()
       .single();
     session = newSession;
@@ -10198,7 +10198,7 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
   await supabase
     .from("sessions")
     .update({
-      state: "wait_replace_face",
+      state: "wait_replace_face_sticker",
       is_active: true,
       flow_kind: "single",
       edit_replace_sticker_id: stickerId,
@@ -12346,7 +12346,7 @@ bot.action(/^retry_generation:(.+)$/, async (ctx) => {
       session.generation_type === "emotion" ? "wait_emotion" :
       session.generation_type === "motion" ? "wait_motion" :
       session.generation_type === "text" ? "wait_text_overlay" :
-      session.generation_type === "replace_subject" ? "wait_replace_face" : "wait_style";
+      session.generation_type === "replace_subject" ? "wait_replace_face_sticker" : "wait_style";
 
     await supabase
       .from("sessions")
@@ -14070,7 +14070,7 @@ bot.action("cancel", async (ctx) => {
       session.pending_generation_type === "emotion" ? "wait_emotion" :
       session.pending_generation_type === "motion" ? "wait_motion" :
       session.pending_generation_type === "text" ? "wait_text_overlay" :
-      session.pending_generation_type === "replace_subject" ? "wait_replace_face" : "wait_style";
+      session.pending_generation_type === "replace_subject" ? "wait_replace_face_sticker" : "wait_style";
     await supabase
       .from("sessions")
       .update({ state: nextState, is_active: true })
