@@ -2359,15 +2359,10 @@ async function runJob(job: any) {
     console.log("onboarding_step updated to", newStep);
   }
 
-  // Post-generation CTA: show after first sticker (both assistant and manual mode)
-  // Only for style generation (not emotion/motion iterations)
+  // Post-generation onboarding CTA is disabled.
+  // Keep onboarding completion behavior without sending extra text.
   if (!isAvatarDemo && onboardingStep <= 1 && generationType === "style" && stickerId) {
-    const onboardingText = lang === "ru"
-      ? "👇 Попробуй прямо сейчас:\n😊 **Изменить эмоцию** — сделай грустного, злого, влюблённого\n🏃 **Добавить движение** — танец, прыжок, бег\n💡 **Идеи для пака** — AI подберёт идеи для целого стикерпака!"
-      : "👇 Try it now:\n😊 **Change emotion** — make it sad, angry, in love\n🏃 **Add motion** — dance, jump, run\n💡 **Pack ideas** — AI will suggest ideas for a whole sticker pack!";
-    
-    await sendMessage(telegramId, onboardingText);
-    console.log("post-generation CTA sent, onboardingStep:", onboardingStep);
+    console.log("post-generation CTA skipped, onboardingStep:", onboardingStep);
 
     // Mark onboarding complete
     if (onboardingStep < 2) {
