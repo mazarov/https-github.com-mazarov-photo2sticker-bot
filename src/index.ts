@@ -5,6 +5,7 @@ import sharp from "sharp";
 import FormData from "form-data";
 import { randomUUID } from "crypto";
 import { AsyncLocalStorage } from "async_hooks";
+import { execSync } from "child_process";
 import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
@@ -67,6 +68,19 @@ const bot = new Telegraf(config.telegramBotToken, {
 });
 
 const traceContext = new AsyncLocalStorage<{ traceId: string }>();
+
+function resolveRuntimeGitSha(): string {
+  const envSha = String(process.env.APP_GIT_SHA || process.env.GIT_SHA || "").trim();
+  if (envSha) return envSha;
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+    }).trim() || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 bot.use(async (ctx, next) => {
   const state = (ctx.state as Record<string, unknown> | undefined) || undefined;
@@ -14782,6 +14796,7 @@ app.get("/health", (_, res) => res.status(200).send("OK"));
 
 const server = app.listen(config.port, () => {
   console.log(`API running on :${config.port}`);
+  console.log("[Build][API] git_sha:", resolveRuntimeGitSha(), "app_env:", config.appEnv);
   if (!config.alertChannelId) {
     console.warn("[Config] Alert channel: NOT SET — set ALERT_CHANNEL_ID (or PROD_ALERT_CHANNEL_ID when APP_ENV=test). Alerts will be skipped.");
   } else {

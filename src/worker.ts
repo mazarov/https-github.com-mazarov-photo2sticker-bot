@@ -3,6 +3,7 @@ import os from "os";
 import FormData from "form-data";
 import sharp from "sharp";
 import { createHash } from "crypto";
+import { execSync } from "child_process";
 import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
@@ -31,6 +32,19 @@ import {
 
 const geminiRoute = getGeminiRouteInfo();
 console.log("[GeminiRoute][Worker]", geminiRoute);
+
+function resolveRuntimeGitSha(): string {
+  const envSha = String(process.env.APP_GIT_SHA || process.env.GIT_SHA || "").trim();
+  if (envSha) return envSha;
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+    }).trim() || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
@@ -158,6 +172,7 @@ function getRetryReadyState(generationType?: string | null): string {
 
 const WORKER_ID = `${os.hostname()}-${process.pid}-${Date.now()}`;
 console.log(`Worker started: ${WORKER_ID}`);
+console.log("[Build][Worker] git_sha:", resolveRuntimeGitSha(), "app_env:", config.appEnv);
 if (!config.alertChannelId) {
   console.warn("[Config] Alert channel: NOT SET — set ALERT_CHANNEL_ID (or PROD_ALERT_CHANNEL_ID when APP_ENV=test). Pack/alerts will be skipped.");
 } else {
