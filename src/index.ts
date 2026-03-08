@@ -8691,7 +8691,6 @@ bot.action(/^style_carousel_next:(\d+):(.*)$/, async (ctx) => {
     const user = await getUser(telegramId);
     if (!user?.id) return;
     const lang = user.lang || "en";
-    const session = await getActiveSession(user.id);
 
     const nextPage = parseInt(ctx.match[1], 10);
     const stickerMsgIds = ctx.match[2].split(",").filter(Boolean).map(Number);
