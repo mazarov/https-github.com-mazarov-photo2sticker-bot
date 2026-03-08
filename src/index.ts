@@ -6305,7 +6305,8 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
     "style"
   ).catch((err) => console.warn("[single_new_photo] subject profile failed:", err?.message || err));
 
-  await sendStyleKeyboardFlat(ctx, lang, session.id, { selectedStyleId: session.selected_style_id || null });
+  // messageId must be a Telegram message_id number; session.id is UUID and breaks editMessageText path.
+  await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
 });
 
 // Callback: single_keep_photo — keep current photo in single flow
@@ -9167,21 +9168,43 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
         .webp({ quality: 95 })
         .toBuffer();
       const newFileId = await sendSticker(ctx.chat!.id, stickerBuffer);
-      const { data: newSticker } = await supabase
-        .from("stickers")
-        .insert({
-          user_id: user.id,
-          telegram_file_id: newFileId || null,
-          source_photo_file_id: photoFileId,
-          generation_type: "photo_sticker",
-          env: config.appEnv,
-        })
-        .select("id")
-        .single();
-      if (newSticker?.id && newFileId) {
+      const insertPayload: any = {
+        user_id: user.id,
+        telegram_file_id: newFileId || null,
+        source_photo_file_id: photoFileId,
+        generation_type: "photo_sticker",
+        env: config.appEnv,
+      };
+
+      let newSticker: { id: string } | null = null;
+      let insertErr: any = null;
+      const firstInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
+      newSticker = firstInsert.data as { id: string } | null;
+      insertErr = firstInsert.error;
+
+      // Backward-compat: generation_type enum/value may differ between envs.
+      if (insertErr && (String(insertErr.message || "").toLowerCase().includes("generation_type") || String(insertErr.message || "").toLowerCase().includes("invalid input value for enum"))) {
+        insertPayload.generation_type = "remove_bg";
+        const fallbackInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
+        newSticker = fallbackInsert.data as { id: string } | null;
+        insertErr = fallbackInsert.error;
+      }
+      if (insertErr && (String(insertErr.message || "").toLowerCase().includes("generation_type") || insertErr.code === "42703")) {
+        delete insertPayload.generation_type;
+        const lastInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
+        newSticker = lastInsert.data as { id: string } | null;
+        insertErr = lastInsert.error;
+      }
+      if (insertErr || !newSticker?.id) {
+        console.error("[action_photo_sticker] failed to save sticker row:", insertErr?.message || insertErr);
+        await ctx.reply(await getText(lang, "error.technical"));
+        return;
+      }
+
+      if (newFileId) {
         await supabase.from("stickers").update({ telegram_file_id: newFileId }).eq("id", newSticker.id);
       }
-      const replyMarkup = await buildStickerButtons(lang, newSticker?.id || "");
+      const replyMarkup = await buildStickerButtons(lang, newSticker.id);
       await ctx.reply(lang === "ru" ? "Фон удалён! Что дальше?" : "Background removed! What's next?", { reply_markup: replyMarkup });
     } catch (err: any) {
       console.error("[action_remove_bg] failed:", err?.message || err);
