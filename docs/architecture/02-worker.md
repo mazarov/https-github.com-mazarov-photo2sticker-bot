@@ -63,6 +63,7 @@ sequenceDiagram
   1) `stickers.result_storage_path` -> public URL из storage bucket `stickers`,
   2) если storage path отсутствует (например imported sticker) -> temp upload в public bucket (`stickers-examples/temp/sticker-sources/...`) и URL оттуда,
   3) fallback: Telegram file URL (`https://api.telegram.org/file/bot...`).
+- Если `gemini_use_proxy=false` (direct Google route), worker сначала делает temp upload source-изображений в публичный bucket `stickers-examples` и только потом отправляет `fileData.fileUri` в Gemini. Это применяется в `single` flow (source + replace reference) и в `pack preview` (photo/collage), чтобы исключить `Cannot fetch content from the provided URL`.
 
 ### 4. Генерация изображения (Gemini)
 - Модель: настраивается через `app_config` (по умолчанию: style → `gemini-3-pro-image-preview`, emotion/motion → `gemini-2.5-flash-image`)
@@ -81,7 +82,7 @@ sequenceDiagram
 - Source определяется через общий resolver:
   - `style` -> `photo` или `sticker` (по `sessions.style_source_kind`),
   - `emotion`/`motion`/`text` -> `sticker`.
-- Для sticker source в `fileData.fileUri` используется storage URL (result/temp), чтобы снизить ошибки внешнего fetch в Gemini на Telegram-URL.
+- Для sticker source в `fileData.fileUri` используется storage URL (result/temp), а при `gemini_use_proxy=false` — принудительно temp public URL из `stickers-examples`, чтобы direct Gemini всегда получал внешний доступ к input image.
 - Лог `[GeminiRoute][Worker]` фиксирует активный маршрут (`baseUrl`, `host`, `viaProxy`) при старте worker-процесса.
 - Если включен `subject_profile_enabled` или `object_profile_enabled`/`object_profile_shadow_enabled` и profile для текущего source отсутствует, worker выполняет detector и сохраняет профиль в `sessions` (dual-write в `subject_*` + `object_*` при наличии колонок).
 - Если `subject_postcheck_enabled=true`, worker валидирует число людей на результате и делает один retry с усиленным lock; при повторном mismatch задача завершается ошибкой (с рефандом через общий error-path).
