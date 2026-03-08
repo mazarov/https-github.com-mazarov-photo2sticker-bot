@@ -7025,6 +7025,7 @@ bot.on("sticker", async (ctx) => {
       last_sticker_file_id: stickerFileId,
       edit_replace_sticker_id: stickerId,
       selected_style_id: stickerRow?.style_preset_id || session.selected_style_id || null,
+      session_rev: nextRev,
     };
     const replacePrompt =
       "You are given two references: (1) identity photo, (2) sticker reference. " +
