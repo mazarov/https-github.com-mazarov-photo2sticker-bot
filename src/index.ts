@@ -550,6 +550,29 @@ async function sendStyleKeyboardFlat(
   }
 }
 
+/** Action menu after photo: 4 actions (remove bg, replace face, make sticker, make pack). */
+async function sendActionMenu(
+  ctx: any,
+  lang: string,
+  sessionId: string,
+  sessionRev: number
+) {
+  const sessionRef = formatCallbackSessionRef(sessionId, sessionRev);
+  const removeBgCb = appendSessionRefIfFits("action_remove_bg", sessionRef);
+  const replaceFaceCb = appendSessionRefIfFits("action_replace_face", sessionRef);
+  const makeStickerCb = appendSessionRefIfFits("action_make_sticker", sessionRef);
+  const makePackCb = appendSessionRefIfFits("action_make_pack", sessionRef);
+
+  const text = await getText(lang, "action.choose");
+  const buttons = [
+    [{ text: await getText(lang, "action.remove_bg"), callback_data: removeBgCb }],
+    [{ text: await getText(lang, "action.replace_face"), callback_data: replaceFaceCb }],
+    [{ text: await getText(lang, "action.make_sticker"), callback_data: makeStickerCb }],
+    [{ text: await getText(lang, "action.make_pack"), callback_data: makePackCb }],
+  ];
+  await ctx.reply(text, Markup.inlineKeyboard(buttons));
+}
+
 /**
  * Get a sticker telegram_file_id for a style (for carousel preview).
  * Filtered by env so file_ids work only for the current bot.
@@ -2253,12 +2276,14 @@ const SESSION_FALLBACK_ACTIVE_STATES = [
   "assistant_chat",
   // Single sticker flow
   "wait_photo",
+  "wait_action",
   "wait_style",
   "wait_custom_style",
   "wait_custom_style_v2",
   "wait_custom_emotion",
   "wait_custom_motion",
   "wait_text_overlay",
+  "wait_replace_face_sticker",
   "wait_emotion",
   "wait_motion",
   "confirm_sticker",
@@ -3258,8 +3283,63 @@ bot.start(async (ctx) => {
       }
     }
 
-    // Default entrypoint: start pack flow (assistant entry from /start is temporarily disabled).
-    await handlePackMenuEntry(ctx, { source: "start", autoPackEntry: true });
+    // Default entrypoint: action menu flow (wait_photo or wait_action + sendActionMenu)
+    const lastPhotoFromSessions = await getLatestSessionPhotoFileId(user.id);
+    const existingPhoto = lastPhotoFromSessions || user.last_photo_file_id || null;
+    if (lastPhotoFromSessions && !user.last_photo_file_id) {
+      await supabase.from("users").update({ last_photo_file_id: lastPhotoFromSessions }).eq("id", user.id);
+      user.last_photo_file_id = lastPhotoFromSessions;
+    }
+
+    const activeAssistant = await getActiveAssistantSession(user.id);
+    if (activeAssistant) {
+      await updateAssistantSession(activeAssistant.id, { status: "completed" });
+    }
+    await supabase.from("sessions").update({ is_active: false }).eq("user_id", user.id).eq("is_active", true).eq("env", config.appEnv);
+
+    if (!existingPhoto) {
+      const { data: newSession, error: sessErr } = await supabase
+        .from("sessions")
+        .insert({
+          user_id: user.id,
+          state: "wait_photo",
+          is_active: true,
+          flow_kind: "single",
+          session_rev: 1,
+          env: config.appEnv,
+        })
+        .select()
+        .single();
+      if (sessErr || !newSession) {
+        await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+        return;
+      }
+      const greetingText = isNewUser
+        ? await getText(lang, "start.greeting_new")
+        : await getText(lang, "start.greeting_return", { credits: String(user.credits || 0) });
+      await ctx.reply(greetingText, getMainMenuKeyboard(lang, ctx?.from?.id));
+      return;
+    }
+
+    const { data: newSession, error: sessErr } = await supabase
+      .from("sessions")
+      .insert({
+        user_id: user.id,
+        state: "wait_action",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: 1,
+        current_photo_file_id: existingPhoto,
+        photos: [existingPhoto],
+        env: config.appEnv,
+      })
+      .select()
+      .single();
+    if (sessErr || !newSession) {
+      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+      return;
+    }
+    await sendActionMenu(ctx, lang, newSession.id, newSession.session_rev || 1);
   } else {
     const lang = "en";
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
@@ -3541,6 +3621,28 @@ bot.on("photo", async (ctx) => {
       userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
       earlyProgressMessageId: earlyMsgId,
     });
+    return;
+  }
+
+  // === wait_action: new photo — update and show action menu again ===
+  if (session.state === "wait_action") {
+    const photos = Array.isArray(session.photos) ? session.photos : [];
+    photos.push(photo.file_id);
+    const nextRev = (session.session_rev || 1) + 1;
+    await supabase
+      .from("sessions")
+      .update({
+        photos,
+        current_photo_file_id: photo.file_id,
+        is_active: true,
+        session_rev: nextRev,
+      })
+      .eq("id", session.id);
+    void ensureSubjectProfileForGeneration(
+      { ...session, current_photo_file_id: photo.file_id, photos },
+      "style"
+    ).catch((err) => console.warn("[wait_action] subject profile failed:", err?.message || err));
+    await sendActionMenu(ctx, lang, session.id, nextRev);
     return;
   }
 
@@ -3834,10 +3936,10 @@ bot.on("photo", async (ctx) => {
 
   const { error } = await supabase
     .from("sessions")
-    .update({ photos, state: "wait_style", is_active: true, current_photo_file_id: photo.file_id })
+    .update({ photos, state: "wait_action", is_active: true, current_photo_file_id: photo.file_id })
     .eq("id", session.id);
   if (error) {
-    console.error("Failed to update session to wait_style:", error);
+    console.error("Failed to update session to wait_action:", error);
   }
 
   // Run subject (gender) detection on upload so subject_gender is in DB before style selection
@@ -3846,7 +3948,9 @@ bot.on("photo", async (ctx) => {
     "style"
   ).catch((err) => console.warn("[single_photo] subject profile on upload failed:", err?.message || err));
 
-  await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
+  const nextRev = (session.session_rev || 1) + 1;
+  await supabase.from("sessions").update({ session_rev: nextRev }).eq("id", session.id);
+  await sendActionMenu(ctx, lang, session.id, nextRev);
 });
 
 // ============================================
@@ -6280,11 +6384,74 @@ bot.on("sticker", async (ctx) => {
     return;
   }
 
+  const sticker = (ctx.message as any)?.sticker;
+  const stickerFileId = sticker?.file_id as string | undefined;
+
+  // === wait_replace_face_sticker: user sent sticker to replace face in (photo = identity) ===
+  if (session.state === "wait_replace_face_sticker" && stickerFileId) {
+    const identityPhotoFileId = session.current_photo_file_id || null;
+    if (!identityPhotoFileId) {
+      await ctx.reply(await getText(lang, "photo.need_photo"));
+      return;
+    }
+    if (sticker?.is_animated || sticker?.is_video) {
+      await ctx.reply(lang === "ru" ? "Пока только статичные стикеры." : "Only static stickers for now.");
+      return;
+    }
+    const insertPayload: any = {
+      user_id: user.id,
+      session_id: session.id,
+      source_photo_file_id: stickerFileId,
+      telegram_file_id: stickerFileId,
+      env: config.appEnv,
+      generation_type: "imported",
+    };
+    const { data: importedSticker, error: insertErr } = await supabase.from("stickers").insert(insertPayload).select("id").single();
+    if (insertErr || !importedSticker?.id) {
+      console.error("[wait_replace_face_sticker] insert failed:", insertErr?.message);
+      await ctx.reply(await getText(lang, "error.technical"));
+      return;
+    }
+    const stickerId = importedSticker.id as string;
+    const nextRev = (session.session_rev || 1) + 1;
+    await supabase
+      .from("sessions")
+      .update({
+        edit_replace_sticker_id: stickerId,
+        last_sticker_file_id: stickerFileId,
+        is_active: true,
+        session_rev: nextRev,
+      })
+      .eq("id", session.id);
+
+    const { data: stickerRow } = await supabase.from("stickers").select("style_preset_id").eq("id", stickerId).maybeSingle();
+    const patchedSession = {
+      ...session,
+      current_photo_file_id: identityPhotoFileId,
+      last_sticker_file_id: stickerFileId,
+      edit_replace_sticker_id: stickerId,
+      selected_style_id: stickerRow?.style_preset_id || session.selected_style_id || null,
+    };
+    const replacePrompt =
+      "You are given two references: (1) identity photo, (2) sticker reference. " +
+      "Generate one sticker with identity from photo and pose/expression/style from sticker reference. " +
+      "Keep one subject only, preserve the same vibe and composition, no text, no borders or outlines.";
+    const earlyMsgId = await sendEarlyProgress(ctx, lang);
+    await startGeneration(ctx, user, patchedSession, lang, {
+      generationType: "replace_subject",
+      promptFinal: replacePrompt,
+      selectedStyleId: patchedSession.selected_style_id || null,
+      userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
+      earlyProgressMessageId: earlyMsgId,
+    });
+    return;
+  }
+
   if (String(session.state || "").startsWith("assistant_")) {
     await closeAllActiveAssistantSessions(user.id, "abandoned");
   }
 
-  const sticker = (ctx.message as any)?.sticker;
+  if (!stickerFileId) return;
   const stickerFileId = sticker?.file_id as string | undefined;
   if (!stickerFileId) return;
 
@@ -8863,6 +9030,126 @@ bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
     earlyProgressMessageId: earlyMsgId,
   });
 });
+
+// ========== Action menu callbacks (from wait_action) ==========
+async function handleActionMenuCallback(ctx: any, action: "remove_bg" | "replace_face" | "make_sticker" | "make_pack") {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId);
+  if (!session?.id) {
+    await rejectSessionEvent(ctx, lang, `action_${action}`, "session_not_found");
+    return;
+  }
+  if (session.state !== "wait_action") {
+    await rejectSessionEvent(ctx, lang, `action_${action}`, "wrong_state");
+    return;
+  }
+  const strictRevEnabled = await isStrictSessionRevEnabled();
+  if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    await rejectSessionEvent(ctx, lang, `action_${action}`, "stale_callback");
+    return;
+  }
+
+  const photoFileId = session.current_photo_file_id || null;
+  if (!photoFileId) {
+    await ctx.reply(await getText(lang, "photo.need_photo"));
+    return;
+  }
+
+  const nextRev = (session.session_rev || 1) + 1;
+
+  if (action === "remove_bg") {
+    const isRu = lang === "ru";
+    try {
+      await ctx.reply(isRu ? "⏳ Убираю фон..." : "⏳ Removing background...");
+      const filePath = await getFilePath(photoFileId);
+      const fileBuffer = await downloadFile(filePath);
+      const pngBuffer = await sharp(fileBuffer).png().toBuffer();
+      const pixianForm = new FormData();
+      pixianForm.append("image", pngBuffer, { filename: "image.png", contentType: "image/png" });
+      const pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
+        auth: { username: config.pixianUsername, password: config.pixianPassword },
+        headers: pixianForm.getHeaders(),
+        responseType: "arraybuffer",
+        timeout: 60000,
+      });
+      const noBgBuffer = Buffer.from(pixianRes.data);
+      const stickerBuffer = await sharp(noBgBuffer)
+        .trim({ threshold: 2 })
+        .resize(482, 482, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .extend({ top: 15, bottom: 15, left: 15, right: 15, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .webp({ quality: 95 })
+        .toBuffer();
+      const newFileId = await sendSticker(ctx.chat!.id, stickerBuffer);
+      const { data: newSticker } = await supabase
+        .from("stickers")
+        .insert({
+          user_id: user.id,
+          telegram_file_id: newFileId || null,
+          source_photo_file_id: photoFileId,
+          generation_type: "remove_bg",
+          env: config.appEnv,
+        })
+        .select("id")
+        .single();
+      if (newSticker?.id && newFileId) {
+        await supabase.from("stickers").update({ telegram_file_id: newFileId }).eq("id", newSticker.id);
+      }
+      const replyMarkup = await buildStickerButtons(lang, newSticker?.id || "");
+      await ctx.reply(lang === "ru" ? "Фон удалён! Что дальше?" : "Background removed! What's next?", { reply_markup: replyMarkup });
+    } catch (err: any) {
+      console.error("[action_remove_bg] failed:", err?.message || err);
+      await ctx.reply(lang === "ru" ? "❌ Не удалось убрать фон. Попробуй ещё раз." : "❌ Failed to remove background. Try again.");
+    }
+    return;
+  }
+
+  if (action === "replace_face") {
+    await supabase
+      .from("sessions")
+      .update({
+        state: "wait_replace_face_sticker",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: nextRev,
+      })
+      .eq("id", session.id);
+    await ctx.reply(await getText(lang, "action.replace_face_send_sticker"));
+    return;
+  }
+
+  if (action === "make_sticker") {
+    await supabase
+      .from("sessions")
+      .update({
+        state: "wait_style",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: nextRev,
+      })
+      .eq("id", session.id);
+    await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
+    return;
+  }
+
+  if (action === "make_pack") {
+    await supabase.from("users").update({ last_photo_file_id: photoFileId }).eq("id", user.id);
+    await handlePackMenuEntry(ctx, { source: "menu", autoPackEntry: false });
+    return;
+  }
+}
+
+bot.action(/^action_remove_bg(?::(.+))?$/, (ctx) => handleActionMenuCallback(ctx, "remove_bg"));
+bot.action(/^action_replace_face(?::(.+))?$/, (ctx) => handleActionMenuCallback(ctx, "replace_face"));
+bot.action(/^action_make_sticker(?::(.+))?$/, (ctx) => handleActionMenuCallback(ctx, "make_sticker"));
+bot.action(/^action_make_pack(?::(.+))?$/, (ctx) => handleActionMenuCallback(ctx, "make_pack"));
 
 // Callback: replace face in sticker (use user's latest photo as identity source)
 bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
