@@ -2243,6 +2243,7 @@ async function runJob(job: any) {
   console.log("onboarding_step:", onboardingStep, "isOnboardingFirstSticker:", isOnboardingFirstSticker, "isOnboardingEmotion:", isOnboardingEmotion);
 
   const addToPackText = await getText(lang, "btn.add_to_pack");
+  const changeStyleText = await getText(lang, "btn.change_style");
   const changeEmotionText = lang === "ru" ? "😊 Эмоция" : await getText(lang, "btn.change_emotion");
   const changeMotionText = lang === "ru" ? "🏃 Движение" : await getText(lang, "btn.change_motion");
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
@@ -2255,6 +2256,7 @@ async function runJob(job: any) {
   const replyMarkup = {
     inline_keyboard: [
       [{ text: addToPackText, callback_data: stickerId ? `add_to_pack:${stickerId}` : "add_to_pack" }],
+      [{ text: changeStyleText, callback_data: stickerId ? `change_style:${stickerId}` : "change_style" }],
       [
         { text: changeEmotionText, callback_data: stickerId ? `change_emotion:${stickerId}` : "change_emotion" },
         { text: changeMotionText, callback_data: stickerId ? `change_motion:${stickerId}` : "change_motion" },
