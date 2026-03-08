@@ -59,6 +59,10 @@ sequenceDiagram
   - `emotion`/`motion`/`text` -> `session.last_sticker_file_id`,
   - `replace_subject` -> `session.last_sticker_file_id` (sticker target), плюс отдельный `session.current_photo_file_id` как identity reference.
 - Скачивание через Telegram Bot API → Buffer
+- Для sourceKind=`sticker` worker нормализует URL для Gemini в приоритетах:
+  1) `stickers.result_storage_path` -> public URL из storage bucket `stickers`,
+  2) если storage path отсутствует (например imported sticker) -> temp upload в public bucket (`stickers-examples/temp/sticker-sources/...`) и URL оттуда,
+  3) fallback: Telegram file URL (`https://api.telegram.org/file/bot...`).
 
 ### 4. Генерация изображения (Gemini)
 - Модель: настраивается через `app_config` (по умолчанию: style → `gemini-3-pro-image-preview`, emotion/motion → `gemini-2.5-flash-image`)
@@ -76,6 +80,7 @@ sequenceDiagram
 - Source определяется через общий resolver:
   - `style` -> `photo` или `sticker` (по `sessions.style_source_kind`),
   - `emotion`/`motion`/`text` -> `sticker`.
+- Для sticker source в `fileData.fileUri` используется storage URL (result/temp), чтобы снизить ошибки внешнего fetch в Gemini на Telegram-URL.
 - Если включен `subject_profile_enabled` или `object_profile_enabled`/`object_profile_shadow_enabled` и profile для текущего source отсутствует, worker выполняет detector и сохраняет профиль в `sessions` (dual-write в `subject_*` + `object_*` при наличии колонок).
 - Если `subject_postcheck_enabled=true`, worker валидирует число людей на результате и делает один retry с усиленным lock; при повторном mismatch задача завершается ошибкой (с рефандом через общий error-path).
 

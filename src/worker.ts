@@ -116,6 +116,83 @@ async function uploadBufferForFacemint(
   return publicUrl;
 }
 
+async function uploadTempStickerSourceAndGetPublicUrl(
+  buffer: Buffer,
+  session: any,
+  sourceFileId: string,
+  mimeType: string
+): Promise<{ publicUrl: string; storagePath: string; bucket: string }> {
+  const bucket = config.supabaseStorageBucketExamples || "stickers-examples";
+  const ext = mimeType.includes("png") ? "png" : mimeType.includes("jpeg") ? "jpg" : "webp";
+  const fileSafeId = String(sourceFileId || "source").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48);
+  const storagePath = `temp/sticker-sources/${session.user_id}/${session.id}/${Date.now()}_${fileSafeId}.${ext}`;
+  const upload = () =>
+    supabase.storage
+      .from(bucket)
+      .upload(storagePath, buffer, { contentType: mimeType || "image/webp", upsert: true });
+
+  let { error } = await upload();
+  if (error && isTransientStorageError(error)) {
+    await sleep(2000);
+    const retry = await upload();
+    error = retry.error;
+  }
+  if (error) {
+    throw new Error(`Temp sticker source upload failed: ${error.message}`);
+  }
+  const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+  if (!data?.publicUrl) {
+    throw new Error("Temp sticker source upload failed: public URL is empty");
+  }
+  const publicUrl = config.supabasePublicStorageUrl
+    ? data.publicUrl.replace(config.supabaseUrl, config.supabasePublicStorageUrl)
+    : data.publicUrl;
+  return { publicUrl, storagePath, bucket };
+}
+
+async function resolveStickerSourceUrl(
+  session: any,
+  sourceFileId: string,
+  fileBuffer: Buffer,
+  mimeType: string,
+  telegramFallbackUrl: string
+): Promise<{ sourceFileUrl: string; transport: "storage-result" | "storage-temp" | "telegram-fallback"; storagePath?: string | null }> {
+  try {
+    const { data: stickerRow } = await supabase
+      .from("stickers")
+      .select("result_storage_path")
+      .eq("user_id", session.user_id)
+      .eq("telegram_file_id", sourceFileId)
+      .eq("env", config.appEnv)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const resultStoragePath = stickerRow?.result_storage_path || null;
+    if (resultStoragePath) {
+      const { data } = supabase.storage
+        .from(config.supabaseStorageBucket)
+        .getPublicUrl(resultStoragePath);
+      if (data?.publicUrl) {
+        const publicUrl = config.supabasePublicStorageUrl
+          ? data.publicUrl.replace(config.supabaseUrl, config.supabasePublicStorageUrl)
+          : data.publicUrl;
+        return { sourceFileUrl: publicUrl, transport: "storage-result", storagePath: resultStoragePath };
+      }
+    }
+  } catch (err: any) {
+    console.warn("[Worker] resolveStickerSourceUrl: failed to load result_storage_path, fallback to temp upload:", err?.message || err);
+  }
+
+  try {
+    const temp = await uploadTempStickerSourceAndGetPublicUrl(fileBuffer, session, sourceFileId, mimeType);
+    return { sourceFileUrl: temp.publicUrl, transport: "storage-temp", storagePath: temp.storagePath };
+  } catch (err: any) {
+    console.warn("[Worker] resolveStickerSourceUrl: temp upload failed, fallback to telegram URL:", err?.message || err);
+  }
+
+  return { sourceFileUrl: telegramFallbackUrl, transport: "telegram-fallback", storagePath: null };
+}
+
 /** Telegram sendPhoto limit: 10 MB. Resize pack preview if over limit. */
 const TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -1554,11 +1631,24 @@ async function runJob(job: any) {
   await updateProgress(2);
   const filePath = await getFilePath(sourceFileId);
   const fileBuffer = await downloadFile(filePath);
-  const sourceFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
+  const telegramSourceFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
 
   const base64 = fileBuffer.toString("base64");
   const mimeType = getMimeTypeByTelegramPath(filePath);
   const sourceSha256 = sha256Hex(fileBuffer);
+  const resolvedSource =
+    sourceKind === "sticker"
+      ? await resolveStickerSourceUrl(session, sourceFileId, fileBuffer, mimeType, telegramSourceFileUrl)
+      : { sourceFileUrl: telegramSourceFileUrl, transport: "telegram-fallback" as const, storagePath: null };
+  const sourceFileUrl = resolvedSource.sourceFileUrl;
+  console.log("[Worker] source_file_url_resolved:", {
+    generationType,
+    sourceKind,
+    transport: resolvedSource.transport,
+    storagePath: resolvedSource.storagePath || null,
+    sourceFileId: sourceFileId.substring(0, 30) + "...",
+    sourceFileUrl,
+  });
   let replaceReferenceBase64: string | null = null;
   let replaceReferenceMimeType: string | null = null;
   let replaceReferenceBuffer: Buffer | null = null;
@@ -1869,6 +1959,8 @@ async function runJob(job: any) {
       promptText,
       inputImage: {
         transport: "fileData",
+        sourceUrlTransport: resolvedSource.transport,
+        sourceStoragePath: resolvedSource.storagePath || null,
         fileId: sourceFileId,
         filePath,
         sourceFileUrl,
