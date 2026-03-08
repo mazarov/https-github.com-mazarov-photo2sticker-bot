@@ -21,6 +21,7 @@ import {
   isSubjectModePackFilterEnabled,
   isSubjectPostcheckEnabled,
   isSubjectProfileEnabled,
+  resolveGenerationSource,
   normalizeSubjectMode,
   normalizeSubjectGender,
   normalizeSubjectSourceKind,
@@ -1567,15 +1568,14 @@ async function runJob(job: any) {
     console.log("[single.gen.worker] job_start", singleTrace);
   }
 
-  const sourceFileId =
-    generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject"
-      ? session.last_sticker_file_id
-      : session.current_photo_file_id || photos[photos.length - 1];
+  const { sourceFileId, sourceKind } = resolveGenerationSource(session, generationType);
 
   // Debug logging for source file
   console.log("[Worker] Source file debug:", {
     generationType,
     sourceFileId: sourceFileId?.substring(0, 30) + "...",
+    styleSourceKind: session.style_source_kind || "photo(default)",
+    resolvedSourceKind: sourceKind,
     "session.current_photo_file_id": session.current_photo_file_id?.substring(0, 30) + "...",
     "session.last_sticker_file_id": session.last_sticker_file_id?.substring(0, 30) + "...",
     "photos.length": photos.length,
@@ -1619,10 +1619,6 @@ async function runJob(job: any) {
       console.warn("[ReplaceSubject] failed to load identity photo, fallback to single input:", err?.message || err);
     }
   }
-  const sourceKind: SubjectSourceKind =
-    generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject"
-      ? "sticker"
-      : "photo";
   const facemintReplaceFaceEnabled = generationType === "replace_subject"
     ? isConfigEnabled(await getAppConfig("facemint_replace_face_enabled", "false"))
     : false;

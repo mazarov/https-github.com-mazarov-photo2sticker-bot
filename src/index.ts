@@ -1527,6 +1527,7 @@ async function startGeneration(
   options: {
     generationType: "style" | "emotion" | "motion" | "text" | "replace_subject";
     promptFinal: string;
+    styleSourceKind?: "photo" | "sticker";
     userInput?: string | null;
     emotionPrompt?: string | null;
     selectedStyleId?: string | null;
@@ -1619,6 +1620,13 @@ async function startGeneration(
       renderMode,
     });
   }
+  const effectiveStyleSourceKind =
+    options.generationType === "style"
+      ? (options.styleSourceKind || (String(session?.style_source_kind || "").toLowerCase() === "sticker" ? "sticker" : "photo"))
+      : null;
+  if (effectiveStyleSourceKind) {
+    session.style_source_kind = effectiveStyleSourceKind;
+  }
 
   options.promptFinal = await applySubjectLockToPrompt(session, options.generationType, options.promptFinal);
   if (options.generationType === "emotion") {
@@ -1688,6 +1696,7 @@ async function startGeneration(
         emotion_prompt: options.emotionPrompt || null,
         selected_style_id: options.selectedStyleId || session.selected_style_id || null,
         selected_emotion: options.selectedEmotion || null,
+        ...(effectiveStyleSourceKind ? { style_source_kind: effectiveStyleSourceKind } : {}),
         credits_spent: creditsNeeded,
         is_active: true,
       })
@@ -1797,6 +1806,7 @@ async function startGeneration(
       emotion_prompt: options.emotionPrompt || null,
       selected_style_id: options.selectedStyleId || session.selected_style_id || null,
       selected_emotion: options.selectedEmotion || null,
+      ...(effectiveStyleSourceKind ? { style_source_kind: effectiveStyleSourceKind } : {}),
       text_prompt: options.textPrompt || null,
       generation_type: options.generationType,
       credits_spent: creditsNeeded,
@@ -2088,6 +2098,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
       state: lastPhoto ? "wait_style" : "assistant_wait_photo",
       is_active: true,
       flow_kind: "assistant",
+      style_source_kind: "photo",
       env: config.appEnv,
       current_photo_file_id: lastPhoto,
       photos: lastPhoto ? [lastPhoto] : [],
@@ -4401,6 +4412,7 @@ bot.on("photo", async (ctx) => {
         photos,
         current_photo_file_id: photo.file_id,
         state: "wait_style",
+        style_source_kind: "photo",
         is_active: true,
         session_rev: step1Rev,
       })
@@ -4549,6 +4561,7 @@ bot.on("photo", async (ctx) => {
           state: "wait_style",
           is_active: true,
           current_photo_file_id: photo.file_id,
+          style_source_kind: "photo",
         })
         .eq("id", session.id);
       if (upErr) console.error("Valentine photo update error:", upErr);
@@ -4556,10 +4569,17 @@ bot.on("photo", async (ctx) => {
       const userInput = preset.prompt_hint;
       const promptResult = await generatePrompt(userInput);
       const generatedPrompt = promptResult.ok && !promptResult.retry ? promptResult.prompt || userInput : userInput;
-      Object.assign(session, { photos, current_photo_file_id: photo.file_id, state: "wait_style", selected_style_id: preset.id });
+      Object.assign(session, {
+        photos,
+        current_photo_file_id: photo.file_id,
+        state: "wait_style",
+        style_source_kind: "photo",
+        selected_style_id: preset.id,
+      });
       await startGeneration(ctx, user, session, lang, {
         generationType: "style",
         promptFinal: generatedPrompt,
+        styleSourceKind: "photo",
         userInput,
         selectedStyleId: preset.id,
       });
@@ -4569,7 +4589,7 @@ bot.on("photo", async (ctx) => {
 
   const { error } = await supabase
     .from("sessions")
-    .update({ photos, state: "wait_action", is_active: true, current_photo_file_id: photo.file_id })
+    .update({ photos, state: "wait_action", is_active: true, current_photo_file_id: photo.file_id, style_source_kind: "photo" })
     .eq("id", session.id);
   if (error) {
     console.error("Failed to update session to wait_action:", error);
@@ -4758,7 +4778,7 @@ bot.hears(["🎨 Стили", "🎨 Styles"], async (ctx) => {
   }
 
   // Always set state to wait_style + copy photo if needed
-  const sessionUpdate: any = { state: "wait_style", is_active: true };
+  const sessionUpdate: any = { state: "wait_style", is_active: true, style_source_kind: "photo" };
   if (!session.current_photo_file_id && photoFileId) {
     sessionUpdate.current_photo_file_id = photoFileId;
     sessionUpdate.photos = [photoFileId];
@@ -6792,6 +6812,7 @@ bot.action(/^pack_new_photo(?::(.+))?$/, async (ctx) => {
       current_photo_file_id: newPhotoFileId,
       pending_photo_file_id: null,
       state: "wait_action",
+      style_source_kind: "photo",
       pack_batch_id: null,
       pack_sheet_file_id: null,
       is_active: true,
@@ -6930,6 +6951,7 @@ bot.action(/^single_new_photo(?::(.+))?$/, async (ctx) => {
       current_photo_file_id: newPhotoFileId,
       pending_photo_file_id: null,
       state: "wait_action",
+      style_source_kind: "photo",
       is_active: true,
       flow_kind: "single",
       session_rev: nextRev,
@@ -8354,6 +8376,7 @@ bot.on("text", async (ctx) => {
       .update({
         state: "wait_style",
         is_active: true,
+        style_source_kind: "photo",
         session_rev: (session.session_rev || 1) + 1,
       })
       .eq("id", session.id);
@@ -8456,10 +8479,15 @@ bot.action(/^style_(?!v2:|example|custom|group)([^:]+)$/, async (ctx) => {
   }
 
     const generatedPrompt = promptResult.prompt || userInput;
+    const styleSourceKind: "photo" | "sticker" =
+      String(session?.style_source_kind || "").toLowerCase() === "sticker" && session?.last_sticker_file_id
+        ? "sticker"
+        : "photo";
 
     await startGeneration(ctx, user, session, lang, {
       generationType: "style",
       promptFinal: generatedPrompt,
+      styleSourceKind,
       userInput,
       selectedStyleId: preset.id,
     });
@@ -9405,7 +9433,7 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
   // Get sticker from DB by ID
   const { data: sticker } = await supabase
     .from("stickers")
-    .select("source_photo_file_id, user_id")
+    .select("source_photo_file_id, telegram_file_id, user_id")
     .eq("id", stickerId)
     .maybeSingle();
 
@@ -9428,7 +9456,7 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
     // Create new session
     const { data: newSession } = await supabase
       .from("sessions")
-      .insert({ user_id: user.id, state: "wait_style", is_active: true, env: config.appEnv })
+      .insert({ user_id: user.id, state: "wait_style", is_active: true, style_source_kind: "sticker", env: config.appEnv })
       .select()
       .single();
     session = newSession;
@@ -9452,6 +9480,8 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
       state: "wait_style",
       is_active: true,
       current_photo_file_id: restoredPhotoFileId,
+      last_sticker_file_id: sticker.telegram_file_id || session.last_sticker_file_id || null,
+      style_source_kind: "sticker",
       prompt_final: null,
       user_input: null,
       pending_generation_type: null,
@@ -9492,6 +9522,7 @@ bot.action("change_style", async (ctx) => {
     .update({
       state: "wait_style",
       is_active: true,
+      style_source_kind: "photo",
       prompt_final: null,
       user_input: null,
       pending_generation_type: null,
@@ -10137,6 +10168,7 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
         state: "wait_style",
         is_active: true,
         flow_kind: "single",
+        style_source_kind: "photo",
         session_rev: nextRev,
       })
       .eq("id", session.id);
@@ -11637,6 +11669,7 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
       current_photo_file_id: newPhotoFileId,
       pending_photo_file_id: null,
       state: "wait_action",
+      style_source_kind: "photo",
       is_active: true,
       flow_kind: "single",
       session_rev: nextRev,
@@ -12437,6 +12470,7 @@ bot.action(/^retry_generation:(.+)$/, async (ctx) => {
     await startGeneration(ctx, user, session, lang, {
       generationType: session.generation_type || "style",
       promptFinal: session.prompt_final,
+      styleSourceKind: String(session.style_source_kind || "").toLowerCase() === "sticker" ? "sticker" : "photo",
       userInput: session.user_input,
       selectedStyleId: session.selected_style_id,
       selectedEmotion: session.selected_emotion,

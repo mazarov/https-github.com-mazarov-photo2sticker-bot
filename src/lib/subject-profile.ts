@@ -94,7 +94,16 @@ export function resolveGenerationSource(
   session: any,
   generationType: "style" | "emotion" | "motion" | "text" | "replace_subject"
 ): { sourceFileId: string | null; sourceKind: SubjectSourceKind } {
-  if (generationType === "emotion" || generationType === "motion" || generationType === "text") {
+  const styleSourceKind = String(session?.style_source_kind || "").trim().toLowerCase() === "sticker"
+    ? "sticker"
+    : "photo";
+  if (generationType === "emotion" || generationType === "motion" || generationType === "text" || generationType === "replace_subject") {
+    return {
+      sourceFileId: session?.last_sticker_file_id || null,
+      sourceKind: "sticker",
+    };
+  }
+  if (generationType === "style" && styleSourceKind === "sticker") {
     return {
       sourceFileId: session?.last_sticker_file_id || null,
       sourceKind: "sticker",

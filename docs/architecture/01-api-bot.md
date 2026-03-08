@@ -210,9 +210,14 @@ flowchart TD
 - Источник "рабочего фото" централизован: `session.current_photo_file_id || user.last_photo_file_id`.
 
 ### Subject/Object Profile Contract (phase 1 -> v2 compatible)
-- Перед генерацией API определяет source по `generation_type`:
-  - `style` -> `current_photo_file_id` (photo),
+- Перед генерацией API определяет source через общий resolver `resolveGenerationSource(...)`:
+  - `style` -> зависит от `sessions.style_source_kind`:
+    - `photo` -> `current_photo_file_id`,
+    - `sticker` -> `last_sticker_file_id`;
   - `emotion`/`motion`/`text` -> `last_sticker_file_id` (sticker).
+- Маршрутизация style-source:
+  - стиль из меню действий/по фото -> `style_source_kind=photo`,
+  - стиль из карточки готового стикера (`change_style:ID`) -> `style_source_kind=sticker`.
 - При включенном `subject_profile_enabled` API сохраняет в `sessions` профиль субъекта:
   `subject_mode`, `subject_count`, `subject_confidence`, `subject_source_file_id`, `subject_source_kind`, `subject_detected_at`.
 - При наличии object-v2 колонок API делает dual-write в `object_*` с fallback на legacy `subject_*`.

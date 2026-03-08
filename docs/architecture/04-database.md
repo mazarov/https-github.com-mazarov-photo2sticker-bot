@@ -58,6 +58,7 @@ erDiagram
 | `is_active` | boolean | — | Активна ли сессия |
 | `current_photo_file_id` | text | — | Текущее фото |
 | `last_sticker_file_id` | text | — | Последний стикер |
+| `style_source_kind` | text | `photo` | Источник для `generation_type=style`: `photo` \| `sticker` |
 | `last_sticker_storage_path` | text | — | Путь в Storage |
 | `selected_style_id` | text | — | Выбранный стиль |
 | `selected_emotion` | text | — | Выбранная эмоция |

@@ -52,8 +52,12 @@ sequenceDiagram
 - Определение типа генерации (`style`, `emotion`, `motion`, `text`)
 - Обновление progress-сообщения: "⏳ Генерирую стикер..."
 
-### 3. Скачивание исходного фото
-- Источник: `session.current_photo_file_id` (Telegram file_id)
+### 3. Скачивание source-изображения
+- Источник определяется централизованно через `resolveGenerationSource(session, generationType)`:
+  - `style` + `style_source_kind=photo` -> `session.current_photo_file_id`,
+  - `style` + `style_source_kind=sticker` -> `session.last_sticker_file_id`,
+  - `emotion`/`motion`/`text` -> `session.last_sticker_file_id`,
+  - `replace_subject` -> `session.last_sticker_file_id` (sticker target), плюс отдельный `session.current_photo_file_id` как identity reference.
 - Скачивание через Telegram Bot API → Buffer
 
 ### 4. Генерация изображения (Gemini)
@@ -69,9 +73,9 @@ sequenceDiagram
 #### Subject/Object Lock (phase 1 -> v2 compatible)
 - Worker читает профиль источника из `sessions.object_*` (если заполнен), иначе из `sessions.subject_*`.
 - При включенном `subject_lock_enabled` или `object_lock_enabled` гарантирует наличие `Subject Lock Block` в prompt.
-- Source определяется по типу генерации:
-  - `style` -> source kind `photo`,
-  - `emotion`/`motion`/`text` -> source kind `sticker`.
+- Source определяется через общий resolver:
+  - `style` -> `photo` или `sticker` (по `sessions.style_source_kind`),
+  - `emotion`/`motion`/`text` -> `sticker`.
 - Если включен `subject_profile_enabled` или `object_profile_enabled`/`object_profile_shadow_enabled` и profile для текущего source отсутствует, worker выполняет detector и сохраняет профиль в `sessions` (dual-write в `subject_*` + `object_*` при наличии колонок).
 - Если `subject_postcheck_enabled=true`, worker валидирует число людей на результате и делает один retry с усиленным lock; при повторном mismatch задача завершается ошибкой (с рефандом через общий error-path).
 
@@ -166,7 +170,7 @@ flowchart TD
 
 ### Правила
 
-- **Style** — ТОЛЬКО из оригинального фото пользователя (AgAC)
+- **Style** — из фото или из ранее сгенерированного стикера (зависит от `sessions.style_source_kind`)
 - **Emotion / Motion** — ТОЛЬКО из ранее созданного стикера (CAAC), НИКОГДА из фото
 - **Text** — оверлей поверх стикера, генерация через Gemini не используется
 - Цепочки произвольной длины: style → motion → emotion → motion → ...
@@ -175,7 +179,7 @@ flowchart TD
 
 | Тип | Источник (input) | `source_photo_file_id` в БД | Промпт |
 |-----|-----------------|----------------------------|--------|
-| `style` | Оригинальное фото (AgAC) | Оригинальное фото (AgAC) | style preset prompt_hint + render_mode policy |
+| `style` | Фото (AgAC) **или** стикер (CAAC) | Равен выбранному source (`photo`/`sticker`) | style preset prompt_hint + render_mode policy |
 | `emotion` | Предыдущий стикер (CAAC) | Этот же стикер (CAAC) | emotion preset + стикер |
 | `motion` | Предыдущий стикер (CAAC) | Этот же стикер (CAAC) | motion preset + стикер |
 | `replace_subject` | Фото пользователя (identity) + стикер-референс (pose/style) | Фото пользователя (AgAC) | identity from photo + pose/style from sticker |
@@ -184,14 +188,8 @@ flowchart TD
 ### Код определения источника
 
 ```typescript
-// worker.ts — определение sourceFileId
-const sourceFileId =
-  generationType === "emotion" || generationType === "motion" || generationType === "text"
-    ? session.last_sticker_file_id    // стикер (CAAC)
-    : session.current_photo_file_id;  // оригинальное фото (AgAC) или identity photo для replace_subject
-
+const { sourceFileId, sourceKind } = resolveGenerationSource(session, generationType);
 // source_photo_file_id в БД = всегда sourceFileId
-const savedSourcePhotoFileId = sourceFileId;
 ```
 
 ### replace_subject (Gemini / Facemint)
