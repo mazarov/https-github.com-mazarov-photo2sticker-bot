@@ -587,7 +587,19 @@ async function sendStyleKeyboardFlat(
     } catch (err: any) {
       const msg = String(err?.message || "");
       console.error("sendStyleKeyboardFlat error:", msg);
-      // Fallback for stale/non-editable messages: send a fresh style list instead of failing silently.
+      // Sticker messages cannot be edited to text, but we can still replace inline keyboard in-place.
+      try {
+        await ctx.telegram.editMessageReplyMarkup(
+          chatId,
+          messageId,
+          undefined,
+          { inline_keyboard: buttons }
+        );
+        return;
+      } catch (markupErr: any) {
+        console.warn("sendStyleKeyboardFlat reply_markup fallback error:", markupErr?.message || markupErr);
+      }
+      // Last fallback for stale/non-editable messages: send a fresh style list.
       if (msg.includes("message can't be edited") || msg.includes("message to edit not found")) {
         await ctx.reply(text, Markup.inlineKeyboard(buttons)).catch(() => {});
         return;
@@ -9140,7 +9152,7 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
         await createStickerSet(stickerSetName, sticker.telegram_file_id);
         const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
         if (!verify.ok) {
-          throw new Error(`Sticker not visible in set after create (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+          console.warn(`add_to_pack: post-create visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
         }
       } catch (createErr: any) {
         // If name is occupied, try with timestamp
@@ -9152,7 +9164,7 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
           await createStickerSet(stickerSetName, sticker.telegram_file_id);
           const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
           if (!verify.ok) {
-            throw new Error(`Sticker not visible in set after create-retry (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+            console.warn(`add_to_pack: post-create-retry visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
           }
         } else {
           throw createErr;
@@ -9171,7 +9183,7 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
         });
         const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
         if (!verify.ok) {
-          throw new Error(`Sticker not visible in set after add (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+          console.warn(`add_to_pack: post-add visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
         }
         console.log("add_to_pack: sticker added to existing set");
       } catch (addErr: any) {
@@ -9186,7 +9198,7 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
             await createStickerSet(stickerSetName, sticker.telegram_file_id);
             const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
             if (!verify.ok) {
-              throw new Error(`Sticker not visible in set after recreate (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+              console.warn(`add_to_pack: post-recreate visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
             }
           } catch (recreateErr: any) {
             if (recreateErr.response?.data?.description?.includes("already occupied")) {
@@ -9196,7 +9208,7 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
               await createStickerSet(stickerSetName, sticker.telegram_file_id);
               const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
               if (!verify.ok) {
-                throw new Error(`Sticker not visible in set after recreate-retry (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+                console.warn(`add_to_pack: post-recreate-retry visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
               }
             } else {
               throw recreateErr;
@@ -9272,7 +9284,7 @@ bot.action("add_to_pack", async (ctx) => {
         await createStickerSet(stickerSetName, session.last_sticker_file_id);
         const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
         if (!verify.ok) {
-          throw new Error(`Sticker not visible in set after create (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+          console.warn(`add_to_pack(old): post-create visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
         }
       } catch (createErr: any) {
         if (createErr.response?.data?.description?.includes("already occupied")) {
@@ -9283,7 +9295,7 @@ bot.action("add_to_pack", async (ctx) => {
           await createStickerSet(stickerSetName, session.last_sticker_file_id);
           const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
           if (!verify.ok) {
-            throw new Error(`Sticker not visible in set after create-retry (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+            console.warn(`add_to_pack(old): post-create-retry visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
           }
         } else {
           throw createErr;
@@ -9301,7 +9313,7 @@ bot.action("add_to_pack", async (ctx) => {
         });
         const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
         if (!verify.ok) {
-          throw new Error(`Sticker not visible in set after add (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+          console.warn(`add_to_pack(old): post-add visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
         }
         console.log("add_to_pack(old): sticker added to existing set");
       } catch (addErr: any) {
@@ -9315,7 +9327,7 @@ bot.action("add_to_pack", async (ctx) => {
             await createStickerSet(stickerSetName, session.last_sticker_file_id);
             const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
             if (!verify.ok) {
-              throw new Error(`Sticker not visible in set after recreate (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+              console.warn(`add_to_pack(old): post-recreate visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
             }
           } catch (recreateErr: any) {
             if (recreateErr.response?.data?.description?.includes("already occupied")) {
@@ -9325,7 +9337,7 @@ bot.action("add_to_pack", async (ctx) => {
               await createStickerSet(stickerSetName, session.last_sticker_file_id);
               const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
               if (!verify.ok) {
-                throw new Error(`Sticker not visible in set after recreate-retry (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+                console.warn(`add_to_pack(old): post-recreate-retry visibility check failed, continue (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
               }
             } else {
               throw recreateErr;
