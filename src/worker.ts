@@ -2084,14 +2084,13 @@ async function runJob(job: any) {
   await updateProgress(5);
 
   const skipBgRemoval =
-    (isImportedSticker && (generationType === "emotion" || generationType === "motion"))
-    || (usedFacemintReplaceFace && generationType === "replace_subject");
+    isImportedSticker && (generationType === "emotion" || generationType === "motion");
   let noBgBuffer: Buffer | undefined;
 
   if (skipBgRemoval) {
     console.log("[bgRemoval] SKIPPED — preserving original background", {
       generationType,
-      reason: usedFacemintReplaceFace ? "facemint_replace_subject" : "imported_sticker_edit",
+      reason: "imported_sticker_edit",
     });
     noBgBuffer = generatedBuffer;
   } else {
