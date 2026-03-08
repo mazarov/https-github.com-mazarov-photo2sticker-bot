@@ -2,6 +2,7 @@ import axios from "axios";
 import os from "os";
 import FormData from "form-data";
 import sharp from "sharp";
+import { createHash } from "crypto";
 import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
 import { supabase } from "./lib/supabase";
 import { getFilePath, downloadFile, sendMessage, sendSticker, sendPhoto, editMessageText, deleteMessage, getMe } from "./lib/telegram";
@@ -259,6 +260,25 @@ function applyStyleSafetyPolicy(prompt: string): string {
 function isSafetyFinishReason(value: unknown): boolean {
   const reason = String(value || "").toUpperCase();
   return reason === "PROHIBITED_CONTENT" || reason === "SAFETY";
+}
+
+function sha256Hex(input: Buffer): string {
+  return createHash("sha256").update(input).digest("hex");
+}
+
+function logLongValue(tag: string, value: string, chunkSize = 900): void {
+  const text = String(value ?? "");
+  if (!text) {
+    console.log(`${tag}: <empty>`);
+    return;
+  }
+  const total = Math.ceil(text.length / chunkSize);
+  for (let i = 0; i < total; i++) {
+    const start = i * chunkSize;
+    const end = Math.min(start + chunkSize, text.length);
+    const part = text.slice(start, end);
+    console.log(`${tag} [part ${i + 1}/${total}]`, part);
+  }
 }
 
 function normalizePackSetSubjectMode(value: any): "single" | "multi" | "any" {
@@ -1569,19 +1589,27 @@ async function runJob(job: any) {
   await updateProgress(2);
   const filePath = await getFilePath(sourceFileId);
   const fileBuffer = await downloadFile(filePath);
+  const sourceFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
 
   const base64 = fileBuffer.toString("base64");
   const mimeType = getMimeTypeByTelegramPath(filePath);
+  const sourceSha256 = sha256Hex(fileBuffer);
   let replaceReferenceBase64: string | null = null;
   let replaceReferenceMimeType: string | null = null;
   let replaceReferenceBuffer: Buffer | null = null;
+  let replaceReferencePath: string | null = null;
+  let replaceReferenceUrl: string | null = null;
+  let replaceReferenceSha256: string | null = null;
   if (generationType === "replace_subject" && session.current_photo_file_id) {
     try {
       const refPath = await getFilePath(session.current_photo_file_id);
+      replaceReferencePath = refPath;
+      replaceReferenceUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${refPath}`;
       const refBuffer = await downloadFile(refPath);
       replaceReferenceBase64 = refBuffer.toString("base64");
       replaceReferenceMimeType = getMimeTypeByTelegramPath(refPath);
       replaceReferenceBuffer = refBuffer;
+      replaceReferenceSha256 = sha256Hex(refBuffer);
       console.log("[ReplaceSubject] loaded identity photo reference:", {
         hasRef: true,
         refMime: replaceReferenceMimeType,
@@ -1825,18 +1853,40 @@ async function runJob(job: any) {
     generationType === "motion"  ? await getAppConfig("gemini_model_motion",  "gemini-2.5-flash-image") :
     generationType === "replace_subject" ? await getAppConfig("gemini_model_replace_face", "gemini-2.5-flash-image") :
     await getAppConfig("gemini_model_style", "gemini-3-pro-image-preview");
-  const fallbackModel: string | null = (() => {
-    // Style must also have a fallback because gemini-2.5-flash-image can return finishReason=OTHER with no inlineData.
-    const styleFallback: string = "gemini-3-pro-image-preview";
-    const altFallback: string = "gemini-2.5-flash-image";
-    if (generationType === "style") {
-      if (primaryModel !== styleFallback) return styleFallback;
-      return primaryModel !== altFallback ? altFallback : null;
-    }
-    return primaryModel !== styleFallback ? styleFallback : (primaryModel !== altFallback ? altFallback : null);
-  })();
   activeModel = primaryModel;
   console.log("Using model:", activeModel, "generationType:", generationType);
+  logLongValue("[GeminiDebug] source_file_url", sourceFileUrl);
+  if (replaceReferenceUrl) {
+    logLongValue("[GeminiDebug] replace_reference_url", replaceReferenceUrl);
+  }
+  logLongValue("[GeminiDebug] full_prompt_before_primary", promptForGeneration);
+  const preflightRequestMeta = {
+    sessionId: session.id,
+    jobId: job.id,
+    stage: "primary",
+    model: activeModel,
+    endpoint: getGeminiGenerateContentUrl(activeModel),
+    generationType,
+    source: {
+      fileId: sourceFileId,
+      filePath,
+      fileUrlLength: sourceFileUrl.length,
+      mimeType,
+      bytes: fileBuffer.length,
+      sha256: sourceSha256,
+    },
+    replaceReference: replaceReferenceBase64
+      ? {
+          fileId: session.current_photo_file_id,
+          filePath: replaceReferencePath,
+          fileUrlLength: replaceReferenceUrl?.length || 0,
+          mimeType: replaceReferenceMimeType,
+          bytes: replaceReferenceBuffer?.length || 0,
+          sha256: replaceReferenceSha256,
+        }
+      : null,
+  };
+  logLongValue("[GeminiDebug] request_meta_json", JSON.stringify(preflightRequestMeta));
 
   callGeminiImage = async (promptText: string, modelName: string, stage: string) => {
     if (isSingleFlowGeneration) {
@@ -1847,9 +1897,7 @@ async function runJob(job: any) {
         promptLen: promptText.length,
       });
     }
-    const res = await axios.post(
-      getGeminiGenerateContentUrl(modelName),
-      {
+    const requestBody = {
         contents: [
           {
             role: "user",
@@ -1876,7 +1924,41 @@ async function runJob(job: any) {
           responseModalities: ["IMAGE", "TEXT"],
           imageConfig: { aspectRatio: "1:1" },
         },
+      };
+    const requestUrl = getGeminiGenerateContentUrl(modelName);
+    const requestPreview = {
+      sessionId: session.id,
+      jobId: job.id,
+      stage,
+      model: modelName,
+      requestUrl,
+      generationType,
+      promptLength: promptText.length,
+      source: {
+        fileId: sourceFileId,
+        filePath,
+        fileUrlLength: sourceFileUrl.length,
+        mimeType,
+        bytes: fileBuffer.length,
+        sha256: sourceSha256,
       },
+      replaceReference: replaceReferenceBase64
+        ? {
+            fileId: session.current_photo_file_id,
+            filePath: replaceReferencePath,
+            fileUrlLength: replaceReferenceUrl?.length || 0,
+            mimeType: replaceReferenceMimeType,
+            bytes: replaceReferenceBuffer?.length || 0,
+            sha256: replaceReferenceSha256,
+          }
+        : null,
+    };
+    logLongValue("[GeminiDebug] request_url", requestUrl);
+    logLongValue("[GeminiDebug] request_prompt", promptText);
+    logLongValue("[GeminiDebug] request_preview_json", JSON.stringify(requestPreview));
+    const res = await axios.post(
+      requestUrl,
+      requestBody,
       {
         headers: { "x-goog-api-key": config.geminiApiKey },
       }
@@ -2018,42 +2100,6 @@ async function runJob(job: any) {
       }
     } catch (retryNoImageErr: any) {
       console.error("[Generation] No-image retry failed:", retryNoImageErr?.response?.data || retryNoImageErr?.message || retryNoImageErr);
-    }
-
-    // Fallback model for emotion/motion/text when primary model repeatedly returns finishReason OTHER with no image.
-    if (!imageBase64 && fallbackModel && fallbackModel !== activeModel) {
-      console.warn("[Generation] Switching to fallback model after no-image retries:", {
-        generationType,
-        primaryModel: activeModel,
-        fallbackModel,
-      });
-      activeModel = fallbackModel;
-      try {
-        const fallbackRes = await callGeminiImage(promptForGeneration, activeModel, "fallback_primary_prompt");
-        const fallbackBlockReason = fallbackRes.data?.promptFeedback?.blockReason;
-        if (!fallbackBlockReason) {
-          const fallbackImageBase64 = extractGeminiImageBase64(fallbackRes.data);
-          if (fallbackImageBase64) {
-            imageBase64 = fallbackImageBase64;
-            console.log("[Generation] Fallback model produced image");
-          } else {
-            console.error("[Generation] Fallback model still returned no image. Response:", JSON.stringify(fallbackRes.data, null, 2));
-          }
-        } else {
-          console.warn("[Generation] Fallback model blocked:", fallbackBlockReason);
-        }
-      } catch (fallbackErr: any) {
-        console.error("[Generation] Fallback model request failed:", fallbackErr?.response?.data || fallbackErr?.message || fallbackErr);
-        if (isSingleFlowGeneration) {
-          console.error("[single.gen.worker] model_error", {
-            ...singleTrace,
-            stage: "fallback",
-            model: activeModel,
-            status: fallbackErr?.response?.status || null,
-            message: fallbackErr?.message || "unknown_error",
-          });
-        }
-      }
     }
 
     if (!imageBase64) {
