@@ -2727,6 +2727,37 @@ async function resolveSessionForIncomingPhoto(userId: string, traceId?: string |
     return latestSingleSession;
   }
 
+  // Last-resort: sessions in replace-face or wait_action, order by created_at only.
+  // Some DB setups may have null updated_at, causing earlier fallbacks to miss.
+  const REPLACE_FACE_OR_ACTION_STATES = [
+    "wait_replace_face",
+    "wait_replace_face_sticker",
+    "wait_edit_photo",
+    "wait_action",
+  ];
+  const { data: lastResortSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .in("state", REPLACE_FACE_OR_ACTION_STATES as unknown as string[])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (lastResortSession?.id) {
+    console.log(
+      "Photo router fallback: using last-resort session (created_at):",
+      lastResortSession.id,
+      "state:",
+      lastResortSession.state
+    );
+    logSessionTrace("resolveSessionForIncomingPhoto.pick_last_resort_created", {
+      userId,
+      session: sessionTraceSnapshot(lastResortSession),
+    }, traceId);
+    return lastResortSession;
+  }
+
   const packSession = await getPackFlowSession(userId, traceId);
   if (packSession?.id) {
     console.log(
