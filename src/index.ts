@@ -2642,6 +2642,33 @@ async function resolveSessionForIncomingPhoto(userId: string, traceId?: string |
     return activeSession;
   }
 
+  // Replace-face source-of-truth fallback:
+  // these states must survive even when is_active was dropped by side-effects,
+  // otherwise photo messages are incorrectly recovered into wait_action.
+  const REPLACE_FACE_RECOVERY_STATES = [
+    "wait_replace_face_sticker",
+    "wait_edit_sticker",
+    "wait_edit_photo",
+    "wait_edit_action",
+  ];
+  const { data: replaceFaceSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .in("state", REPLACE_FACE_RECOVERY_STATES as unknown as string[])
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (replaceFaceSession?.id) {
+    logSessionTrace("resolveSessionForIncomingPhoto.pick_replace_face_fallback", {
+      userId,
+      session: sessionTraceSnapshot(replaceFaceSession),
+    }, traceId);
+    return replaceFaceSession;
+  }
+
   // Strong fallback: pick the latest non-assistant active-like session first.
   // This protects manual flows from being hijacked by stale assistant recovery sessions.
   const NON_ASSISTANT_FALLBACK_STATES = SESSION_FALLBACK_ACTIVE_STATES.filter(
@@ -4050,6 +4077,31 @@ bot.on("photo", async (ctx) => {
       userInput: lang === "ru" ? "Замена лица в стикере" : "Replace face in sticker",
       earlyProgressMessageId: earlyMsgId,
     });
+    return;
+  }
+
+  // === replace-face (from action menu): user sent identity photo ===
+  if (session.state === "wait_replace_face_sticker") {
+    const photos = Array.isArray(session.photos) ? session.photos : [];
+    photos.push(photo.file_id);
+    const nextRev = (session.session_rev || 1) + 1;
+    await supabase
+      .from("sessions")
+      .update({
+        photos,
+        current_photo_file_id: photo.file_id,
+        flow_kind: "single",
+        is_active: true,
+        session_rev: nextRev,
+      })
+      .eq("id", session.id);
+    logSessionTrace("photo.wait_replace_face_sticker.updated", {
+      userId: user.id,
+      sessionId: session.id,
+      toState: "wait_replace_face_sticker",
+      nextRev,
+    }, traceId);
+    await ctx.reply(await getText(lang, "action.replace_face_send_sticker"));
     return;
   }
 
