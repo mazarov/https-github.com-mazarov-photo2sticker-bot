@@ -11,12 +11,9 @@
 ```mermaid
 stateDiagram-v2
     [*] --> wait_pack_carousel: /start (default entrypoint)
-    [*] --> assistant_wait_photo: legacy assistant entry (скрытая кнопка/текст)
-    [*] --> assistant_wait_idea: legacy assistant entry (есть last_photo_file_id)
-    assistant_wait_photo --> assistant_wait_idea: Фото получено
-    assistant_wait_idea --> assistant_chat: Пропустить идеи / skip
-    assistant_wait_idea --> processing: Сгенерировать идею
-    assistant_wait_idea --> wait_style: Сменить стиль
+    [*] --> assistant_wait_photo: Создать стикер (нет фото)
+    [*] --> wait_style: Создать стикер (есть last_photo_file_id)
+    assistant_wait_photo --> wait_style: Фото получено
     assistant_chat --> processing: Параметры собраны + confirm
 
     [*] --> wait_photo: Ручной режим
@@ -45,7 +42,6 @@ stateDiagram-v2
 | Состояние | Описание |
 |-----------|----------|
 | `assistant_wait_photo` | Ассистент ждёт фото от пользователя |
-| `assistant_wait_idea` | Показаны идеи стикеров — пользователь может сгенерировать, пропустить или сменить стиль |
 | `assistant_chat` | Активный диалог с ассистентом (сбор стиля/эмоции/позы) |
 | `wait_photo` | Ручной режим — ждём фото |
 | `wait_style` | Фото есть — ждём выбор стиля (карусель) |
@@ -107,7 +103,7 @@ flowchart TD
 
     CHECK_STATE -->|assistant_chat| UPDATE_PHOTO[Обновить фото<br/>уведомить ассистента]
     CHECK_STATE -->|assistant_wait_photo| HAS_ASESSION{Есть assistant_session?}
-    HAS_ASESSION -->|Да| ASSISTANT_FLOW[Сохранить фото<br/>→ assistant_wait_idea<br/>показать идеи]
+    HAS_ASESSION -->|Да| ASSISTANT_FLOW[Сохранить фото<br/>→ wait_style<br/>показать выбор стиля]
     HAS_ASESSION -->|Нет| FALLBACK[Сбросить в wait_photo<br/>→ ручной режим]
 
     CHECK_STATE -->|другое| REROUTE{Есть активный<br/>assistant?}
@@ -116,7 +112,7 @@ flowchart TD
 ```
 
 Дополнительно для активных flow:
-- `assistant_chat` и `assistant_wait_idea`: новое фото не ломает flow, бот спрашивает "новое или текущее фото" (`assistant_new_photo` / `assistant_keep_photo`).
+- `assistant_chat` и `wait_style`: новое фото не ломает flow, бот спрашивает "новое или текущее фото" (`assistant_new_photo` / `assistant_keep_photo` для assistant_chat; `single_new_photo` / `single_keep_photo` для wait_style).
 - `wait_pack_preview_payment` и `wait_pack_approval`: аналогичный выбор для pack flow (`pack_new_photo` / `pack_keep_photo`) с продолжением pack-сценария.
 
 ### Обработка текста (`bot.on("text")`)
@@ -180,7 +176,7 @@ flowchart TD
 - `pack_regenerate:SESSION_ID[:REV]` — перегенерировать preview (1 кредит)
 - `pack_cancel:SESSION_ID[:REV]` — отменить pack flow
 
-#### Идеи стикеров (ассистент, assistant_wait_idea)
+#### Идеи стикеров (legacy, assistant_wait_idea — шаг «идея» удалён, flow переведён на выбор стиля)
 - `asst_idea_gen:INDEX[:SESSION_ID[:REV]]` — сгенерировать выбранную идею
 - `asst_idea_next:INDEX[:SESSION_ID[:REV]]` — следующая идея
 - `asst_idea_restyle:STYLE_ID:INDEX[:SESSION_ID[:REV]]` — сменить стиль
@@ -232,7 +228,7 @@ flowchart TD
 
 ### `startAssistantDialog(ctx, user, lang)`
 Инициализирует AI-ассистента. Закрывает старые сессии, создаёт новую.
-Если есть `last_photo_file_id` — создаёт сессию в `assistant_wait_idea` и сразу показывает идеи стикеров. Иначе — `assistant_wait_photo`.
+Если есть `last_photo_file_id` — создаёт сессию в `wait_style` и сразу показывает выбор стиля. Иначе — `assistant_wait_photo`.
 Сейчас не используется как default entrypoint из `/start` (вход по умолчанию переведен в pack flow).
 
 ### `handlePackMenuEntry(ctx, options?)`

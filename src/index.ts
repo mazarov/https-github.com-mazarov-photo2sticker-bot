@@ -1843,7 +1843,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
     .from("sessions")
     .insert({
       user_id: user.id,
-      state: lastPhoto ? "assistant_wait_idea" : "assistant_wait_photo",
+      state: lastPhoto ? "wait_style" : "assistant_wait_photo",
       is_active: true,
       flow_kind: "assistant",
       env: config.appEnv,
@@ -1897,7 +1897,7 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
 
   let greeting: string;
   if (lastPhoto) {
-    // Photo already available — ideas will be shown right after greeting
+    // Photo already available — style selection will be shown right after greeting
     greeting = isReturning
       ? (lang === "ru"
         ? `С возвращением, ${firstName}! 👋`
@@ -1924,72 +1924,10 @@ async function startAssistantDialog(ctx: any, user: any, lang: string) {
 
   await ctx.reply(greeting, getMainMenuKeyboard(lang, ctx?.from?.id));
 
-  // If photo already exists — show sticker ideas immediately
+  // If photo already exists — show style selection immediately
   if (lastPhoto) {
-    console.log("startAssistantDialog: lastPhoto exists, showing sticker ideas");
-
-    // Pick style: user's last > default > random
-    const pickedStyle = await pickStyleForIdeas(user);
-
-    const loadingMsg = await ctx.reply(
-      lang === "ru" ? "📸 Фото есть! Подбираю идею для стикера..." : "📸 Photo ready! Picking a sticker idea..."
-    );
-
-    // Generate first idea with photo analysis
-    let idea: StickerIdea;
-    let photoDescription = "";
-    try {
-      const result = await generateFirstIdeaWithPhoto({
-        photoFileId: lastPhoto,
-        stylePresetId: pickedStyle.id,
-        lang,
-      });
-      idea = result.idea;
-      photoDescription = result.photoDescription;
-      console.log("[startAssistant_ideas] Got first idea:", idea.titleEn);
-    } catch (err: any) {
-      console.error("[startAssistant_ideas] Error:", err.message);
-      idea = getDefaultIdeas(lang)[0];
-    }
-
-    // Save ideas state with photoDescription
-    const ideasState = { styleId: pickedStyle.id, ideaIndex: 0, ideas: [idea], photoDescription, holidayId: null };
-    const nextIdeaRev = (newSession.session_rev || 1) + 1;
-    const { error: ideasErr } = await supabase
-      .from("sessions")
-      .update({
-        sticker_ideas_state: ideasState,
-        state: "assistant_wait_idea",
-        is_active: true,
-        session_rev: nextIdeaRev,
-      })
-      .eq("id", newSession.id);
-    if (ideasErr) console.error("[startAssistant_ideas] save error:", ideasErr.message);
-
-    try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
-
-    // Guard against race conditions: user may switch to another flow (e.g., pack)
-    // while assistant idea generation is still running. Only check state: some DB setups
-    // flip is_active to false on update, so we don't require is_active here.
-    const { data: freshSession } = await supabase
-      .from("sessions")
-      .select("state")
-      .eq("id", newSession.id)
-      .maybeSingle();
-    if (!String(freshSession?.state || "").startsWith("assistant_")) {
-      console.log("[startAssistant_ideas] Session switched, skipping idea card for session:", newSession.id, "state:", freshSession?.state);
-      return;
-    }
-
-    await showStickerIdeaCard(ctx, {
-      idea,
-      ideaIndex: 0,
-      totalIdeas: 0, // unlimited
-      style: pickedStyle,
-      lang,
-      sessionId: newSession.id,
-      sessionRev: nextIdeaRev,
-    });
+    console.log("startAssistantDialog: lastPhoto exists, showing style selection");
+    await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: newSession.selected_style_id || null });
   }
 }
 
@@ -2319,7 +2257,6 @@ Quality: High-resolution, optimized for automated background removal.`;
 const SESSION_FALLBACK_ACTIVE_STATES = [
   // Assistant
   "assistant_wait_photo",
-  "assistant_wait_idea",
   "assistant_chat",
   // Single sticker flow
   "wait_photo",
@@ -2442,7 +2379,6 @@ async function getPackFlowSession(userId: string) {
 
 const ASSISTANT_FLOW_RECOVERY_STATES = [
   "assistant_wait_photo",
-  "assistant_wait_idea",
   "assistant_chat",
   "wait_photo",
   "wait_style",
@@ -3703,94 +3639,28 @@ bot.on("photo", async (ctx) => {
       }
 
     // Initial assistant flow without enough dialog context:
-    // show sticker ideas after photo.
-    console.log("Assistant photo: showing sticker ideas flow");
+    // show style selection after photo.
+    console.log("Assistant photo: showing style selection");
 
-    // Pick style: user's last > default > random
-    const randomStyle = await pickStyleForIdeas(user);
-
-    // Save photo and move to assistant_wait_idea
     const step1Rev = (session.session_rev || 1) + 1;
     const { error: updateErr1 } = await supabase
       .from("sessions")
       .update({
         photos,
         current_photo_file_id: photo.file_id,
-        state: "assistant_wait_idea",
+        state: "wait_style",
         is_active: true,
         session_rev: step1Rev,
       })
       .eq("id", session.id);
-    if (updateErr1) console.error("[assistant_ideas] session update error:", updateErr1.message);
+    if (updateErr1) console.error("[assistant_photo] session update error:", updateErr1.message);
 
-    // Show loading message
-    const loadingMsg = await ctx.reply(
-      lang === "ru" ? "📸 Отличное фото! Подбираю идею для стикера..." : "📸 Great photo! Picking a sticker idea..."
-    );
+    void ensureSubjectProfileForGeneration(
+      { ...session, current_photo_file_id: photo.file_id, photos },
+      "style"
+    ).catch((err) => console.warn("[assistant_photo] subject profile failed:", err?.message || err));
 
-    // Generate first idea with photo analysis
-    let idea: StickerIdea;
-    let photoDescription = "";
-    try {
-      const result = await generateFirstIdeaWithPhoto({
-        photoFileId: photo.file_id,
-        stylePresetId: randomStyle.id,
-        lang,
-      });
-      idea = result.idea;
-      photoDescription = result.photoDescription;
-      console.log("[assistant_ideas] Got first idea:", idea.titleEn);
-    } catch (err: any) {
-      console.error("[assistant_ideas] generateFirstIdeaWithPhoto error:", err.message);
-      idea = getDefaultIdeas(lang)[0];
-    }
-
-    // Save ideas state with photoDescription
-    const ideasState = {
-      styleId: randomStyle.id,
-      ideaIndex: 0,
-      ideas: [idea],
-      photoDescription,
-      holidayId: null,
-    };
-    const step2Rev = step1Rev + 1;
-    const { error: updateErr2 } = await supabase
-      .from("sessions")
-      .update({
-        sticker_ideas_state: ideasState,
-        state: "assistant_wait_idea",
-        is_active: true,
-        session_rev: step2Rev,
-      })
-      .eq("id", session.id);
-    if (updateErr2) console.error("[assistant_ideas] ideas state save error:", updateErr2.message);
-
-    // Delete loading message
-    try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
-
-    // Guard against race conditions: session may switch to pack/other flow
-    // while idea generation is running. Only check state: some DB setups flip
-    // is_active to false on update.
-    const { data: freshSession } = await supabase
-      .from("sessions")
-      .select("state")
-      .eq("id", session.id)
-      .maybeSingle();
-    if (!String(freshSession?.state || "").startsWith("assistant_")) {
-      console.log("[assistant_ideas] Session switched, skipping idea card for session:", session.id, "state:", freshSession?.state);
-      return;
-    }
-
-    // Show first idea card
-    await showStickerIdeaCard(ctx, {
-      idea,
-      ideaIndex: 0,
-      totalIdeas: 0, // unlimited
-      style: randomStyle,
-      lang,
-      sessionId: session.id,
-      sessionRev: step2Rev,
-    });
+    await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
     return;
   }
 
@@ -6581,7 +6451,6 @@ bot.on("text", async (ctx) => {
     "wait_custom_style_v2",
     "assistant_chat",
     "assistant_wait_photo",
-    "assistant_wait_idea",
   ];
 
   if (!session?.id) {
@@ -6697,7 +6566,7 @@ bot.on("text", async (ctx) => {
   // Уточнение резолва (flow-aware): если сессия не в pack-flow, но есть паковая сессия, ожидающая тему — подставляем её (getActiveSession мог вернуть другую по updated_at).
   const packThemeStates = ["wait_pack_generate_request", "wait_pack_carousel", "wait_pack_rework_feedback"];
   const textFlowStates = new Set(recoverableTextStates);
-  const assistantTextStates = new Set(["assistant_chat", "assistant_wait_photo", "assistant_wait_idea"]);
+  const assistantTextStates = new Set(["assistant_chat", "assistant_wait_photo"]);
   // Single text flows must never be hijacked by admin pack refinement.
   const protectSingleTextFlow =
     textFlowStates.has(String(session?.state || ""))
@@ -10400,34 +10269,8 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
   const photos = Array.isArray(session.photos) ? session.photos : [];
   photos.push(newPhotoFileId);
 
-  // Ideas flow: keep assistant_wait_idea and refresh idea card for the new photo.
-  if (session.state === "assistant_wait_idea") {
-    const ideasState = (session.sticker_ideas_state || {}) as any;
-    const pickedStyle = (ideasState?.styleId && await getStylePresetV2ById(ideasState.styleId))
-      || await pickStyleForIdeas(user);
-    if (!pickedStyle) {
-      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
-      return;
-    }
-
-    const loadingMsg = await ctx.reply(
-      lang === "ru" ? "📸 Обновляю идею для нового фото..." : "📸 Refreshing idea for the new photo..."
-    );
-    let idea: StickerIdea;
-    let photoDescription = "";
-    try {
-      const result = await generateFirstIdeaWithPhoto({
-        photoFileId: newPhotoFileId,
-        stylePresetId: pickedStyle.id,
-        lang,
-      });
-      idea = result.idea;
-      photoDescription = result.photoDescription;
-    } catch (err: any) {
-      console.error("Assistant new photo (ideas) error:", err.message);
-      idea = getDefaultIdeas(lang)[0];
-    }
-
+  // Legacy assistant_wait_idea or any assistant state with new photo: show style selection
+  if (session.state === "assistant_wait_idea" || session.state === "assistant_wait_photo") {
     const nextRev = (session.session_rev || 1) + 1;
     await supabase
       .from("sessions")
@@ -10435,14 +10278,7 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
         photos,
         current_photo_file_id: newPhotoFileId,
         pending_photo_file_id: null,
-        state: "assistant_wait_idea",
-        sticker_ideas_state: {
-          styleId: pickedStyle.id,
-          ideaIndex: 0,
-          ideas: [idea],
-          photoDescription,
-          holidayId: ideasState?.holidayId || null,
-        },
+        state: "wait_style",
         is_active: true,
         flow_kind: "assistant",
         session_rev: nextRev,
@@ -10452,22 +10288,12 @@ bot.action(/^assistant_new_photo(?::(.+))?$/, async (ctx) => {
     void ensureSubjectProfileForGeneration(
       { ...session, current_photo_file_id: newPhotoFileId, photos },
       "style"
-    ).catch((err) => console.warn("[assistant_new_photo ideas] subject profile failed:", err?.message || err));
+    ).catch((err) => console.warn("[assistant_new_photo] subject profile failed:", err?.message || err));
 
     if (aSession) {
       await updateAssistantSession(aSession.id, { pending_photo_file_id: null });
     }
-    try { await ctx.deleteMessage(loadingMsg.message_id); } catch {}
-    await showStickerIdeaCard(ctx, {
-      idea,
-      ideaIndex: 0,
-      totalIdeas: 0,
-      style: pickedStyle,
-      lang,
-      currentHolidayId: ideasState?.holidayId || null,
-      sessionId: session.id,
-      sessionRev: nextRev,
-    });
+    await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
     return;
   }
 
