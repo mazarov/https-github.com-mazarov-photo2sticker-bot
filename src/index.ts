@@ -2409,10 +2409,6 @@ async function getPackFlowSession(userId: string) {
 const ASSISTANT_FLOW_RECOVERY_STATES = [
   "assistant_wait_photo",
   "assistant_chat",
-  "wait_photo",
-  "wait_style",
-  "wait_custom_style",
-  "wait_custom_style_v2",
 ] as const;
 
 async function getAssistantFlowRecoverySession(userId: string) {
@@ -2438,6 +2434,7 @@ async function getAssistantFlowRecoverySession(userId: string) {
     .select("*")
     .eq("user_id", userId)
     .eq("env", config.appEnv)
+    .eq("flow_kind", "assistant")
     .in("state", ASSISTANT_FLOW_RECOVERY_STATES as unknown as string[])
     .gte("updated_at", recentCutoff)
     .order("updated_at", { ascending: false, nullsFirst: false })
@@ -2454,6 +2451,29 @@ async function getAssistantFlowRecoverySession(userId: string) {
 async function resolveSessionForIncomingPhoto(userId: string) {
   const activeSession = await getActiveSession(userId);
   if (activeSession?.id) return activeSession;
+
+  // Prefer latest single-flow session before assistant recovery to avoid hijacking
+  // fresh manual states (wait_action/wait_style/etc.) by stale assistant leftovers.
+  const { data: latestSingleSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .eq("flow_kind", "single")
+    .in("state", SESSION_FALLBACK_ACTIVE_STATES)
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestSingleSession?.id) {
+    console.log(
+      "Photo router fallback: using latest single session:",
+      latestSingleSession.id,
+      "state:",
+      latestSingleSession.state
+    );
+    return latestSingleSession;
+  }
 
   const packSession = await getPackFlowSession(userId);
   if (packSession?.id) {
@@ -3350,6 +3370,7 @@ bot.start(async (ctx) => {
       await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
       return;
     }
+    await ctx.reply(lang === "ru" ? "⚡ Открываю действия..." : "⚡ Opening actions...", getMainMenuKeyboard(lang, ctx?.from?.id));
     await sendActionMenu(ctx, lang, newSession.id, newSession.session_rev || 1);
   } else {
     const lang = "en";
@@ -9195,6 +9216,7 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
       const newFileId = await sendSticker(ctx.chat!.id, stickerBuffer);
       const insertPayload: any = {
         user_id: user.id,
+        session_id: session.id,
         telegram_file_id: newFileId || null,
         source_photo_file_id: photoFileId,
         generation_type: "photo_sticker",
