@@ -8556,7 +8556,7 @@ bot.action(/^style_(?!v2:|example|custom|group)([^:]+)$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
-    const session = await getActiveSession(user.id);
+    const session = await getSessionForStyleSelection(user.id);
     console.log("Style callback - Session:", session?.id, "state:", session?.state);
     if (!session?.id || session.state !== "wait_style") {
       console.log("Session state mismatch, expected wait_style");
