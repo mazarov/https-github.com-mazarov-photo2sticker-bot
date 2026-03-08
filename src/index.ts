@@ -563,6 +563,7 @@ async function sendStyleKeyboardFlat(
   lang: string,
   messageId?: number,
   options?: {
+    topButtons?: any[][];
     extraButtons?: any[][];
     headerText?: string;
     selectedStyleId?: string | null;
@@ -586,8 +587,11 @@ async function sendStyleKeyboardFlat(
     }
   }
 
-  // 2 styles per row
   const buttons: any[][] = [];
+  if (options?.topButtons?.length) {
+    buttons.push(...options.topButtons);
+  }
+  // 2 styles per row
   for (let i = 0; i < allPresets.length; i += 2) {
     const row: any[] = [];
     for (let j = i; j < Math.min(i + 2, allPresets.length); j++) {
@@ -8829,6 +8833,70 @@ bot.action(/^style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
     const preset = await getStylePresetV2ById(styleId);
     if (!preset) {
       console.log("[StylePreview] Preset not found:", styleId);
+      return;
+    }
+
+    // Single flow UX: keep one style list message, show selected style + CTA there,
+    // and send example in a separate message.
+    if (session.state === "wait_style") {
+      const nextRev = (session.session_rev || 1) + 1;
+      const { error: selectStyleErr, droppedStyleSourceKind } = await updateSessionWithStyleSourceFallback(
+        session.id,
+        {
+          selected_style_id: preset.id,
+          state: "wait_style",
+          is_active: true,
+          session_rev: nextRev,
+        }
+      );
+      if (selectStyleErr) {
+        console.error("[StylePreview] failed to store selected style:", selectStyleErr.message || selectStyleErr);
+        await ctx.reply(await getText(lang, "error.technical")).catch(() => {});
+        return;
+      }
+      if (droppedStyleSourceKind) {
+        console.warn("[StylePreview] style_source_kind dropped due to schema cache mismatch");
+      }
+
+      const styleName = lang === "ru" ? preset.name_ru : preset.name_en;
+      const styleDescription = lang === "ru"
+        ? (preset.description_ru || preset.prompt_hint || "")
+        : (preset.description_en || preset.description_ru || preset.prompt_hint || "");
+      const headerText = lang === "ru"
+        ? `${preset.emoji} Стиль: ${styleName}\n\n${styleDescription}\n\nВыбери стиль ниже или нажми «Попробовать с ${styleName}».`
+        : `${preset.emoji} Style: ${styleName}\n\n${styleDescription}\n\nPick another style below or tap “Try with ${styleName}”.`;
+
+      const sessionRef = formatCallbackSessionRef(session.id, nextRev);
+      const tryText = lang === "ru" ? `✅ Попробовать с ${styleName}` : `✅ Try with ${styleName}`;
+      const tryCallback = appendSessionRefIfFits(`style_v2:${preset.id}`, sessionRef);
+
+      // Preserve non-style rows (e.g. "Back to sticker") from current keyboard.
+      const currentRows = ((ctx.callbackQuery as any)?.message?.reply_markup?.inline_keyboard || []) as any[][];
+      const preservedRows = currentRows.filter((row) =>
+        Array.isArray(row) &&
+        row.some((btn: any) => {
+          const cb = String(btn?.callback_data || "");
+          return cb && !cb.startsWith("style_preview:");
+        })
+      );
+
+      await sendStyleKeyboardFlat(ctx, lang, (ctx.callbackQuery as any)?.message?.message_id, {
+        headerText,
+        selectedStyleId: preset.id,
+        sessionId: session.id,
+        sessionRev: nextRev,
+        topButtons: [[{ text: tryText, callback_data: tryCallback }]],
+        extraButtons: preservedRows,
+      });
+
+      try {
+        const fileId = await getStyleStickerFileId(preset.id);
+        if (fileId) {
+          await ctx.replyWithSticker(fileId);
+        }
+      } catch (err: any) {
+        console.warn("[StylePreview] single-flow example send failed:", err?.message || err);
+      }
       return;
     }
 
