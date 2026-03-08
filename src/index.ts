@@ -3610,15 +3610,87 @@ bot.on("photo", async (ctx) => {
   if (!user?.id) return;
 
   const lang = user.lang || "en";
+  const photo = ctx.message.photo?.[ctx.message.photo.length - 1];
+  if (!photo) return;
+  const previousLastPhotoFileId = user.last_photo_file_id || null;
   const session = await resolveSessionForIncomingPhoto(user.id);
   console.log("Photo handler - session:", session?.id, "state:", session?.state);
   if (!session?.id) {
-    await ctx.reply(await getText(lang, "start.need_start"));
+    console.warn("Photo handler: no session found, creating recovery wait_action session");
+    await supabase
+      .from("sessions")
+      .update({ is_active: false })
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .eq("is_active", true);
+
+    // Save last photo on user for reuse across sessions
+    const { error: lastPhotoErr } = await supabase.from("users")
+      .update({ last_photo_file_id: photo.file_id })
+      .eq("id", user.id);
+    if (lastPhotoErr) {
+      console.error("Failed to update last_photo_file_id (recovery):", lastPhotoErr.message);
+    } else {
+      console.log("last_photo_file_id updated for user (recovery):", user.id);
+    }
+
+    if (previousLastPhotoFileId && previousLastPhotoFileId !== photo.file_id) {
+      // Preserve choose-new-or-keep flow when we still know the previous photo.
+      const { data: recoverySession, error: sessErr } = await supabase
+        .from("sessions")
+        .insert({
+          user_id: user.id,
+          state: "wait_action",
+          is_active: true,
+          flow_kind: "single",
+          session_rev: 1,
+          current_photo_file_id: previousLastPhotoFileId,
+          pending_photo_file_id: photo.file_id,
+          photos: [previousLastPhotoFileId, photo.file_id],
+          env: config.appEnv,
+        })
+        .select("*")
+        .single();
+      if (sessErr || !recoverySession?.id) {
+        console.error("Photo recovery session create failed:", sessErr?.message);
+        await ctx.reply(await getText(lang, "error.technical"));
+        return;
+      }
+      const sessionRef = formatCallbackSessionRef(recoverySession.id, recoverySession.session_rev);
+      await ctx.reply(
+        lang === "ru"
+          ? "Вижу новое фото! С каким продолжаем работу?"
+          : "I see a new photo! Which one should we use?",
+        Markup.inlineKeyboard([
+          [Markup.button.callback(lang === "ru" ? "✅ Новое фото" : "✅ New photo", appendSessionRefIfFits("single_new_photo", sessionRef))],
+          [Markup.button.callback(lang === "ru" ? "❌ Оставить текущее" : "❌ Keep current", appendSessionRefIfFits("single_keep_photo", sessionRef))],
+        ])
+      );
+      return;
+    }
+
+    const { data: recoverySession, error: sessErr } = await supabase
+      .from("sessions")
+      .insert({
+        user_id: user.id,
+        state: "wait_action",
+        is_active: true,
+        flow_kind: "single",
+        session_rev: 1,
+        current_photo_file_id: photo.file_id,
+        photos: [photo.file_id],
+        env: config.appEnv,
+      })
+      .select("*")
+      .single();
+    if (sessErr || !recoverySession?.id) {
+      console.error("Photo recovery action session create failed:", sessErr?.message);
+      await ctx.reply(await getText(lang, "error.technical"));
+      return;
+    }
+    await sendActionMenu(ctx, lang, recoverySession.id, recoverySession.session_rev || 1);
     return;
   }
-
-  const photo = ctx.message.photo?.[ctx.message.photo.length - 1];
-  if (!photo) return;
 
   // Save last photo on user for reuse across sessions
   const { error: lastPhotoErr } = await supabase.from("users")
