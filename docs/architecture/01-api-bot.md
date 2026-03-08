@@ -266,6 +266,7 @@ flowchart TD
 ### Session Router (pack/single/assistant callbacks)
 - Для критичных callback-событий pack/single/assistant flow используется резолв сессии по `session_id` из `callback_data`.
 - В callback поддерживаются форматы `action:sid` и `action:sid:rev`.
+- Для предотвращения переполнения Telegram `callback_data` (лимит 64 bytes) `sid` кодируется в компактный base64url-токен (22 символа) вместо полного UUID; парсер поддерживает оба формата (новый token и legacy UUID).
 - При `session_router_enabled=true` legacy fallback на "текущую активную сессию" отключается: callback без `sid` отклоняется как `session_not_found`.
 - При включенном флаге `strict_session_rev_enabled=true` stale-кнопки отбрасываются с user-facing reason через `answerCbQuery`.
 - Для `style_preview`/`style_v2` также используется `sid:rev`: explicit callback на неактивную сессию отклоняется как stale, чтобы старые клавиатуры не перехватывали новый photo-context.
