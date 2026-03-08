@@ -8810,10 +8810,15 @@ bot.action(/^style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
       return;
     }
     const strictRevEnabled = await isStrictSessionRevEnabled();
-    if (
-      (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1))
-      || (explicitSessionId && !session.is_active)
-    ) {
+    const revMismatch = strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1);
+    let explicitInactiveIsStale = false;
+    if (explicitSessionId && !session.is_active) {
+      // In single flow we can temporarily have inactive wait_style session while another flow is active.
+      // Treat as stale only when explicit callback points to a non-current style-selection session.
+      const currentStyleSession = await getSessionForStyleSelection(user.id);
+      explicitInactiveIsStale = Boolean(currentStyleSession?.id && currentStyleSession.id !== session.id);
+    }
+    if (revMismatch || explicitInactiveIsStale) {
       await rejectSessionEvent(ctx, lang, "style_preview", "stale_callback");
       return;
     }
@@ -8942,10 +8947,13 @@ bot.action(/^style_v2:([^:]+)(?::(.+))?$/, async (ctx) => {
       return;
     }
     const strictRevEnabled = await isStrictSessionRevEnabled();
-    if (
-      (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1))
-      || (explicitSessionId && !session.is_active)
-    ) {
+    const revMismatch = strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1);
+    let explicitInactiveIsStale = false;
+    if (explicitSessionId && !session.is_active) {
+      const currentStyleSession = await getSessionForStyleSelection(user.id);
+      explicitInactiveIsStale = Boolean(currentStyleSession?.id && currentStyleSession.id !== session.id);
+    }
+    if (revMismatch || explicitInactiveIsStale) {
       await rejectSessionEvent(ctx, lang, "style_v2", "stale_callback");
       return;
     }
