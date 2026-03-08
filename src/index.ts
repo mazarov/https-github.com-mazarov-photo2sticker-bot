@@ -6971,37 +6971,21 @@ bot.on("sticker", async (ctx) => {
     "processing_pack",
   ]);
 
-  let session = await getActiveSession(user.id);
+  // Priority: check for wait_replace_face FIRST (before getActiveSession),
+  // because getActiveSession may return a different session (e.g. wait_action from /start)
+  // and sticker would be routed to edit-sticker flow instead of replace-face.
+  const { data: replaceFaceSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("env", config.appEnv)
+    .in("state", ["wait_replace_face", "wait_replace_face_sticker"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  let session: any = replaceFaceSession || null;
   if (!session?.id) {
-    // Fallback: replace-face flow may have is_active=false or miss fallback window
-    const { data: replaceFaceSession } = await supabase
-      .from("sessions")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("env", config.appEnv)
-      .in("state", ["wait_replace_face", "wait_replace_face_sticker"])
-      .order("updated_at", { ascending: false, nullsFirst: false })
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (replaceFaceSession?.id) {
-      session = replaceFaceSession;
-    }
-  }
-  if (!session?.id) {
-    // Last-resort: order by created_at only (some DB setups have null updated_at)
-    const { data: lastResortSession } = await supabase
-      .from("sessions")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("env", config.appEnv)
-      .in("state", ["wait_replace_face", "wait_replace_face_sticker"])
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (lastResortSession?.id) {
-      session = lastResortSession;
-    }
+    session = await getActiveSession(user.id);
   }
   if (!session?.id) {
     const { data: newSession } = await supabase
