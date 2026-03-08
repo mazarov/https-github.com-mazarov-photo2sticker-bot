@@ -440,6 +440,7 @@ interface StylePresetV2 {
   name_ru: string;
   name_en: string;
   prompt_hint: string;
+  render_mode?: "stylize" | "photoreal" | string | null;
   description_ru: string | null;
   sort_order: number;
   is_active: boolean;
@@ -1251,6 +1252,35 @@ const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. B
 // Pack only: composition without magenta, 15%, and full-visibility rule (all in CRITICAL RULES FOR THE GRID in worker).
 const COMPOSITION_SUFFIX_PACK = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
 
+type RenderMode = "stylize" | "photoreal";
+
+function normalizeRenderMode(value: unknown): RenderMode {
+  return String(value || "").trim().toLowerCase() === "photoreal" ? "photoreal" : "stylize";
+}
+
+function buildRenderModePolicy(mode: RenderMode): string {
+  if (mode === "photoreal") {
+    return `[RENDER MODE: PHOTOREAL]
+Keep photorealistic rendering.
+Do NOT convert to illustration, cartoon, anime, manga, manhwa, chibi, 3D toon, or painterly style.
+Preserve natural skin texture, realistic lighting, camera-like details, and photo-like material appearance.`;
+  }
+
+  return `[RENDER MODE: STYLIZE]
+Apply STRONG style transfer to the target style.
+Keep identity (facial features/person) but DO NOT preserve source artistic rendering.
+Re-render the image fully in the target style language (linework, shading, proportions, color treatment).`;
+}
+
+function applyRenderModePolicy(prompt: string, mode: RenderMode): string {
+  const cleanPrompt = String(prompt || "").trim();
+  if (/\[RENDER MODE:\s*(PHOTOREAL|STYLIZE)\]/i.test(cleanPrompt)) {
+    return cleanPrompt;
+  }
+  const policy = buildRenderModePolicy(mode);
+  return cleanPrompt ? `${policy}\n\n${cleanPrompt}` : policy;
+}
+
 function getMimeTypeByTelegramPath(filePath: string): string {
   if (filePath.endsWith(".webp")) return "image/webp";
   if (filePath.endsWith(".png")) return "image/png";
@@ -1566,6 +1596,17 @@ async function startGeneration(
       generationType: options.generationType,
       sessionRev: session.session_rev,
       flowKind: session.flow_kind || "unknown",
+    });
+  }
+
+  if (options.generationType === "style" && options.selectedStyleId && options.selectedStyleId !== "assistant") {
+    const stylePreset = await getStylePresetV2ById(options.selectedStyleId);
+    const renderMode = normalizeRenderMode(stylePreset?.render_mode);
+    options.promptFinal = applyRenderModePolicy(options.promptFinal, renderMode);
+    console.log("[style.render_mode]", {
+      sessionId: session.id,
+      selectedStyleId: options.selectedStyleId,
+      renderMode,
     });
   }
 
@@ -2453,6 +2494,7 @@ const SESSION_FALLBACK_ACTIVE_STATES = [
   "wait_photo",
   "wait_action",
   "wait_style",
+  // Legacy states kept only for runtime migration to wait_style.
   "wait_custom_style",
   "wait_custom_style_v2",
   "wait_custom_emotion",
@@ -7368,10 +7410,11 @@ bot.on("text", async (ctx) => {
   const recoverableTextStates = [
     "wait_text_overlay",
     "wait_text",
-    "wait_custom_emotion",
-    "wait_custom_motion",
+    // Legacy custom style states are recoverable to migrate users back to wait_style.
     "wait_custom_style",
     "wait_custom_style_v2",
+    "wait_custom_emotion",
+    "wait_custom_motion",
     "assistant_chat",
     "assistant_wait_photo",
   ];
@@ -8294,59 +8337,20 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  if (session.state === "wait_custom_style") {
-    const styleText = ctx.message.text.trim();
-    const photos = Array.isArray(session.photos) ? session.photos : [];
-    const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
-    if (!currentPhotoId) {
-      await ctx.reply(await getText(lang, "photo.need_photo"));
-      return;
-    }
-
-    // Generate prompt using LLM with user's custom style
-    await ctx.reply(await getText(lang, "photo.processing"));
-    const promptResult = await generatePrompt(styleText);
-
-    if (!promptResult.ok || promptResult.retry) {
-      await ctx.reply(await getText(lang, "photo.invalid_style"));
-      return;
-    }
-
-    const generatedPrompt = promptResult.prompt || styleText;
-    await startGeneration(ctx, user, session, lang, {
-      generationType: "style",
-      promptFinal: generatedPrompt,
-      userInput: styleText,
-      selectedStyleId: "custom",
-    });
-    return;
-  }
-
-  // Handle custom style v2 (same logic, different state name)
-  if (session.state === "wait_custom_style_v2") {
-    const styleText = ctx.message.text.trim();
-    const photos = Array.isArray(session.photos) ? session.photos : [];
-    const currentPhotoId = session.current_photo_file_id || photos[photos.length - 1];
-    if (!currentPhotoId) {
-      await ctx.reply(await getText(lang, "photo.need_photo"));
-      return;
-    }
-
-    await ctx.reply(await getText(lang, "photo.processing"));
-    const promptResult = await generatePrompt(styleText);
-
-    if (!promptResult.ok || promptResult.retry) {
-      await ctx.reply(await getText(lang, "photo.invalid_style"));
-      return;
-    }
-
-    const generatedPrompt = promptResult.prompt || styleText;
-    await startGeneration(ctx, user, session, lang, {
-      generationType: "style",
-      promptFinal: generatedPrompt,
-      userInput: styleText,
-      selectedStyleId: "custom_v2",
-    });
+  // Legacy recovery: custom style flow is removed.
+  if (session.state === "wait_custom_style" || session.state === "wait_custom_style_v2") {
+    await supabase
+      .from("sessions")
+      .update({
+        state: "wait_style",
+        is_active: true,
+        session_rev: (session.session_rev || 1) + 1,
+      })
+      .eq("id", session.id);
+    await sendStyleKeyboardFlat(ctx, lang);
+    await ctx.reply(lang === "ru"
+      ? "✍️ Свой стиль больше недоступен. Выбери стиль из списка."
+      : "✍️ Custom style is no longer available. Please choose a style from the list.");
     return;
   }
 
@@ -8375,24 +8379,11 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // Generate prompt using LLM
-  await ctx.reply(await getText(lang, "photo.processing"));
-
-  const promptResult = await generatePrompt(ctx.message.text);
-
-  if (!promptResult.ok || promptResult.retry) {
-    await ctx.reply(await getText(lang, "photo.invalid_style"));
-    return;
-  }
-
-  const generatedPrompt = promptResult.prompt || ctx.message.text;
-  const userInput = ctx.message.text;
-
-  await startGeneration(ctx, user, session, lang, {
-    generationType: "style",
-    promptFinal: generatedPrompt,
-    userInput,
-  });
+  // Custom free-text style is removed: user should pick a preset style.
+  await sendStyleKeyboardFlat(ctx, lang);
+  await ctx.reply(lang === "ru"
+    ? "✍️ Текстовый ввод стиля отключен. Выбери стиль из списка кнопок."
+    : "✍️ Text style input is disabled. Please choose a style from the preset list.");
 });
 
 // Callback: style selection (legacy v1 — excludes style_v2, style_example, style_custom, style_group)
@@ -8424,13 +8415,13 @@ bot.action(/^style_(?!v2:|example|custom|group)([^:]+)$/, async (ctx) => {
       return;
     }
 
-    // Handle custom style - ask user to describe
+    // Custom style flow is removed.
     if (preset.id === "custom") {
-      await supabase
-        .from("sessions")
-        .update({ state: "wait_custom_style", is_active: true })
-        .eq("id", session.id);
-      await ctx.reply(await getText(lang, "style.custom_prompt"));
+      const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+      await sendStyleKeyboardFlat(ctx, lang, currentMessageId, { selectedStyleId: session.selected_style_id || null });
+      await ctx.reply(lang === "ru"
+        ? "✍️ Свой стиль больше недоступен. Выбери стиль из списка."
+        : "✍️ Custom style is no longer available. Please choose a style from the list.");
       return;
     }
 
@@ -9093,15 +9084,12 @@ bot.action("style_custom_v2", async (ctx) => {
 
     const lang = user.lang || "en";
     const session = await getActiveSession(user.id);
-    if (!session?.id || session.state !== "wait_style") return;
-
-    // Switch state to wait for custom style text
-    await supabase
-      .from("sessions")
-      .update({ state: "wait_custom_style_v2", is_active: true })
-      .eq("id", session.id);
-
-    await ctx.reply(await getText(lang, "style.custom_prompt_v2"));
+    if (!session?.id) return;
+    const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
+    await sendStyleKeyboardFlat(ctx, lang, currentMessageId, { selectedStyleId: session.selected_style_id || null });
+    await ctx.reply(lang === "ru"
+      ? "✍️ Свой стиль больше недоступен. Выбери стиль из списка."
+      : "✍️ Custom style is no longer available. Please choose a style from the list.");
   } catch (err) {
     console.error("Style custom v2 callback error:", err);
   }

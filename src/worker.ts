@@ -184,6 +184,53 @@ function getMimeTypeByTelegramPath(filePath: string): string {
   return "image/jpeg";
 }
 
+type RenderMode = "stylize" | "photoreal";
+
+function normalizeRenderMode(value: unknown): RenderMode {
+  return String(value || "").trim().toLowerCase() === "photoreal" ? "photoreal" : "stylize";
+}
+
+function buildRenderModePolicy(mode: RenderMode): string {
+  if (mode === "photoreal") {
+    return `[RENDER MODE: PHOTOREAL]
+Keep photorealistic rendering.
+Do NOT convert to illustration, cartoon, anime, manga, manhwa, chibi, 3D toon, or painterly style.
+Preserve natural skin texture, realistic lighting, camera-like details, and photo-like material appearance.`;
+  }
+  return `[RENDER MODE: STYLIZE]
+Apply STRONG style transfer to the target style.
+Keep identity (facial features/person) but DO NOT preserve source artistic rendering.
+Re-render the image fully in the target style language (linework, shading, proportions, color treatment).`;
+}
+
+function applyRenderModePolicy(prompt: string, mode: RenderMode): string {
+  const cleanPrompt = String(prompt || "").trim();
+  if (/\[RENDER MODE:\s*(PHOTOREAL|STYLIZE)\]/i.test(cleanPrompt)) {
+    return cleanPrompt;
+  }
+  const policy = buildRenderModePolicy(mode);
+  return cleanPrompt ? `${policy}\n\n${cleanPrompt}` : policy;
+}
+
+async function getStyleRenderMode(styleId?: string | null): Promise<RenderMode | null> {
+  if (!styleId) return null;
+  const { data, error } = await supabase
+    .from("style_presets_v2")
+    .select("render_mode")
+    .eq("id", styleId)
+    .maybeSingle();
+  if (error) {
+    const unknownColumn =
+      error.code === "42703" ||
+      /column .*render_mode/.test(String(error.message || "").toLowerCase());
+    if (!unknownColumn) {
+      console.warn("[style.render_mode] failed to fetch render_mode:", error.message);
+    }
+    return null;
+  }
+  return normalizeRenderMode((data as any)?.render_mode);
+}
+
 function extractGeminiImageBase64(responseData: any): string | null {
   const candidates = Array.isArray(responseData?.candidates) ? responseData.candidates : [];
   for (const candidate of candidates) {
@@ -579,6 +626,7 @@ async function runPackPreviewJob(job: any) {
   let styleBlock = promptFinalRaw;
   let selectedStyleName = "";
   let selectedStylePromptHint = "";
+  const selectedStyleRenderMode = await getStyleRenderMode(session.selected_style_id || null);
   if (session.selected_style_id) {
     const { data: stylePreset } = await supabase
       .from("style_presets_v2")
@@ -618,6 +666,7 @@ async function runPackPreviewJob(job: any) {
   let styleBlockWithSubject = styleBlock;
   // For photo-realistic style: avoid "illustration" so the model outputs a photo, not a drawing
   const isPhotoRealisticStyle =
+    selectedStyleRenderMode === "photoreal" ||
     session.selected_style_id === "photo_realistic" ||
     /\bphoto-realistic\b|photo_realistic/i.test(styleBlock);
   if (isPhotoRealisticStyle) {
@@ -629,6 +678,9 @@ async function runPackPreviewJob(job: any) {
       styleBlockWithSubject +=
         "\n\nOutput MUST be a photograph, not a drawing, illustration, or stylized art.";
     }
+  }
+  if (selectedStyleRenderMode) {
+    styleBlockWithSubject = applyRenderModePolicy(styleBlockWithSubject, selectedStyleRenderMode);
   }
   const subjectModeForPrompt = packSubjectProfile?.subjectMode || normalizeSubjectMode(session.object_mode ?? session.subject_mode);
   const subjectFilterEnabled = await isSubjectModePackFilterEnabled();
@@ -1544,7 +1596,9 @@ async function runJob(job: any) {
       ? appendSubjectLock(session.prompt_final || "", buildSubjectLockBlock(subjectProfile))
       : (session.prompt_final || "");
   // For photo-realistic style: avoid "illustration" so the model outputs a photo, not a drawing
+  const selectedStyleRenderMode = await getStyleRenderMode(session.selected_style_id || null);
   const isPhotoRealistic =
+    selectedStyleRenderMode === "photoreal" ||
     session.selected_style_id === "photo_realistic" ||
     /\bphoto-realistic\b|photo_realistic/i.test(promptForGeneration);
   if (isPhotoRealistic) {
@@ -1553,6 +1607,9 @@ async function runJob(job: any) {
       promptForGeneration +=
         "\n\nOutput MUST be a photograph, not a drawing, illustration, or stylized art.";
     }
+  }
+  if (selectedStyleRenderMode) {
+    promptForGeneration = applyRenderModePolicy(promptForGeneration, selectedStyleRenderMode);
   }
   const isImportedSticker = Boolean(session.edit_sticker_file_id);
   if (isImportedSticker && (generationType === "emotion" || generationType === "motion")) {

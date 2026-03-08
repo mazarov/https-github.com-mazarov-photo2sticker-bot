@@ -202,6 +202,7 @@ erDiagram
 | `id` | text | PK (anime_classic, anime_dark...) |
 | `group_id` | text | FK → style_groups |
 | `prompt_hint` | text | Промпт для генерации |
+| `render_mode` | text | Режим рендера: `stylize` или `photoreal` (управляет style policy в single и pack flow) |
 | `name_ru` / `name_en` | text | Название |
 | `sort_order` | int | Порядок |
 | `is_active` | boolean | Активен |
@@ -289,6 +290,8 @@ wait_custom_style, wait_text, processing_text, wait_text_overlay,
 assistant_wait_photo, assistant_wait_idea, assistant_chat, wait_assistant_confirm,
 wait_first_purchase, wait_buy_credit, wait_replace_face
 ```
+
+`wait_custom_style` остается в enum для обратной совместимости, но runtime-flow custom style отключён в API.
 
 ## RPC-функции
 
