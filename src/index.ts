@@ -564,9 +564,12 @@ async function sendStyleKeyboardFlat(
     extraButtons?: any[][];
     headerText?: string;
     selectedStyleId?: string | null;
+    sessionId?: string | null;
+    sessionRev?: number | null;
   }
 ) {
   const allPresets = await getStylePresetsV2();
+  const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
 
   // 2 styles per row
   const buttons: any[][] = [];
@@ -576,7 +579,7 @@ async function sendStyleKeyboardFlat(
       const isSelected = options?.selectedStyleId && options.selectedStyleId === allPresets[j].id;
       row.push({
         text: `${isSelected ? "✅ " : ""}${allPresets[j].emoji} ${lang === "ru" ? allPresets[j].name_ru : allPresets[j].name_en}`,
-        callback_data: `style_preview:${allPresets[j].id}`,
+        callback_data: appendSessionRefIfFits(`style_preview:${allPresets[j].id}`, sessionRef),
       });
     }
     buttons.push(row);
@@ -1701,21 +1704,22 @@ async function startGeneration(
 
     const targetState = isPaywall ? "wait_first_purchase" : "wait_buy_credit";
     console.log("[startGeneration] Setting paywall state:", targetState, "sessionId:", session.id);
-    const { error: paywallUpdateErr } = await supabase
-      .from("sessions")
-      .update({
-        state: targetState,
-        pending_generation_type: options.generationType,
-        user_input: options.userInput || session.user_input || null,
-        prompt_final: options.promptFinal,
-        emotion_prompt: options.emotionPrompt || null,
-        selected_style_id: options.selectedStyleId || session.selected_style_id || null,
-        selected_emotion: options.selectedEmotion || null,
-        ...(effectiveStyleSourceKind ? { style_source_kind: effectiveStyleSourceKind } : {}),
-        credits_spent: creditsNeeded,
-        is_active: true,
-      })
-      .eq("id", session.id);
+    const paywallUpdatePayload: Record<string, unknown> = {
+      state: targetState,
+      pending_generation_type: options.generationType,
+      user_input: options.userInput || session.user_input || null,
+      prompt_final: options.promptFinal,
+      emotion_prompt: options.emotionPrompt || null,
+      selected_style_id: options.selectedStyleId || session.selected_style_id || null,
+      selected_emotion: options.selectedEmotion || null,
+      credits_spent: creditsNeeded,
+      is_active: true,
+    };
+    if (effectiveStyleSourceKind) {
+      paywallUpdatePayload.style_source_kind = effectiveStyleSourceKind;
+    }
+    const { error: paywallUpdateErr, droppedStyleSourceKind: paywallDroppedStyleSource } =
+      await updateSessionWithStyleSourceFallback(session.id, paywallUpdatePayload);
     logSessionTrace("generation.insufficient_credits_transition", {
       userId: user?.id || null,
       generationType: options.generationType,
@@ -1727,6 +1731,9 @@ async function startGeneration(
       console.error("[startGeneration] Paywall state update FAILED:", paywallUpdateErr.message);
     } else {
       console.log("[startGeneration] Paywall state update OK");
+      if (paywallDroppedStyleSource) {
+        console.warn("[startGeneration] style_source_kind dropped in paywall update due to schema cache mismatch");
+      }
     }
 
     if (isPaywall) {
@@ -1813,22 +1820,28 @@ async function startGeneration(
     toState: nextState,
   }, traceId);
 
-  await supabase
-    .from("sessions")
-    .update({
-      user_input: options.userInput || session.user_input || null,
-      prompt_final: options.promptFinal,
-      emotion_prompt: options.emotionPrompt || null,
-      selected_style_id: options.selectedStyleId || session.selected_style_id || null,
-      selected_emotion: options.selectedEmotion || null,
-      ...(effectiveStyleSourceKind ? { style_source_kind: effectiveStyleSourceKind } : {}),
-      text_prompt: options.textPrompt || null,
-      generation_type: options.generationType,
-      credits_spent: creditsNeeded,
-      state: nextState,
-      is_active: true,
-    })
-    .eq("id", session.id);
+  const processingUpdatePayload: Record<string, unknown> = {
+    user_input: options.userInput || session.user_input || null,
+    prompt_final: options.promptFinal,
+    emotion_prompt: options.emotionPrompt || null,
+    selected_style_id: options.selectedStyleId || session.selected_style_id || null,
+    selected_emotion: options.selectedEmotion || null,
+    text_prompt: options.textPrompt || null,
+    generation_type: options.generationType,
+    credits_spent: creditsNeeded,
+    state: nextState,
+    is_active: true,
+  };
+  if (effectiveStyleSourceKind) {
+    processingUpdatePayload.style_source_kind = effectiveStyleSourceKind;
+  }
+  const { error: processingUpdateErr, droppedStyleSourceKind: processingDroppedStyleSource } =
+    await updateSessionWithStyleSourceFallback(session.id, processingUpdatePayload);
+  if (processingUpdateErr) {
+    console.error("[startGeneration] Processing state update FAILED:", processingUpdateErr.message || processingUpdateErr);
+  } else if (processingDroppedStyleSource) {
+    console.warn("[startGeneration] style_source_kind dropped in processing update due to schema cache mismatch");
+  }
   logSessionTrace("generation.processing_transition_applied", {
     userId: user?.id || null,
     generationType: options.generationType,
@@ -3174,7 +3187,22 @@ async function getSessionForStyleSelection(userId: string) {
     return session;
   }
 
-  // Fallback for DB setups where is_active may be unreliable:
+  // Fallback 1: latest active session in style-selection states.
+  const { data: latestActiveStyleSession } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("env", config.appEnv)
+    .eq("is_active", true)
+    .in("state", styleStates)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestActiveStyleSession) {
+    return latestActiveStyleSession;
+  }
+
+  // Fallback 2: DB setups where is_active may be unreliable:
   // explicitly pick the latest session in style-selection states.
   const { data: latestStyleSession } = await supabase
     .from("sessions")
@@ -3196,6 +3224,34 @@ async function getSessionForStyleSelection(userId: string) {
   }
 
   return session;
+}
+
+async function updateSessionWithStyleSourceFallback(
+  sessionId: string,
+  payload: Record<string, unknown>
+): Promise<{ error: any | null; droppedStyleSourceKind: boolean }> {
+  const runUpdate = async (updatePayload: Record<string, unknown>) => supabase
+    .from("sessions")
+    .update(updatePayload)
+    .eq("id", sessionId);
+
+  const first = await runUpdate(payload);
+  if (!first.error) {
+    return { error: null, droppedStyleSourceKind: false };
+  }
+  const msg = String(first.error?.message || "").toLowerCase();
+  const shouldRetryWithoutStyleSourceKind =
+    Object.prototype.hasOwnProperty.call(payload, "style_source_kind")
+    && msg.includes("style_source_kind")
+    && msg.includes("schema cache");
+  if (!shouldRetryWithoutStyleSourceKind) {
+    return { error: first.error, droppedStyleSourceKind: false };
+  }
+
+  const retryPayload = { ...payload };
+  delete (retryPayload as any).style_source_kind;
+  const retry = await runUpdate(retryPayload);
+  return { error: retry.error || null, droppedStyleSourceKind: true };
 }
 
 /**
@@ -8646,7 +8702,7 @@ bot.action(/^style_group:(.+)$/, async (ctx) => {
 });
 
 // Callback: style preview card — show example + description before generation
-bot.action(/^style_preview:(.+)$/, async (ctx) => {
+bot.action(/^style_preview:([^:]+)(?::(.+))?$/, async (ctx) => {
   try {
     const isRu = (ctx.from?.language_code || "").toLowerCase().startsWith("ru");
     safeAnswerCbQuery(ctx, isRu ? "🎨 Открываю стиль..." : "🎨 Opening style...");
@@ -8657,13 +8713,26 @@ bot.action(/^style_preview:(.+)$/, async (ctx) => {
     if (!user?.id) return;
 
     const lang = user.lang || "en";
-    const session = await getSessionForStyleSelection(user.id);
+    const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+    const session = await resolveSessionForCallback(
+      user.id,
+      explicitSessionId,
+      () => getSessionForStyleSelection(user.id)
+    );
     if (!session?.id) {
       await rejectSessionEvent(ctx, lang, "style_preview", "session_not_found");
       return;
     }
     if (!["wait_style", "wait_pack_preview_payment"].includes(session.state)) {
       await rejectSessionEvent(ctx, lang, "style_preview", "wrong_state");
+      return;
+    }
+    const strictRevEnabled = await isStrictSessionRevEnabled();
+    if (
+      (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1))
+      || (explicitSessionId && !session.is_active)
+    ) {
+      await rejectSessionEvent(ctx, lang, "style_preview", "stale_callback");
       return;
     }
 
@@ -8752,7 +8821,11 @@ bot.action(/^back_to_style_list:(\d+)?$/, async (ctx) => {
     if (session?.state === "wait_pack_preview_payment") {
       await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
     } else {
-      await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session?.selected_style_id || null });
+      await sendStyleKeyboardFlat(ctx, lang, undefined, {
+        selectedStyleId: session?.selected_style_id || null,
+        sessionId: session?.id || null,
+        sessionRev: Number(session?.session_rev || 1),
+      });
     }
   } catch (err) {
     console.error("[StylePreview] back_to_style_list error:", err);
@@ -8787,7 +8860,10 @@ bot.action(/^style_v2:([^:]+)(?::(.+))?$/, async (ctx) => {
       return;
     }
     const strictRevEnabled = await isStrictSessionRevEnabled();
-    if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
+    if (
+      (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1))
+      || (explicitSessionId && !session.is_active)
+    ) {
       await rejectSessionEvent(ctx, lang, "style_v2", "stale_callback");
       return;
     }
@@ -10233,17 +10309,27 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
   }
 
   if (action === "make_sticker") {
-    await supabase
-      .from("sessions")
-      .update({
-        state: "wait_style",
-        is_active: true,
-        flow_kind: "single",
-        style_source_kind: "photo",
-        session_rev: nextRev,
-      })
-      .eq("id", session.id);
-    await sendStyleKeyboardFlat(ctx, lang, undefined, { selectedStyleId: session.selected_style_id || null });
+    const updatePayload = {
+      state: "wait_style",
+      is_active: true,
+      flow_kind: "single",
+      style_source_kind: "photo",
+      session_rev: nextRev,
+    } as const;
+    const { error: makeStickerUpdateErr, droppedStyleSourceKind } = await updateSessionWithStyleSourceFallback(session.id, updatePayload);
+    if (makeStickerUpdateErr) {
+      console.error("[action_make_sticker] session update failed:", makeStickerUpdateErr.message || makeStickerUpdateErr);
+      await ctx.reply(await getText(lang, "error.technical"));
+      return;
+    }
+    if (droppedStyleSourceKind) {
+      console.warn("[action_make_sticker] style_source_kind dropped due to schema cache mismatch");
+    }
+    await sendStyleKeyboardFlat(ctx, lang, undefined, {
+      selectedStyleId: session.selected_style_id || null,
+      sessionId: session.id,
+      sessionRev: nextRev,
+    });
     return;
   }
 
