@@ -550,7 +550,7 @@ async function sendStyleKeyboardFlat(
   }
 }
 
-/** Action menu after photo: 4 actions (remove bg, replace face, make sticker, make pack). */
+/** Action menu after photo: 4 actions (photo->sticker, replace face, change style, make pack). */
 async function sendActionMenu(
   ctx: any,
   lang: string,
@@ -558,16 +558,16 @@ async function sendActionMenu(
   sessionRev: number
 ) {
   const sessionRef = formatCallbackSessionRef(sessionId, sessionRev);
-  const removeBgCb = appendSessionRefIfFits("action_remove_bg", sessionRef);
+  const photoStickerCb = appendSessionRefIfFits("action_photo_sticker", sessionRef);
   const replaceFaceCb = appendSessionRefIfFits("action_replace_face", sessionRef);
   const makeStickerCb = appendSessionRefIfFits("action_make_sticker", sessionRef);
   const makePackCb = appendSessionRefIfFits("action_make_pack", sessionRef);
 
   const text = await getText(lang, "action.choose");
   const buttons = [
-    [{ text: await getText(lang, "action.remove_bg"), callback_data: removeBgCb }],
-    [{ text: await getText(lang, "action.replace_face"), callback_data: replaceFaceCb }],
+    [{ text: await getText(lang, "action.photo_sticker"), callback_data: photoStickerCb }],
     [{ text: await getText(lang, "action.make_sticker"), callback_data: makeStickerCb }],
+    [{ text: await getText(lang, "action.replace_face"), callback_data: replaceFaceCb }],
     [{ text: await getText(lang, "action.make_pack"), callback_data: makePackCb }],
   ];
   await ctx.reply(text, Markup.inlineKeyboard(buttons));
@@ -1728,6 +1728,7 @@ async function buildStickerButtons(
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
   const replaceFaceText = await getText(lang, "btn.replace_face");
+  const changeStyleText = await getText(lang, "btn.change_style");
   const removeBgText = lang === "ru" ? "🖼 Вырезать фон" : "🖼 Remove background";
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
@@ -1740,6 +1741,7 @@ async function buildStickerButtons(
   return {
     inline_keyboard: [
       [{ text: addToPackText, callback_data: `add_to_pack:${stickerId}` }],
+      [{ text: changeStyleText, callback_data: `change_style:${stickerId}` }],
       [
         { text: changeEmotionText, callback_data: emotionCb },
         { text: changeMotionText, callback_data: motionCb },
@@ -8637,12 +8639,21 @@ bot.action(/^change_style:(.+)$/, async (ctx) => {
 
   if (!session?.id) return;
 
+  const sourcePhotoId = String(sticker.source_photo_file_id || "");
+  const restoredPhotoFileId = sourcePhotoId.startsWith("AgAC")
+    ? sourcePhotoId
+    : (user.last_photo_file_id || null);
+  if (!restoredPhotoFileId) {
+    await ctx.reply(await getText(lang, "photo.need_photo"));
+    return;
+  }
+
   await supabase
     .from("sessions")
     .update({
       state: "wait_style",
       is_active: true,
-      current_photo_file_id: sticker.source_photo_file_id,
+      current_photo_file_id: restoredPhotoFileId,
       prompt_final: null,
       user_input: null,
       pending_generation_type: null,
@@ -9032,7 +9043,7 @@ bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
 });
 
 // ========== Action menu callbacks (from wait_action) ==========
-async function handleActionMenuCallback(ctx: any, action: "remove_bg" | "replace_face" | "make_sticker" | "make_pack") {
+async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "remove_bg" | "replace_face" | "make_sticker" | "make_pack") {
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -9065,7 +9076,7 @@ async function handleActionMenuCallback(ctx: any, action: "remove_bg" | "replace
 
   const nextRev = (session.session_rev || 1) + 1;
 
-  if (action === "remove_bg") {
+  if (action === "photo_sticker" || action === "remove_bg") {
     const isRu = lang === "ru";
     try {
       await ctx.reply(isRu ? "⏳ Убираю фон..." : "⏳ Removing background...");
@@ -9094,7 +9105,7 @@ async function handleActionMenuCallback(ctx: any, action: "remove_bg" | "replace
           user_id: user.id,
           telegram_file_id: newFileId || null,
           source_photo_file_id: photoFileId,
-          generation_type: "remove_bg",
+          generation_type: "photo_sticker",
           env: config.appEnv,
         })
         .select("id")
@@ -9146,6 +9157,8 @@ async function handleActionMenuCallback(ctx: any, action: "remove_bg" | "replace
   }
 }
 
+bot.action(/^action_photo_sticker(?::(.+))?$/, (ctx) => handleActionMenuCallback(ctx, "photo_sticker"));
+// Legacy alias for already sent buttons
 bot.action(/^action_remove_bg(?::(.+))?$/, (ctx) => handleActionMenuCallback(ctx, "remove_bg"));
 bot.action(/^action_replace_face(?::(.+))?$/, (ctx) => handleActionMenuCallback(ctx, "replace_face"));
 bot.action(/^action_make_sticker(?::(.+))?$/, (ctx) => handleActionMenuCallback(ctx, "make_sticker"));
