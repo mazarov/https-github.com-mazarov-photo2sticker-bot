@@ -218,6 +218,11 @@ flowchart TD
 - Маршрутизация style-source:
   - стиль из меню действий/по фото -> `style_source_kind=photo`,
   - стиль из карточки готового стикера (`change_style:ID`) -> `style_source_kind=sticker`.
+- Для sticker-target callbacks (`change_style|change_emotion|change_motion`) photo-context нормализуется через единый resolver:
+  - если `stickers.source_photo_file_id` выглядит как Telegram photo (`AgAC...`) — берём его;
+  - иначе берём fallback `users.last_photo_file_id` (или текущий `sessions.current_photo_file_id`);
+  - в `sessions.photos` хранится нормализованный список из одного активного фото (`[current_photo_file_id]`), а второе значение допускается только как временный `pending_photo_file_id` во время confirm-сценария "new vs keep photo".
+- Для sticker callback с `SESSION_ID:REV` используется strict stale-check (`strict_session_rev_enabled`), чтобы старые inline-кнопки не перезаписывали актуальный photo/sticker context.
 - При включенном `subject_profile_enabled` API сохраняет в `sessions` профиль субъекта:
   `subject_mode`, `subject_count`, `subject_confidence`, `subject_source_file_id`, `subject_source_kind`, `subject_detected_at`.
 - При наличии object-v2 колонок API делает dual-write в `object_*` с fallback на legacy `subject_*`.
