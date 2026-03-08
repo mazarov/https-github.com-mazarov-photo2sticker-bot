@@ -6951,12 +6951,43 @@ async function handleAdminPackContentExampleText(ctx: any, telegramId: number, t
 
 // Sticker handler (edit existing sticker flow)
 bot.on("sticker", async (ctx) => {
+  const traceId = getOrCreateTraceId(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
   const user = await getUser(telegramId);
   if (!user?.id) return;
   const lang = user.lang || "en";
+  const sticker = (ctx.message as any)?.sticker;
+  const stickerFileId = sticker?.file_id as string | undefined;
+
+  const { data: recentSessionsAtEntry } = await supabase
+    .from("sessions")
+    .select("id,state,is_active,flow_kind,session_rev,created_at,updated_at,current_photo_file_id,edit_replace_sticker_id,last_sticker_file_id")
+    .eq("user_id", user.id)
+    .eq("env", config.appEnv)
+    .order("created_at", { ascending: false })
+    .limit(10);
+  console.log("[replace_face.debug][sticker.entry]", {
+    trace_id: traceId,
+    telegramId,
+    userId: user.id,
+    stickerFileId: stickerFileId || null,
+    isAnimated: Boolean(sticker?.is_animated),
+    isVideo: Boolean(sticker?.is_video),
+    sessions: (recentSessionsAtEntry || []).map((s: any) => ({
+      id: s.id,
+      state: s.state,
+      is_active: s.is_active,
+      flow_kind: s.flow_kind,
+      session_rev: s.session_rev,
+      current_photo_file_id: s.current_photo_file_id ? "set" : null,
+      edit_replace_sticker_id: s.edit_replace_sticker_id || null,
+      last_sticker_file_id: s.last_sticker_file_id ? "set" : null,
+      created_at: s.created_at || null,
+      updated_at: s.updated_at || null,
+    })),
+  });
 
   // Architectural behavior:
   // incoming sticker is interpreted as explicit intent to start edit-sticker flow.
@@ -6983,9 +7014,11 @@ bot.on("sticker", async (ctx) => {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  let sessionSource = replaceFaceSession?.id ? "replace_face_query" : "none";
   let session: any = replaceFaceSession || null;
   if (!session?.id) {
-    session = await getActiveSession(user.id);
+    session = await getActiveSession(user.id, traceId);
+    if (session?.id) sessionSource = "getActiveSession";
   }
   if (!session?.id) {
     const { data: newSession } = await supabase
@@ -7001,6 +7034,7 @@ bot.on("sticker", async (ctx) => {
       .select("*")
       .single();
     session = newSession;
+    if (session?.id) sessionSource = "create_wait_edit_sticker";
   }
   if (!session?.id) {
     await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
@@ -7014,13 +7048,26 @@ bot.on("sticker", async (ctx) => {
     );
     return;
   }
-
-  const sticker = (ctx.message as any)?.sticker;
-  const stickerFileId = sticker?.file_id as string | undefined;
+  console.log("[replace_face.debug][sticker.session_selected]", {
+    trace_id: traceId,
+    userId: user.id,
+    sessionSource,
+    session: sessionTraceSnapshot(session),
+    stickerFileId: stickerFileId || null,
+  });
 
   // === wait_replace_face: user sent sticker to replace face in (photo = identity) ===
   if (["wait_replace_face", "wait_replace_face_sticker"].includes(String(session.state || "")) && stickerFileId) {
     const identityPhotoFileId = session.current_photo_file_id || null;
+    console.log("[replace_face.debug][sticker.replace_face_branch]", {
+      trace_id: traceId,
+      userId: user.id,
+      sessionId: session.id,
+      sessionState: session.state,
+      identityPhotoFileId: identityPhotoFileId ? "set" : null,
+      sessionRev: session.session_rev || null,
+      stickerFileId,
+    });
     if (!identityPhotoFileId) {
       await ctx.reply(await getText(lang, "photo.need_photo"));
       return;
@@ -9806,6 +9853,7 @@ bot.action(/^motion_([^:]+)(?::(.+))?$/, async (ctx) => {
 // ========== Action menu callbacks (from wait_action) ==========
 async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "remove_bg" | "replace_face" | "make_sticker" | "make_pack") {
   safeAnswerCbQuery(ctx);
+  const traceId = getOrCreateTraceId(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
@@ -9815,7 +9863,7 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
 
   // action_* callbacks have a single optional capture group with sessionRef
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
-  const session = await resolveSessionForCallback(user.id, explicitSessionId);
+  const session = await resolveSessionForCallback(user.id, explicitSessionId, undefined, traceId);
   if (!session?.id) {
     await rejectSessionEvent(ctx, lang, `action_${action}`, "session_not_found");
     return;
@@ -9913,14 +9961,40 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
   }
 
   if (action === "replace_face") {
+    const { data: beforeSessions } = await supabase
+      .from("sessions")
+      .select("id,state,is_active,flow_kind,session_rev,created_at,updated_at,current_photo_file_id,edit_replace_sticker_id")
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .order("created_at", { ascending: false })
+      .limit(8);
+    console.log("[replace_face.debug][action_replace_face.before]", {
+      trace_id: traceId,
+      userId: user.id,
+      explicitSessionId,
+      callbackRev,
+      session: sessionTraceSnapshot(session),
+      sessions: (beforeSessions || []).map((s: any) => ({
+        id: s.id,
+        state: s.state,
+        is_active: s.is_active,
+        flow_kind: s.flow_kind,
+        session_rev: s.session_rev,
+        current_photo_file_id: s.current_photo_file_id ? "set" : null,
+        edit_replace_sticker_id: s.edit_replace_sticker_id || null,
+        created_at: s.created_at || null,
+        updated_at: s.updated_at || null,
+      })),
+    });
+
     // Photo already exists (from wait_action). Ask for sticker only.
-    await supabase
+    const { error: deactivateErr } = await supabase
       .from("sessions")
       .update({ is_active: false })
       .eq("user_id", user.id)
       .eq("env", config.appEnv)
       .neq("id", session.id);
-    await supabase
+    const { error: promoteErr } = await supabase
       .from("sessions")
       .update({
         state: "wait_replace_face",
@@ -9930,6 +10004,52 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
         session_rev: nextRev,
       })
       .eq("id", session.id);
+
+    const { data: sessionAfter } = await supabase
+      .from("sessions")
+      .select("id,state,is_active,flow_kind,session_rev,current_photo_file_id,edit_replace_sticker_id,created_at,updated_at")
+      .eq("id", session.id)
+      .maybeSingle();
+    const { data: afterSessions } = await supabase
+      .from("sessions")
+      .select("id,state,is_active,flow_kind,session_rev,created_at,updated_at,current_photo_file_id,edit_replace_sticker_id")
+      .eq("user_id", user.id)
+      .eq("env", config.appEnv)
+      .order("created_at", { ascending: false })
+      .limit(8);
+    console.log("[replace_face.debug][action_replace_face.after]", {
+      trace_id: traceId,
+      userId: user.id,
+      deactivateErr: deactivateErr?.message || null,
+      promoteErr: promoteErr?.message || null,
+      expectedSessionId: session.id,
+      expectedNextRev: nextRev,
+      sessionAfter: sessionAfter
+        ? {
+            id: sessionAfter.id,
+            state: sessionAfter.state,
+            is_active: sessionAfter.is_active,
+            flow_kind: sessionAfter.flow_kind,
+            session_rev: sessionAfter.session_rev,
+            current_photo_file_id: sessionAfter.current_photo_file_id ? "set" : null,
+            edit_replace_sticker_id: sessionAfter.edit_replace_sticker_id || null,
+            created_at: sessionAfter.created_at || null,
+            updated_at: sessionAfter.updated_at || null,
+          }
+        : null,
+      sessions: (afterSessions || []).map((s: any) => ({
+        id: s.id,
+        state: s.state,
+        is_active: s.is_active,
+        flow_kind: s.flow_kind,
+        session_rev: s.session_rev,
+        current_photo_file_id: s.current_photo_file_id ? "set" : null,
+        edit_replace_sticker_id: s.edit_replace_sticker_id || null,
+        created_at: s.created_at || null,
+        updated_at: s.updated_at || null,
+      })),
+    });
+
     await ctx.reply(await getText(lang, "action.replace_face_send_sticker"));
     return;
   }
@@ -9964,6 +10084,7 @@ bot.action(/^action_make_pack(?::(.+))?$/, (ctx) => handleActionMenuCallback(ctx
 
 // Callback: replace face in sticker (use user's latest photo as identity source)
 bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
+  const traceId = getOrCreateTraceId(ctx);
   safeAnswerCbQuery(ctx);
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
@@ -9974,6 +10095,15 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
 
   const stickerId = ctx.match[1];
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
+  console.log("[replace_face.debug][replace_face_callback.entry]", {
+    trace_id: traceId,
+    telegramId,
+    userId: user.id,
+    stickerId,
+    explicitSessionId: explicitSessionId || null,
+    callbackRev: callbackRev ?? null,
+    rawCallbackData: (ctx.callbackQuery as any)?.data || null,
+  });
 
   const { data: sticker } = await supabase
     .from("stickers")
@@ -9987,8 +10117,8 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
   if (sticker.user_id !== user.id) return;
 
   let session = explicitSessionId
-    ? await getSessionByIdForUser(user.id, explicitSessionId)
-    : await getActiveSession(user.id);
+    ? await getSessionByIdForUser(user.id, explicitSessionId, traceId)
+    : await getActiveSession(user.id, traceId);
   if (!session?.id) {
     // Fallback: callback_data often exceeds 64 chars (replace_face:uuid:uuid:rev) so session ref is dropped
     const { data: fallbackSession } = await supabase
@@ -10013,6 +10143,14 @@ bot.action(/^replace_face:([^:]+)(?::(.+))?$/, async (ctx) => {
     session = newSession;
   }
   if (!session?.id) return;
+  console.log("[replace_face.debug][replace_face_callback.session]", {
+    trace_id: traceId,
+    userId: user.id,
+    session: sessionTraceSnapshot(session),
+    sessionCurrentPhoto: session.current_photo_file_id ? "set" : null,
+    sessionPhotosCount: Array.isArray(session.photos) ? session.photos.length : 0,
+    userLastPhoto: user.last_photo_file_id ? "set" : null,
+  });
   const strictRevEnabled = await isStrictSessionRevEnabled();
   if (strictRevEnabled && callbackRev !== null && callbackRev !== Number(session.session_rev || 1)) {
     await rejectSessionEvent(ctx, lang, "replace_face", "stale_callback");
