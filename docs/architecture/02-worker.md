@@ -66,6 +66,7 @@ sequenceDiagram
 
 ### 4. Генерация изображения (Gemini)
 - Модель: настраивается через `app_config` (по умолчанию: style → `gemini-3-pro-image-preview`, emotion/motion → `gemini-2.5-flash-image`)
+- Gemini route выбирается runtime через `app_config.gemini_use_proxy` (кэш 60s): `true` -> proxy (`GEMINI_PROXY_BASE_URL`), `false` -> direct Google endpoint.
 - Входные данные: исходное фото + промпт
 - Промпт содержит:
   - Инструкцию по стилю (из style preset или кастомный)
@@ -81,6 +82,7 @@ sequenceDiagram
   - `style` -> `photo` или `sticker` (по `sessions.style_source_kind`),
   - `emotion`/`motion`/`text` -> `sticker`.
 - Для sticker source в `fileData.fileUri` используется storage URL (result/temp), чтобы снизить ошибки внешнего fetch в Gemini на Telegram-URL.
+- Лог `[GeminiRoute][Worker]` фиксирует активный маршрут (`baseUrl`, `host`, `viaProxy`) при старте worker-процесса.
 - Если включен `subject_profile_enabled` или `object_profile_enabled`/`object_profile_shadow_enabled` и profile для текущего source отсутствует, worker выполняет detector и сохраняет профиль в `sessions` (dual-write в `subject_*` + `object_*` при наличии колонок).
 - Если `subject_postcheck_enabled=true`, worker валидирует число людей на результате и делает один retry с усиленным lock; при повторном mismatch задача завершается ошибкой (с рефандом через общий error-path).
 

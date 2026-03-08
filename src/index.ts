@@ -6,13 +6,14 @@ import FormData from "form-data";
 import { randomUUID } from "crypto";
 import { AsyncLocalStorage } from "async_hooks";
 import { execSync } from "child_process";
-import { config, getGeminiGenerateContentUrl, getGeminiRouteInfo } from "./config";
+import { config } from "./config";
 import { supabase } from "./lib/supabase";
 import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
 import { getFilePath, downloadFile, sendSticker, getStickerSet } from "./lib/telegram";
 import { addWhiteBorder, addTextToSticker, assembleGridTo1024 } from "./lib/image-utils";
 import { getAppConfig } from "./lib/app-config";
+import { getGeminiGenerateContentUrlRuntime, getGeminiRouteInfoRuntime } from "./lib/gemini-route";
 import { sendYandexConversion, getMetrikaTargetForPack } from "./lib/yandex-metrika";
 import {
   appendSubjectLock,
@@ -97,8 +98,9 @@ bot.use(async (ctx, next) => {
   });
 });
 
-const geminiRoute = getGeminiRouteInfo();
-console.log("[GeminiRoute][API]", geminiRoute);
+void getGeminiRouteInfoRuntime()
+  .then((route) => console.log("[GeminiRoute][API]", route))
+  .catch((err) => console.warn("[GeminiRoute][API] route resolve failed:", err?.message || err));
 
 // Global error handler — catch all unhandled errors from handlers
 bot.catch((err: any, ctx: any) => {
@@ -246,7 +248,7 @@ async function translateLabelsEnToRu(labelsEn: string[]): Promise<string[]> {
   if (!Array.isArray(labelsEn) || labelsEn.length === 0) return [];
   try {
     const response = await axios.post(
-      getGeminiGenerateContentUrl("gemini-2.0-flash"),
+      await getGeminiGenerateContentUrlRuntime("gemini-2.0-flash"),
       {
         contents: [{ role: "user", parts: [{ text: `Translate these ${labelsEn.length} short sticker captions from English to Russian. Keep the same tone and approximate length. Return ONLY a JSON array of ${labelsEn.length} strings, no other text.\n\n${JSON.stringify(labelsEn)}` }] }],
         generationConfig: { responseMimeType: "application/json", temperature: 0.3 },
@@ -1180,7 +1182,7 @@ async function generatePrompt(userInput: string): Promise<PromptResult> {
     });
 
     const response = await axios.post(
-      getGeminiGenerateContentUrl(agent.model),
+      await getGeminiGenerateContentUrlRuntime(agent.model),
       {
         systemInstruction: {
           parts: [{ text: agent.system_prompt }],
@@ -3528,7 +3530,7 @@ async function generateAndSendOutreachAlert(
     const userContext = `Name: ${firstName || "unknown"}\nUsername: ${username || "none"}\nLanguage: ${lang}\nSource: ${utm.source || "organic"}/${utm.medium || "none"}\nPremium: ${isPremium}`;
 
     const response = await axios.post(
-      getGeminiGenerateContentUrl("gemini-2.0-flash"),
+      await getGeminiGenerateContentUrlRuntime("gemini-2.0-flash"),
       {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: "user", parts: [{ text: userContext }] }],
@@ -12432,7 +12434,7 @@ bot.action(/^admin_regen_outreach:(.+)$/, async (ctx) => {
     const userContext = `Name: ${user.first_name || "unknown"}\nUsername: ${user.username || "none"}\nLanguage: ${lang}\nSource: ${user.utm_source || "organic"}/${user.utm_medium || "none"}`;
 
     const response = await axios.post(
-      getGeminiGenerateContentUrl("gemini-2.0-flash"),
+      await getGeminiGenerateContentUrlRuntime("gemini-2.0-flash"),
       {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: "user", parts: [{ text: userContext }] }],
@@ -12898,7 +12900,7 @@ Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sar
   // Fallback: Gemini when OPENAI_API_KEY is not set
   try {
     const response = await axios.post(
-      getGeminiGenerateContentUrl("gemini-2.5-flash"),
+      await getGeminiGenerateContentUrlRuntime("gemini-2.5-flash"),
       {
         systemInstruction: {
           parts: [{ text: systemPrompt }],
