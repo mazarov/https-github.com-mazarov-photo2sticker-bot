@@ -1252,6 +1252,16 @@ const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. B
 // Pack only: composition without magenta, 15%, and full-visibility rule (all in CRITICAL RULES FOR THE GRID in worker).
 const COMPOSITION_SUFFIX_PACK = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
 
+function ensureSingleSuffix(prompt: string, suffix: string): string {
+  const base = String(prompt || "");
+  if (!suffix) return base;
+  let withoutSuffix = base;
+  while (withoutSuffix.includes(suffix)) {
+    withoutSuffix = withoutSuffix.replace(suffix, "");
+  }
+  return `${withoutSuffix.trimEnd()}${suffix}`;
+}
+
 type RenderMode = "stylize" | "photoreal";
 
 function normalizeRenderMode(value: unknown): RenderMode {
@@ -1614,7 +1624,7 @@ async function startGeneration(
   if (options.generationType === "emotion") {
     options.promptFinal = sanitizeEmotionPrompt(options.promptFinal);
   }
-  options.promptFinal = options.promptFinal + COMPOSITION_SUFFIX;
+  options.promptFinal = ensureSingleSuffix(options.promptFinal, COMPOSITION_SUFFIX);
 
   console.log("=== startGeneration ===");
   console.log("user.id:", user?.id);
@@ -6274,7 +6284,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     if (preset?.prompt_hint) {
       packStyleUserInput = preset.prompt_hint;
       packPromptFinal = await applySubjectLockToPrompt(session, "style", "");
-      packPromptFinal = packPromptFinal + COMPOSITION_SUFFIX_PACK;
+      packPromptFinal = ensureSingleSuffix(packPromptFinal, COMPOSITION_SUFFIX_PACK);
     }
   }
 

@@ -243,6 +243,24 @@ function extractGeminiImageBase64(responseData: any): string | null {
   return null;
 }
 
+const STYLE_SAFETY_BLOCK = `[STYLE SAFETY]
+Use only safe, non-sexual content.
+Subject must be clearly adult-looking.
+No nudity, lingerie, underwear-only outfits, fetish elements, or suggestive posing.
+Keep normal everyday clothing and neutral-safe composition.`;
+
+function applyStyleSafetyPolicy(prompt: string): string {
+  const cleanPrompt = String(prompt || "").trim();
+  if (!cleanPrompt) return STYLE_SAFETY_BLOCK;
+  if (/\[STYLE SAFETY\]/i.test(cleanPrompt)) return cleanPrompt;
+  return `${STYLE_SAFETY_BLOCK}\n\n${cleanPrompt}`;
+}
+
+function isSafetyFinishReason(value: unknown): boolean {
+  const reason = String(value || "").toUpperCase();
+  return reason === "PROHIBITED_CONTENT" || reason === "SAFETY";
+}
+
 function normalizePackSetSubjectMode(value: any): "single" | "multi" | "any" {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "single") return "single";
@@ -1611,6 +1629,9 @@ async function runJob(job: any) {
   if (selectedStyleRenderMode) {
     promptForGeneration = applyRenderModePolicy(promptForGeneration, selectedStyleRenderMode);
   }
+  if (generationType === "style") {
+    promptForGeneration = applyStyleSafetyPolicy(promptForGeneration);
+  }
   const isImportedSticker = Boolean(session.edit_sticker_file_id);
   if (isImportedSticker && (generationType === "emotion" || generationType === "motion")) {
     const changeType = generationType === "emotion" ? "emotion/facial expression" : "motion/body pose";
@@ -1970,8 +1991,15 @@ async function runJob(job: any) {
 
   if (!imageBase64) {
     const firstFinishReason = geminiRes.data?.candidates?.[0]?.finishReason || "unknown";
-    const noImageRetryPrompt =
-      `${promptForGeneration}\n\n[RETRY]\nPrevious response had no image bytes. Return IMAGE output (inlineData).`;
+    const prohibitedOnFirstTry = isSafetyFinishReason(firstFinishReason);
+    const retryBasePrompt =
+      generationType === "style" && prohibitedOnFirstTry
+        ? applyStyleSafetyPolicy(promptForGeneration)
+        : promptForGeneration;
+    const retryHint = prohibitedOnFirstTry
+      ? "[RETRY SAFETY]\nPrevious response was safety-blocked or returned no image. Keep output strictly non-sexual and policy-safe. Return IMAGE output (inlineData)."
+      : "[RETRY]\nPrevious response had no image bytes. Return IMAGE output (inlineData).";
+    const noImageRetryPrompt = `${retryBasePrompt}\n\n${retryHint}`;
     console.warn("[Generation] No image from Gemini, retrying once. finishReason:", firstFinishReason);
     try {
       const retryNoImageRes = await callGeminiImage(noImageRetryPrompt, activeModel, "no_image_retry");
