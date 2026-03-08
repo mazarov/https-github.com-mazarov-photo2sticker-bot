@@ -5541,7 +5541,7 @@ bot.action(/^pack_back_to_carousel(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_preview_payment", "wait_pack_carousel"],
@@ -5569,7 +5569,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   if (!user) return;
   const lang = user.lang || "en";
 
-  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[2] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
     user.id,
     ["wait_pack_preview_payment", "generating_pack_preview", "wait_pack_carousel"],
