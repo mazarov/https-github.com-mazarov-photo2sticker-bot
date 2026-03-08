@@ -2429,6 +2429,9 @@ const SESSION_FALLBACK_ACTIVE_STATES = [
   "wait_custom_motion",
   "wait_text_overlay",
   "wait_replace_face_sticker",
+  "wait_edit_sticker",
+  "wait_edit_photo",
+  "wait_edit_action",
   "wait_emotion",
   "wait_motion",
   "confirm_sticker",
@@ -2887,6 +2890,46 @@ async function callTelegramBotMethodOrThrow(method: string, payload: Record<stri
     throw error;
   }
   return res.data?.result;
+}
+
+async function getStickerSetSnapshot(name: string): Promise<{ count: number; hasFileId: (fileId: string) => boolean } | null> {
+  try {
+    const res = await axios.get(`https://api.telegram.org/bot${config.telegramBotToken}/getStickerSet`, {
+      params: { name },
+      timeout: 15000,
+    });
+    if (!res.data?.ok) return null;
+    const stickers = Array.isArray(res.data?.result?.stickers) ? res.data.result.stickers : [];
+    return {
+      count: stickers.length,
+      hasFileId: (fileId: string) => stickers.some((s: any) => s?.file_id === fileId),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function waitForStickerInSet(
+  name: string,
+  fileId: string,
+  beforeCount: number | null
+): Promise<{ ok: boolean; count: number | null; matchedBy: "file_id" | "count" | null }> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const snap = await getStickerSetSnapshot(name);
+    if (snap) {
+      if (snap.hasFileId(fileId)) {
+        return { ok: true, count: snap.count, matchedBy: "file_id" };
+      }
+      if (beforeCount !== null && snap.count > beforeCount) {
+        return { ok: true, count: snap.count, matchedBy: "count" };
+      }
+    }
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+  }
+  const finalSnap = await getStickerSetSnapshot(name);
+  return { ok: false, count: finalSnap?.count ?? null, matchedBy: null };
 }
 
 type PackUiLockStage = "preview" | "assemble";
@@ -8907,13 +8950,25 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
     if (!user.sticker_set_name) {
       // Create new sticker set
       try {
+        const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+        const beforeCount = beforeSnap?.count ?? null;
         await createStickerSet(stickerSetName, sticker.telegram_file_id);
+        const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
+        if (!verify.ok) {
+          throw new Error(`Sticker not visible in set after create (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+        }
       } catch (createErr: any) {
         // If name is occupied, try with timestamp
         if (createErr.response?.data?.description?.includes("already occupied")) {
           console.log("add_to_pack: name occupied, trying with timestamp...");
           stickerSetName = `p2s_${telegramId}_${Date.now()}_by_${botUsername}`.toLowerCase();
+          const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+          const beforeCount = beforeSnap?.count ?? null;
           await createStickerSet(stickerSetName, sticker.telegram_file_id);
+          const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
+          if (!verify.ok) {
+            throw new Error(`Sticker not visible in set after create-retry (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+          }
         } else {
           throw createErr;
         }
@@ -8922,11 +8977,17 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
       // Add to existing sticker set
       console.log("add_to_pack: adding to existing set:", stickerSetName);
       try {
+        const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+        const beforeCount = beforeSnap?.count ?? null;
         await callTelegramBotMethodOrThrow("addStickerToSet", {
           user_id: telegramId,
           name: stickerSetName,
           sticker: { sticker: sticker.telegram_file_id, format: "static", emoji_list: ["🔥"] },
         });
+        const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
+        if (!verify.ok) {
+          throw new Error(`Sticker not visible in set after add (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+        }
         console.log("add_to_pack: sticker added to existing set");
       } catch (addErr: any) {
         const desc = (addErr.response?.data?.description || "").toLowerCase();
@@ -8935,11 +8996,23 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
           console.log("add_to_pack: set invalid/deleted, recreating. Old:", stickerSetName);
           stickerSetName = `p2s_${telegramId}_by_${botUsername}`.toLowerCase();
           try {
+            const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+            const beforeCount = beforeSnap?.count ?? null;
             await createStickerSet(stickerSetName, sticker.telegram_file_id);
+            const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
+            if (!verify.ok) {
+              throw new Error(`Sticker not visible in set after recreate (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+            }
           } catch (recreateErr: any) {
             if (recreateErr.response?.data?.description?.includes("already occupied")) {
               stickerSetName = `p2s_${telegramId}_${Date.now()}_by_${botUsername}`.toLowerCase();
+              const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+              const beforeCount = beforeSnap?.count ?? null;
               await createStickerSet(stickerSetName, sticker.telegram_file_id);
+              const verify = await waitForStickerInSet(stickerSetName, sticker.telegram_file_id, beforeCount);
+              if (!verify.ok) {
+                throw new Error(`Sticker not visible in set after recreate-retry (set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+              }
             } else {
               throw recreateErr;
             }
@@ -9009,12 +9082,24 @@ bot.action("add_to_pack", async (ctx) => {
   try {
     if (!user.sticker_set_name) {
       try {
+        const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+        const beforeCount = beforeSnap?.count ?? null;
         await createStickerSet(stickerSetName, session.last_sticker_file_id);
+        const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
+        if (!verify.ok) {
+          throw new Error(`Sticker not visible in set after create (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+        }
       } catch (createErr: any) {
         if (createErr.response?.data?.description?.includes("already occupied")) {
           console.log("add_to_pack(old): name occupied, trying with timestamp...");
           stickerSetName = `p2s_${telegramId}_${Date.now()}_by_${botUsername}`.toLowerCase();
+          const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+          const beforeCount = beforeSnap?.count ?? null;
           await createStickerSet(stickerSetName, session.last_sticker_file_id);
+          const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
+          if (!verify.ok) {
+            throw new Error(`Sticker not visible in set after create-retry (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+          }
         } else {
           throw createErr;
         }
@@ -9022,11 +9107,17 @@ bot.action("add_to_pack", async (ctx) => {
     } else {
       console.log("add_to_pack(old): adding to existing set:", stickerSetName);
       try {
+        const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+        const beforeCount = beforeSnap?.count ?? null;
         await callTelegramBotMethodOrThrow("addStickerToSet", {
           user_id: telegramId,
           name: stickerSetName,
           sticker: { sticker: session.last_sticker_file_id, format: "static", emoji_list: ["🔥"] },
         });
+        const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
+        if (!verify.ok) {
+          throw new Error(`Sticker not visible in set after add (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+        }
         console.log("add_to_pack(old): sticker added to existing set");
       } catch (addErr: any) {
         const desc = (addErr.response?.data?.description || "").toLowerCase();
@@ -9034,11 +9125,23 @@ bot.action("add_to_pack", async (ctx) => {
           console.log("add_to_pack(old): set invalid/deleted, recreating. Old:", stickerSetName);
           stickerSetName = `p2s_${telegramId}_by_${botUsername}`.toLowerCase();
           try {
+            const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+            const beforeCount = beforeSnap?.count ?? null;
             await createStickerSet(stickerSetName, session.last_sticker_file_id);
+            const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
+            if (!verify.ok) {
+              throw new Error(`Sticker not visible in set after recreate (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+            }
           } catch (recreateErr: any) {
             if (recreateErr.response?.data?.description?.includes("already occupied")) {
               stickerSetName = `p2s_${telegramId}_${Date.now()}_by_${botUsername}`.toLowerCase();
+              const beforeSnap = await getStickerSetSnapshot(stickerSetName);
+              const beforeCount = beforeSnap?.count ?? null;
               await createStickerSet(stickerSetName, session.last_sticker_file_id);
+              const verify = await waitForStickerInSet(stickerSetName, session.last_sticker_file_id, beforeCount);
+              if (!verify.ok) {
+                throw new Error(`Sticker not visible in set after recreate-retry (legacy, set=${stickerSetName}, count=${verify.count ?? "unknown"})`);
+              }
             } else {
               throw recreateErr;
             }
