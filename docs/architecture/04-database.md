@@ -103,6 +103,11 @@ erDiagram
 | `object_detected_at` | timestamptz | — | Время обновления object profile |
 | `subject_gender` | text | — | Пол при single: `male` \| `female` \| `unknown`. Для паков: подстановка {subject} → man/woman. См. [11-subject-profile-and-gender.md](11-subject-profile-and-gender.md) |
 | `object_gender` | text | — | Зеркало subject_gender для object-profile flow |
+| `subject_age_group` | text | — | Возрастная группа для source: `child` \| `adult` \| `unknown` (используется только для child-safe style policy) |
+| `subject_age_confidence` | numeric | — | Confidence age-детектора (0..1) |
+| `subject_age_source_file_id` | text | — | Source file_id, для которого считан age-профиль |
+| `subject_age_source_kind` | text | — | `photo` или `sticker` для age-профиля |
+| `subject_age_detected_at` | timestamptz | — | Время обновления age-профиля |
 | `object_instances_json` | jsonb | — | Нормализованные инстансы детектора (bbox/area/edge/confidence) |
 | `env` | text | 'prod' | Окружение |
 
@@ -263,6 +268,10 @@ Presets: waving, thumbs_up, facepalm, praying, flexing, shrugging, peace, heart_
 - `object_multi_low_confidence_fallback` — fallback mode при слабом `multi`
 - `object_min_area_ratio` — минимальная площадь для main object
 - `object_edge_small_area_max` — порог "малый edge-объект"
+
+Ключи для Child Identity Protection rollout:
+- `child_identity_protection_enabled` — включает child-safe identity policy для `generationType=style`
+- `child_identity_confidence_min` — минимальный confidence для принятия `subject_age_group=child|adult` (иначе `unknown`)
 
 Ключи для Replace Face rollout:
 - `facemint_replace_face_enabled` — переключатель `replace_subject` с Gemini на Facemint API (default `false`)

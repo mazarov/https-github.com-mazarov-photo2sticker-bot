@@ -19,13 +19,16 @@ import {
   appendSubjectLock,
   buildSubjectLockBlock,
   detectSubjectProfileFromImageBuffer,
+  parseBooleanConfig,
   isSubjectLockEnabled,
   isSubjectModePackFilterEnabled,
   isSubjectProfileEnabled,
+  normalizeSubjectAgeGroup,
   normalizeSubjectMode,
   normalizeSubjectGender,
   normalizeSubjectSourceKind,
   resolveGenerationSource,
+  type SubjectAgeProfile,
   type SubjectProfile,
   type SubjectSourceKind,
 } from "./lib/subject-profile";
@@ -1413,6 +1416,35 @@ function getSessionSubjectProfileForSource(
   };
 }
 
+function getSessionSubjectAgeProfileForSource(
+  session: any,
+  sourceFileId: string,
+  sourceKind: SubjectSourceKind
+): SubjectAgeProfile | null {
+  const sessionSourceFileId = session?.subject_age_source_file_id || null;
+  const sessionSourceKind = normalizeSubjectSourceKind(session?.subject_age_source_kind);
+  if (!sessionSourceFileId || sessionSourceFileId !== sourceFileId || sessionSourceKind !== sourceKind) {
+    return null;
+  }
+
+  const parsedConfidence = Number(session?.subject_age_confidence);
+  return {
+    subjectAgeGroup: normalizeSubjectAgeGroup(session?.subject_age_group),
+    subjectAgeConfidence:
+      Number.isFinite(parsedConfidence) && parsedConfidence >= 0
+        ? Math.max(0, Math.min(1, Number(parsedConfidence.toFixed(3))))
+        : null,
+    sourceFileId,
+    sourceKind,
+    detectedAt: session?.subject_age_detected_at || new Date().toISOString(),
+  };
+}
+
+async function isChildIdentityProtectionEnabled(): Promise<boolean> {
+  const value = await getAppConfig("child_identity_protection_enabled", "false");
+  return parseBooleanConfig(value);
+}
+
 async function persistSubjectAndObjectProfile(sessionId: string, profile: SubjectProfile, detectedAt: string): Promise<void> {
   const payload = {
     subject_mode: profile.subjectMode,
@@ -1429,6 +1461,11 @@ async function persistSubjectAndObjectProfile(sessionId: string, profile: Subjec
     object_source_file_id: profile.sourceFileId,
     object_source_kind: profile.sourceKind,
     object_detected_at: detectedAt,
+    subject_age_group: (profile as any).subjectAgeGroup ?? "unknown",
+    subject_age_confidence: (profile as any).subjectAgeConfidence ?? null,
+    subject_age_source_file_id: profile.sourceFileId,
+    subject_age_source_kind: profile.sourceKind,
+    subject_age_detected_at: detectedAt,
   };
 
   const { error } = await supabase.from("sessions").update(payload).eq("id", sessionId);
@@ -1436,7 +1473,7 @@ async function persistSubjectAndObjectProfile(sessionId: string, profile: Subjec
 
   const unknownColumn =
     error.code === "42703" ||
-    /column .*(object_|subject_gender|object_gender)/.test(String(error.message || "").toLowerCase());
+    /column .*(object_|subject_gender|object_gender|subject_age_)/.test(String(error.message || "").toLowerCase());
   if (!unknownColumn) {
     console.warn("[subject-profile] failed to persist profile:", error.message);
     return;
@@ -1463,7 +1500,8 @@ async function ensureSubjectProfileForGeneration(
   generationType: "style" | "emotion" | "motion" | "text" | "replace_subject"
 ): Promise<SubjectProfile | null> {
   const profileEnabled = await isSubjectProfileEnabled();
-  if (!profileEnabled) {
+  const childIdentityEnabled = await isChildIdentityProtectionEnabled();
+  if (!profileEnabled && !childIdentityEnabled) {
     console.log("[subject-profile] skipped (subject_profile_enabled/object_profile* off) session:", session.id);
     return null;
   }
@@ -1488,10 +1526,12 @@ async function ensureSubjectProfileForGeneration(
       subjectCount: detected.subjectCount,
       subjectConfidence: detected.subjectConfidence,
       subjectGender: detected.subjectGender ?? null,
+      subjectAgeGroup: detected.subjectAgeGroup,
+      subjectAgeConfidence: detected.subjectAgeConfidence,
       sourceFileId,
       sourceKind,
       detectedAt,
-    };
+    } as SubjectProfile;
 
     await persistSubjectAndObjectProfile(session.id, nextProfile, detectedAt);
 
@@ -1500,6 +1540,11 @@ async function ensureSubjectProfileForGeneration(
       subject_count: nextProfile.subjectCount,
       subject_confidence: nextProfile.subjectConfidence,
       subject_gender: nextProfile.subjectGender ?? null,
+      subject_age_group: (nextProfile as any).subjectAgeGroup,
+      subject_age_confidence: (nextProfile as any).subjectAgeConfidence ?? null,
+      subject_age_source_file_id: nextProfile.sourceFileId,
+      subject_age_source_kind: nextProfile.sourceKind,
+      subject_age_detected_at: nextProfile.detectedAt,
       subject_source_file_id: nextProfile.sourceFileId,
       subject_source_kind: nextProfile.sourceKind,
       subject_detected_at: nextProfile.detectedAt,
@@ -1517,6 +1562,8 @@ async function ensureSubjectProfileForGeneration(
       subjectMode: nextProfile.subjectMode,
       subjectCount: nextProfile.subjectCount,
       subjectGender: nextProfile.subjectGender,
+      subjectAgeGroup: (nextProfile as any).subjectAgeGroup,
+      subjectAgeConfidence: (nextProfile as any).subjectAgeConfidence,
     });
     // Алерт subject_profile_detected шлём только из воркера (один раз на джоб), чтобы не дублировать.
     return nextProfile;
@@ -1527,10 +1574,12 @@ async function ensureSubjectProfileForGeneration(
       subjectCount: null,
       subjectConfidence: null,
       subjectGender: null,
+      subjectAgeGroup: "unknown",
+      subjectAgeConfidence: null,
       sourceFileId,
       sourceKind,
       detectedAt,
-    };
+    } as SubjectProfile;
 
     await persistSubjectAndObjectProfile(session.id, fallbackProfile, detectedAt);
 
@@ -1539,6 +1588,11 @@ async function ensureSubjectProfileForGeneration(
       subject_count: fallbackProfile.subjectCount,
       subject_confidence: fallbackProfile.subjectConfidence,
       subject_gender: fallbackProfile.subjectGender ?? null,
+      subject_age_group: (fallbackProfile as any).subjectAgeGroup,
+      subject_age_confidence: (fallbackProfile as any).subjectAgeConfidence ?? null,
+      subject_age_source_file_id: fallbackProfile.sourceFileId,
+      subject_age_source_kind: fallbackProfile.sourceKind,
+      subject_age_detected_at: fallbackProfile.detectedAt,
       subject_source_file_id: fallbackProfile.sourceFileId,
       subject_source_kind: fallbackProfile.sourceKind,
       subject_detected_at: fallbackProfile.detectedAt,
@@ -1575,6 +1629,19 @@ async function applySubjectLockToPrompt(
 
   const lockBlock = buildSubjectLockBlock(profile);
   return appendSubjectLock(prompt, lockBlock);
+}
+
+function applyStyleChildIdentityRule(prompt: string, variant: "default_identity" | "child_pose_only"): string {
+  const source = String(prompt || "");
+  if (variant === "child_pose_only") {
+    return source
+      .replace(/Keep identity \(facial features\/person\)\.?/gi, "Use the image only as a reference for pose and general appearance.\nDo not replicate the exact identity of the person.")
+      .replace(
+        /Keep identity \(facial features\/person\) but DO NOT preserve source artistic rendering\./gi,
+        "Use the image only as a reference for pose and general appearance.\nDo not replicate the exact identity of the person.\nDO NOT preserve source artistic rendering."
+      );
+  }
+  return source;
 }
 
 function getAlertSourceFileId(
@@ -1724,6 +1791,34 @@ async function startGeneration(
   }
 
   options.promptFinal = await applySubjectLockToPrompt(session, options.generationType, options.promptFinal);
+  if (options.generationType === "style" && await isChildIdentityProtectionEnabled()) {
+    const { sourceFileId, sourceKind } = resolveGenerationSource(session, options.generationType);
+    if (sourceFileId) {
+      const ensured = await ensureSubjectProfileForGeneration(session, options.generationType);
+      const ageProfile =
+        getSessionSubjectAgeProfileForSource(session, sourceFileId, sourceKind) ||
+        (ensured
+          ? {
+              subjectAgeGroup: normalizeSubjectAgeGroup((ensured as any).subjectAgeGroup),
+              subjectAgeConfidence: (ensured as any).subjectAgeConfidence ?? null,
+              sourceFileId,
+              sourceKind,
+              detectedAt: ensured.detectedAt,
+            }
+          : null);
+      const isChild = ageProfile?.subjectAgeGroup === "child";
+      const identityRuleVariant: "default_identity" | "child_pose_only" = isChild ? "child_pose_only" : "default_identity";
+      options.promptFinal = applyStyleChildIdentityRule(options.promptFinal, identityRuleVariant);
+      console.log("[style.identity_policy.api]", {
+        generationType: options.generationType,
+        sourceKind,
+        sourceFileId: `${sourceFileId.slice(0, 30)}...`,
+        subjectAgeGroup: ageProfile?.subjectAgeGroup || "unknown",
+        subjectAgeConfidence: ageProfile?.subjectAgeConfidence ?? null,
+        identityRuleVariant,
+      });
+    }
+  }
   if (options.generationType === "emotion") {
     options.promptFinal = sanitizeEmotionPrompt(options.promptFinal);
   }
