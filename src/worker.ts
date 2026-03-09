@@ -80,7 +80,7 @@ async function getOnboardingPackContentSet(): Promise<any | null> {
   }
   const { data, error } = await supabase
     .from(config.packContentSetsTable)
-    .select("id, name_ru, name_en, carousel_description_ru, carousel_description_en, sort_order, onboarding")
+    .select("id, name_ru, name_en, carousel_description_ru, carousel_description_en, sort_order")
     .eq("is_active", true)
     .order("sort_order", { ascending: true })
     .limit(50);
