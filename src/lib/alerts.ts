@@ -89,6 +89,25 @@ export async function sendAlert(options: AlertOptions): Promise<void> {
 
   const body = text.slice(0, options.photoFileId ? 1024 : 4000); // caption limit 1024
 
+  const sendMessageFallback = async () => {
+    const response = await fetch(
+      `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: channelId,
+          text,
+          parse_mode: "Markdown",
+        }),
+      }
+    );
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error("[Alert] Failed to send fallback message alert:", errorData);
+    }
+  };
+
   try {
     if (options.photoFileId) {
       const response = await fetch(
@@ -107,24 +126,10 @@ export async function sendAlert(options: AlertOptions): Promise<void> {
       if (!response.ok) {
         const errorData = await response.text();
         console.error("[Alert] Failed to send photo alert:", errorData);
+        await sendMessageFallback();
       }
     } else {
-      const response = await fetch(
-        `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: channelId,
-            text: body,
-            parse_mode: "Markdown",
-          }),
-        }
-      );
-      if (!response.ok) {
-        const errorData = await response.text();
-        console.error("[Alert] Failed to send:", errorData);
-      }
+      await sendMessageFallback();
     }
   } catch (err) {
     console.error("[Alert] Error sending alert:", err);
