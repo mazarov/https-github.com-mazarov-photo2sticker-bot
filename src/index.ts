@@ -2419,6 +2419,12 @@ function getOnboardingMenuKeyboard(lang: string) {
   return Markup.keyboard([row1, row2]).resize().persistent();
 }
 
+function getMenuKeyboardForUser(user: any, lang: string, telegramId?: number) {
+  return hasCompletedOnboarding(user)
+    ? getMainMenuKeyboard(lang, telegramId)
+    : getOnboardingMenuKeyboard(lang);
+}
+
 // Helper: get persistent post-onboarding menu keyboard.
 function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const isAdmin = telegramId != null && config.adminIds.includes(telegramId);
@@ -5802,13 +5808,14 @@ async function handlePackMenuEntry(
     return;
   }
   const lang = user.lang || "en";
+  const userMenuKeyboard = getMenuKeyboardForUser(user, lang, ctx?.from?.id);
   const source = options?.source || "menu";
   const autoPackEntry = Boolean(options?.autoPackEntry);
   console.log("[pack_flow] handlePackMenuEntry entry", { userId: user.id, source, autoPackEntry });
   let openingMsg: { message_id?: number } | null = null;
   if (source === "menu" || source === "start") {
     const openingText = lang === "ru" ? "⏳ Открываю конструктор пака..." : "⏳ Opening pack builder...";
-    openingMsg = await ctx.reply(openingText, getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => null);
+    openingMsg = await ctx.reply(openingText, userMenuKeyboard).catch(() => null);
   }
   try {
     const activeSession = await getActiveSession(user.id);
@@ -5821,7 +5828,7 @@ async function handlePackMenuEntry(
       const processingMsg = lang === "ru"
         ? "Сейчас идет обработка текущего пака. Подожди немного, я сообщу, когда все будет готово."
         : "Your current pack is still processing. Please wait a bit - I will notify you when it's ready.";
-      await ctx.reply(processingMsg, getMainMenuKeyboard(lang, ctx?.from?.id));
+      await ctx.reply(processingMsg, userMenuKeyboard);
       console.log(
         `[pack_entry] skipped due to active processing: source=${source} auto_pack_entry=${autoPackEntry} session=${activeSession.id} state=${activeSession.state}`
       );
@@ -5853,7 +5860,7 @@ async function handlePackMenuEntry(
           : isAdmin
             ? "No sets yet. Use «Generate pack» in the menu to create the first one."
             : "Sets not ready yet.";
-      await ctx.reply(msg, getMainMenuKeyboard(lang, ctx?.from?.id));
+      await ctx.reply(msg, userMenuKeyboard);
       return;
     }
     const templateId = String(contentSets[0].pack_template_id || "couple_v1");
@@ -5908,7 +5915,7 @@ async function handlePackMenuEntry(
         });
         return;
       }
-      await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang, ctx?.from?.id));
+      await ctx.reply(await getText(lang, "pack.send_photo"), userMenuKeyboard);
       return;
     }
 
@@ -5939,7 +5946,7 @@ async function handlePackMenuEntry(
       .single();
     if (sessErr || !session) {
       console.log("[pack_flow] pack_entry session insert failed", { userId: user.id, err: sessErr?.message });
-      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+      await ctx.reply(await getText(lang, "error.technical"), userMenuKeyboard);
       return;
     }
     console.log("[pack_flow] pack_entry session created", { userId: user.id, sessionId: session.id, state: session.state });
@@ -5959,7 +5966,7 @@ async function handlePackMenuEntry(
     if (!visibleSets.length) {
       await ctx.reply(
         lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-        getMainMenuKeyboard(lang, ctx?.from?.id)
+        userMenuKeyboard
       );
       return;
     }
@@ -5985,7 +5992,7 @@ async function handlePackMenuEntry(
           existingHasPhoto: false,
           sessionId: session.id,
         });
-        await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
+        await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", userMenuKeyboard).catch(() => {});
       } catch (e) {
         console.log("[pack_carousel] show first card failed", { contentSetId: set.id, err: (e as Error)?.message });
         const fallbackCaption = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
@@ -5996,12 +6003,12 @@ async function handlePackMenuEntry(
           ui_message_id: sent.message_id,
           ui_chat_id: ctx.chat.id,
         }).eq("id", session.id);
-        await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
+        await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", userMenuKeyboard).catch(() => {});
       }
     }
   } catch (err: any) {
     console.error("[pack_entry] handlePackMenuEntry error:", err?.message || err, err?.stack?.split("\n").slice(0, 4));
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
+    await ctx.reply(await getText(lang, "error.technical"), userMenuKeyboard).catch(() => {});
   }
 }
 
@@ -6906,6 +6913,9 @@ async function renderPackCarouselForSession(
   lang: string,
   options?: { resetCarouselIndex?: boolean; bumpSessionRev?: boolean }
 ) {
+  const telegramId = ctx.from?.id;
+  const user = telegramId ? await getUser(telegramId) : null;
+  const userMenuKeyboard = user ? getMenuKeyboardForUser(user, lang, telegramId) : getMainMenuKeyboard(lang, telegramId);
   const allContentSets = await getActivePackContentSets();
   const effectiveTemplateId = getEffectivePackTemplateId(session);
   const contentSets = getPackContentSetsForTemplate(allContentSets, effectiveTemplateId);
@@ -6914,7 +6924,7 @@ async function renderPackCarouselForSession(
     const msg = isHolidayEmpty
       ? (lang === "ru" ? "Нет наборов для этого праздника. Выключите праздник или выберите другой раздел." : "No sets for this holiday. Turn off holiday or choose another section.")
       : (lang === "ru" ? "Список наборов обновился. Нажмите «Создать пак» ещё раз." : "Pack list was updated. Tap «Create pack» again.");
-    await ctx.reply(msg, getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
+    await ctx.reply(msg, userMenuKeyboard).catch(() => {});
     return;
   }
 
@@ -6926,7 +6936,7 @@ async function renderPackCarouselForSession(
   if (!visibleSets.length) {
     await ctx.reply(
       lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-      getMainMenuKeyboard(lang, ctx?.from?.id)
+      userMenuKeyboard
     );
     return;
   }
@@ -6993,7 +7003,7 @@ async function renderPackCarouselForSession(
         existingHasPhoto: false,
         sessionId: session.id,
       });
-      await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
+      await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", userMenuKeyboard).catch(() => {});
     } catch (_) {
       const fallbackCaption = `${lang === "ru" ? set.name_ru : set.name_en}\n${lang === "ru" ? (set.carousel_description_ru || set.name_ru) : (set.carousel_description_en || set.name_en)}`;
       const sent = await ctx.telegram.sendMessage(ctx.chat.id, fallbackCaption, { reply_markup: keyboard });
@@ -7003,7 +7013,7 @@ async function renderPackCarouselForSession(
         ui_message_id: sent.message_id,
         ui_chat_id: ctx.chat.id,
       }).eq("id", session.id);
-      await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", getMainMenuKeyboard(lang, ctx?.from?.id)).catch(() => {});
+      await ctx.reply(lang === "ru" ? "📦 Листайте наборы выше" : "📦 Browse sets above", userMenuKeyboard).catch(() => {});
     }
   }
 }
