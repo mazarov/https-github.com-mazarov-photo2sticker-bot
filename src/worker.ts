@@ -1694,7 +1694,7 @@ async function runJob(job: any) {
         ? await resolveStickerSourceUrl(session, sourceFileId, fileBuffer, mimeType, telegramSourceFileUrl)
         : { sourceFileUrl: telegramSourceFileUrl, transport: "telegram-fallback", storagePath: null };
   }
-  const sourceFileUrl = resolvedSource.sourceFileUrl;
+  let sourceFileUrl = resolvedSource.sourceFileUrl;
   console.log("[Worker] source_file_url_resolved:", {
     generationType,
     sourceKind,
@@ -2083,10 +2083,42 @@ async function runJob(job: any) {
     throw new Error("Gemini image caller not initialized");
   }
 
+  const isSourceUrlFetchError = (err: any): boolean => {
+    const msg = String(err?.response?.data?.error?.message || err?.message || "").toLowerCase();
+    return msg.includes("cannot fetch content from the provided url");
+  };
+
   let geminiRes;
   try {
     geminiRes = await callGeminiImage(promptForGeneration, activeModel, "primary");
-  } catch (err: any) {
+  } catch (_err: any) {
+    let err = _err;
+    if (needsPublicSourceUrl && isSourceUrlFetchError(err)) {
+      try {
+        const retryTemp = await uploadTempStickerSourceAndGetPublicUrl(
+          fileBuffer,
+          session,
+          `${sourceFileId}_retry`,
+          mimeType
+        );
+        sourceFileUrl = retryTemp.publicUrl;
+        console.warn("[GeminiRetry] source URL fetch failed, retrying with refreshed temp URL:", {
+          sessionId: session.id,
+          jobId: job.id,
+          generationType,
+          oldSourceUrl: resolvedSource.sourceFileUrl,
+          newSourceUrl: sourceFileUrl,
+          newStoragePath: retryTemp.storagePath,
+        });
+        geminiRes = await callGeminiImage(promptForGeneration, activeModel, "primary_retry_source_url");
+      } catch (retryErr: any) {
+        err = retryErr;
+      }
+    }
+
+    if (geminiRes) {
+      // Retry succeeded, continue normal flow.
+    } else {
     const errorData = err.response?.data;
     const errorMessage = errorData?.error?.message || err.message || err.code || "Unknown error";
     const errorStatus = err.response?.status;
@@ -2123,6 +2155,7 @@ async function runJob(job: any) {
       },
     });
     throw new Error(`Gemini API failed: ${errorMessage}`);
+    }
   }
 
   // Check for content moderation block
