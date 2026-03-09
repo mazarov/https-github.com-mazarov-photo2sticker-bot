@@ -4277,6 +4277,7 @@ bot.start(async (ctx) => {
           is_active: true,
           flow_kind: "single",
           session_rev: 1,
+          selected_style_id: null,
           current_photo_file_id: existingPhoto,
           photos: existingPhoto ? [existingPhoto] : [],
           env: config.appEnv,
@@ -4832,7 +4833,8 @@ bot.on("photo", async (ctx) => {
   ];
   const { hasWorkingPhoto, workingPhotoFileId } = resolveWorkingPhoto(session, user);
   const isHardProcessing = hardProcessingStates.includes(String(session.state || ""));
-  if (hasWorkingPhoto && !isHardProcessing) {
+  const shouldSkipReplacementPromptForOnboarding = !hasCompletedOnboarding(user) && session.state === "wait_photo";
+  if (hasWorkingPhoto && !isHardProcessing && !shouldSkipReplacementPromptForOnboarding) {
     const flowType =
       session.state?.startsWith("assistant_")
         ? "assistant"
@@ -5095,7 +5097,7 @@ bot.on("photo", async (ctx) => {
   photos.push(photo.file_id);
 
   const onboardingActive = !hasCompletedOnboarding(user);
-  if (onboardingActive && session.state === "wait_photo" && !session.selected_style_id) {
+  if (onboardingActive && session.state === "wait_photo") {
     await ctx.reply(lang === "ru" ? "Получил фото 👍\n\nСоздаю стикер..." : "Got your photo 👍\n\nCreating sticker...");
     await runFreePhotoStickerFlow(ctx, {
       user,
@@ -12697,6 +12699,7 @@ bot.action(/^onb_send_other_photo(?::(.+))?$/, async (ctx) => {
       pending_photo_file_id: null,
       current_photo_file_id: null,
       photos: [],
+      selected_style_id: null,
       session_rev: (session.session_rev || 1) + 1,
     })
     .eq("id", session.id);
