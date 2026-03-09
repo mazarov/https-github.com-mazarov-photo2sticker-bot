@@ -9904,11 +9904,9 @@ bot.action(/^change_style:([^:]+)(?::(.+))?$/, async (ctx) => {
 
   const sessionRef = formatCallbackSessionRef(session.id, nextRev);
   const backCb = appendSessionRefIfFits(`back_to_sticker_menu:${stickerId}`, sessionRef);
-  const currentMessageId = (ctx.callbackQuery as any)?.message?.message_id as number | undefined;
   const backButtons = [[{ text: lang === "ru" ? "↩️ Назад" : "↩️ Back", callback_data: backCb }]];
   if (defaultPreset) {
     await renderSingleFlowStyleScreen(ctx, lang, { ...session, id: session.id, session_rev: nextRev }, defaultPreset, {
-      menuMessageIdToDelete: currentMessageId,
       extraButtons: backButtons,
     });
     return;
