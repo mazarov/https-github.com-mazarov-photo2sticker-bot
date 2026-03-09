@@ -94,6 +94,48 @@ async function getOnboardingPackContentSet(): Promise<any | null> {
   return data || null;
 }
 
+function getPackContentSetExamplePublicUrl(contentSetId: string): string {
+  const base = (config.supabasePublicStorageUrl || config.supabaseUrl || "").replace(/\/+$/, "");
+  const bucket = config.supabaseStorageBucketExamples || "stickers-examples";
+  return `${base}/storage/v1/object/public/${bucket}/sticker_pack_example/${encodeURIComponent(contentSetId)}/example.webp`;
+}
+
+async function sendOnboardingPackOfferCard(telegramId: number, lang: string, onboardingSet: any | null): Promise<void> {
+  await sendMessage(
+    telegramId,
+    lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",
+    {
+      inline_keyboard: [[
+        { text: lang === "ru" ? "🔥 Сделать набор" : "🔥 Make pack", callback_data: "onb_make_pack" },
+      ]],
+    }
+  );
+
+  if (!onboardingSet?.id) return;
+
+  const packName = getLocalizedPackName(onboardingSet, lang);
+  const packDescription = getLocalizedPackDescription(onboardingSet, lang);
+  const caption = [packName, packDescription].filter(Boolean).join("\n");
+  if (!caption) return;
+
+  const exampleUrl = getPackContentSetExamplePublicUrl(onboardingSet.id);
+  try {
+    const res = await axios.post(`https://api.telegram.org/bot${config.telegramBotToken}/sendPhoto`, {
+      chat_id: telegramId,
+      photo: exampleUrl,
+      caption,
+    });
+    if (!res.data?.ok) {
+      throw new Error(`sendPhoto by url failed: ${JSON.stringify(res.data)}`);
+    }
+    return;
+  } catch (e: any) {
+    console.warn("[onboarding_pack] sendPhoto by url failed:", e?.message || e);
+  }
+
+  await sendMessage(telegramId, caption);
+}
+
 function isConfigEnabled(value: string | null | undefined): boolean {
   const raw = String(value ?? "").trim();
   if (!raw) return false;
@@ -2597,27 +2639,8 @@ async function runJob(job: any) {
 
   if (isOnboardingFirstSticker) {
     const onboardingSet = await getOnboardingPackContentSet();
-    const packName = getLocalizedPackName(onboardingSet, lang);
-    const packDescription = getLocalizedPackDescription(onboardingSet, lang);
     await sendMessage(telegramId, lang === "ru" ? "Вот твой первый стикер 😄" : "Here is your first sticker 😄");
-    if (packName || packDescription) {
-      const intro = lang === "ru"
-        ? "Я могу сделать из твоего фото готовый набор реакций:"
-        : "I can make a ready reaction pack from your photo:";
-      const lines = [intro];
-      if (packName) lines.push(packName);
-      if (packDescription) lines.push(packDescription);
-      await sendMessage(telegramId, lines.join("\n\n"));
-    }
-    await sendMessage(
-      telegramId,
-      lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",
-      {
-        inline_keyboard: [[
-          { text: lang === "ru" ? "🔥 Сделать набор" : "🔥 Make pack", callback_data: "onb_make_pack" },
-        ]],
-      }
-    );
+    await sendOnboardingPackOfferCard(telegramId, lang, onboardingSet);
   }
 
   if (isOnboardingEmotion) {

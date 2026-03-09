@@ -247,6 +247,35 @@ async function getOnboardingPackContentSet(): Promise<any | null> {
   return onboardingSet || null;
 }
 
+async function sendOnboardingPackOfferCard(ctx: any, lang: string, onboardingSet: any | null) {
+  await ctx.reply(
+    lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",
+    {
+      reply_markup: {
+        inline_keyboard: [[{ text: lang === "ru" ? "🔥 Сделать набор" : "🔥 Make pack", callback_data: "onb_make_pack" }]],
+      },
+    }
+  );
+
+  if (!onboardingSet?.id) return;
+
+  const setName = getLocalizedPackName(onboardingSet, lang);
+  const setDescription = getLocalizedPackDescription(onboardingSet, lang);
+  const caption = [setName, setDescription].filter(Boolean).join("\n");
+  if (!caption) return;
+
+  const exampleUrl = await getPackContentSetExampleUrlIfExists(onboardingSet.id);
+  if (exampleUrl) {
+    try {
+      await ctx.replyWithPhoto(exampleUrl, { caption });
+      return;
+    } catch (e: any) {
+      console.warn("[onboarding_pack] replyWithPhoto failed:", e?.message || e);
+    }
+  }
+  await ctx.reply(caption);
+}
+
 async function startOnboardingPackPreview(
   ctx: any,
   user: any,
@@ -4020,26 +4049,8 @@ async function runFreePhotoStickerFlow(
         await supabase.from("users").update({ onboarding_step: 1 }).eq("id", user.id);
       }
       const onboardingSet = await getOnboardingPackContentSet();
-      const packName = getLocalizedPackName(onboardingSet, lang);
-      const packDescription = getLocalizedPackDescription(onboardingSet, lang);
       await ctx.reply(lang === "ru" ? "Вот твой первый стикер 😄" : "Here is your first sticker 😄");
-      if (packName || packDescription) {
-        const intro = lang === "ru"
-          ? "Я могу сделать из твоего фото готовый набор реакций:"
-          : "I can make a ready reaction pack from your photo:";
-        const lines = [intro];
-        if (packName) lines.push(packName);
-        if (packDescription) lines.push(packDescription);
-        await ctx.reply(lines.join("\n\n"));
-      }
-      await ctx.reply(
-        lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",
-        {
-          reply_markup: {
-            inline_keyboard: [[{ text: lang === "ru" ? "🔥 Сделать набор" : "🔥 Make pack", callback_data: "onb_make_pack" }]],
-          },
-        }
-      );
+      await sendOnboardingPackOfferCard(ctx, lang, onboardingSet);
       return;
     }
 
@@ -12898,6 +12909,10 @@ bot.action(/^onb_make_pack(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user?.id) return;
   const lang = user.lang || "en";
+  if (hasCompletedOnboarding(user)) {
+    await handlePackMenuEntry(ctx, { source: "menu", autoPackEntry: false });
+    return;
+  }
   let shouldShowPaywall = Number(user.credits || 0) < 1;
   if (!shouldShowPaywall) {
     const result = await startOnboardingPackPreview(ctx, user, lang);
