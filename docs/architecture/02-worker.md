@@ -85,6 +85,9 @@ sequenceDiagram
 - Для sticker source в `fileData.fileUri` используется storage URL (result/temp), а при `gemini_use_proxy=false` — принудительно temp public URL из `stickers-examples`, чтобы direct Gemini всегда получал внешний доступ к input image.
 - Лог `[GeminiRoute][Worker]` фиксирует активный маршрут (`baseUrl`, `host`, `viaProxy`) при старте worker-процесса.
 - Если включен `subject_profile_enabled` или `object_profile_enabled`/`object_profile_shadow_enabled` и profile для текущего source отсутствует, worker выполняет detector и сохраняет профиль в `sessions` (dual-write в `subject_*` + `object_*` при наличии колонок).
+- Для `generationType=style` при `child_identity_protection_enabled=true` worker использует age-профиль из того же detector-пайплайна (кэш по `source_file_id + source_kind` в `sessions.subject_age_*`).
+- Если по текущему source `subject_age_group=child`, worker переключает identity policy в промпте на child-safe вариант: источник используется как референс позы/общего вида, без репликации точной идентичности лица.
+- Если age confidence ниже `child_identity_confidence_min` (или детектор не уверен/упал), age принудительно считается `unknown`, и применяется обычная identity-строка.
 - Если `subject_postcheck_enabled=true`, worker валидирует число людей на результате и делает один retry с усиленным lock; при повторном mismatch задача завершается ошибкой (с рефандом через общий error-path).
 
 ### 5. Модерация контента
@@ -182,6 +185,7 @@ flowchart TD
 - **Emotion / Motion** — ТОЛЬКО из ранее созданного стикера (CAAC), НИКОГДА из фото
 - **Text** — оверлей поверх стикера, генерация через Gemini не используется
 - Цепочки произвольной длины: style → motion → emotion → motion → ...
+- Для style есть ветка child-safe identity (только при `style + child` и включенном флаге), остальные типы генерации не меняются.
 
 ### Типы генерации
 
