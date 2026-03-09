@@ -82,15 +82,16 @@ error.technical
 | `deleteMessage(chatId, msgId)` | Удалить сообщение |
 | `sendSticker(chatId, buffer, opts)` | Отправить стикер (WebP buffer) |
 
-## `subject-profile.ts` — Детекция субъекта и пола по фото
+## `subject-profile.ts` — Детекция субъекта, пола и возрастной группы
 
-Используется в боте (при смене фото) и в воркере (при генерации). Детектор вызывает Gemini по буферу изображения и возвращает `SubjectProfile`: `subjectMode`, `subjectCount`, `subjectConfidence`, **`subjectGender`** (`male` | `female` | `unknown`).
+Используется в боте (при смене фото) и в воркере (при генерации). Детектор вызывает Gemini по буферу изображения и возвращает `SubjectProfile`: `subjectMode`, `subjectCount`, `subjectConfidence`, **`subjectGender`** (`male` | `female` | `unknown`) и age-поля для source (`subjectAgeGroup`: `child` | `adult` | `unknown`, `subjectAgeConfidence`).
 
 - **`getSubjectWordForPrompt(profile)`** — для паков: возвращает `"man"` или `"woman"` по полю; используется для подстановки плейсхолдера `{subject}` в описаниях сцен.
 - **`detectSubjectProfileFromImageBuffer(buffer, mimeType)`** — вызов детектора, парсинг JSON-ответа.
 - **`ensureSubjectProfileForGeneration`** (в index) / **`ensureSubjectProfileForSource`** (в worker) — при необходимости запускают детектор и сохраняют результат в сессию (`subject_gender`, `object_gender` и др.).
+- Для child identity policy используется тот же pipeline: age-профиль кэшируется по паре source (`source_file_id` + `source_kind`) в `sessions.subject_age_*`; при low confidence age принудительно становится `unknown`.
 
-Конфиг: `subject_profile_enabled`, `object_profile_enabled`, `object_profile_shadow_enabled` в `app_config`. Подробно: [11-subject-profile-and-gender.md](11-subject-profile-and-gender.md).
+Конфиг: `subject_profile_enabled`, `object_profile_enabled`, `object_profile_shadow_enabled`, `child_identity_protection_enabled`, `child_identity_confidence_min` в `app_config`. Подробно: [11-subject-profile-and-gender.md](11-subject-profile-and-gender.md).
 
 ## `app-config.ts` — Runtime-конфигурация
 

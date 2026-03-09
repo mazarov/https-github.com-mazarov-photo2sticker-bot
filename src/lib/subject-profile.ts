@@ -5,6 +5,7 @@ import { getGeminiGenerateContentUrlRuntime } from "./gemini-route";
 
 export type SubjectMode = "single" | "multi" | "unknown";
 export type SubjectSourceKind = "photo" | "sticker";
+export type SubjectAgeGroup = "child" | "adult" | "unknown";
 
 /** Пол субъекта на фото (для single). Используется для подстановки man/woman в промпт паков. */
 export type SubjectGender = "male" | "female" | "unknown";
@@ -15,6 +16,14 @@ export interface SubjectProfile {
   subjectConfidence: number | null;
   /** Определён только при subjectMode === "single". Для multi — null. */
   subjectGender: SubjectGender | null;
+  sourceFileId: string;
+  sourceKind: SubjectSourceKind;
+  detectedAt: string;
+}
+
+export interface SubjectAgeProfile {
+  subjectAgeGroup: SubjectAgeGroup;
+  subjectAgeConfidence: number | null;
   sourceFileId: string;
   sourceKind: SubjectSourceKind;
   detectedAt: string;
@@ -82,6 +91,13 @@ export function normalizeSubjectGender(value: unknown): SubjectGender | null {
   if (normalized === "female" || normalized === "woman") return "female";
   if (normalized === "unknown") return "unknown";
   return null;
+}
+
+export function normalizeSubjectAgeGroup(value: unknown): SubjectAgeGroup {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "child") return "child";
+  if (normalized === "adult") return "adult";
+  return "unknown";
 }
 
 /** Возвращает слово для подстановки в промпт сцен пака: "man" или "woman". При unknown или multi — "man" по умолчанию. */
@@ -325,22 +341,33 @@ async function getLowConfidenceFallbackMode(): Promise<SubjectMode> {
   return normalizeSubjectMode(await getAppConfig("subject_multi_low_confidence_fallback", "unknown"));
 }
 
+async function getSubjectAgeConfidenceMin(): Promise<number> {
+  const value = await getAppConfig("child_identity_confidence_min", "0.75");
+  return parseNumberConfig(value, 0.75);
+}
+
 async function hardenDetectedProfile(detected: {
   objectMode: SubjectMode;
   objectCount: number | null;
   objectConfidence: number | null;
   objectGender: SubjectGender | null;
+  objectAgeGroup: SubjectAgeGroup;
+  objectAgeConfidence: number | null;
   objectInstances: DetectorObjectInstance[];
 }): Promise<{
   subjectMode: SubjectMode;
   subjectCount: number | null;
   subjectConfidence: number | null;
   subjectGender: SubjectGender | null;
+  subjectAgeGroup: SubjectAgeGroup;
+  subjectAgeConfidence: number | null;
 }> {
   let subjectMode = normalizeSubjectMode(detected.objectMode);
   let subjectCount = normalizeCount(detected.objectCount);
   let subjectConfidence = normalizeConfidence(detected.objectConfidence);
   let subjectGender: SubjectGender | null = normalizeSubjectGender(detected.objectGender);
+  let subjectAgeGroup: SubjectAgeGroup = normalizeSubjectAgeGroup(detected.objectAgeGroup);
+  const subjectAgeConfidence = normalizeConfidence(detected.objectAgeConfidence);
 
   const deduped = dedupInstances(detected.objectInstances);
   const minAreaRatio = await getObjectMinAreaRatio();
@@ -403,8 +430,15 @@ async function hardenDetectedProfile(detected: {
   if (subjectMode !== "single") {
     subjectGender = null;
   }
+  const ageMinConfidence = await getSubjectAgeConfidenceMin();
+  if (
+    subjectAgeGroup !== "unknown" &&
+    (subjectAgeConfidence === null || subjectAgeConfidence < ageMinConfidence)
+  ) {
+    subjectAgeGroup = "unknown";
+  }
 
-  return { subjectMode, subjectCount, subjectConfidence, subjectGender };
+  return { subjectMode, subjectCount, subjectConfidence, subjectGender, subjectAgeGroup, subjectAgeConfidence };
 }
 
 function extractTextFromGeminiResponse(data: any): string {
@@ -421,6 +455,8 @@ function parseDetectorPayload(raw: string): {
   objectCount: number | null;
   objectConfidence: number | null;
   objectGender: SubjectGender | null;
+  objectAgeGroup: SubjectAgeGroup;
+  objectAgeConfidence: number | null;
   objectInstances: DetectorObjectInstance[];
 } {
   const text = (raw || "").trim();
@@ -466,6 +502,22 @@ function parseDetectorPayload(raw: string): {
   let objectGender = normalizeSubjectGender(
     parsed?.subject_gender ?? parsed?.subjectGender ?? parsed?.object_gender ?? parsed?.objectGender ?? parsed?.gender
   );
+  let objectAgeGroup = normalizeSubjectAgeGroup(
+    parsed?.subject_age_group ??
+      parsed?.subjectAgeGroup ??
+      parsed?.object_age_group ??
+      parsed?.objectAgeGroup ??
+      parsed?.age_group ??
+      parsed?.ageGroup
+  );
+  let objectAgeConfidence = normalizeConfidence(
+    parsed?.subject_age_confidence ??
+      parsed?.subjectAgeConfidence ??
+      parsed?.object_age_confidence ??
+      parsed?.objectAgeConfidence ??
+      parsed?.age_confidence ??
+      parsed?.ageConfidence
+  );
   const rawInstances: unknown[] = Array.isArray(parsed?.object_instances)
     ? parsed.object_instances
     : Array.isArray(parsed?.objectInstances)
@@ -498,6 +550,14 @@ function parseDetectorPayload(raw: string): {
       const g = normalizeSubjectGender(genderMatch[1]);
       if (g) objectGender = g;
     }
+    const ageMatch = text.match(/\b(child|adult|unknown)\b/i);
+    if (ageMatch?.[1]) {
+      objectAgeGroup = normalizeSubjectAgeGroup(ageMatch[1]);
+    }
+    const ageConfidenceMatch = text.match(/age[_\s-]*confidence[^0-9]{0,8}(0(?:\.[0-9]+)?|1(?:\.0+)?)/i);
+    if (ageConfidenceMatch?.[1]) {
+      objectAgeConfidence = normalizeConfidence(Number(ageConfidenceMatch[1]));
+    }
   }
 
   if (objectMode === "unknown") {
@@ -510,7 +570,7 @@ function parseDetectorPayload(raw: string): {
     objectGender = null;
   }
 
-  return { objectMode, objectCount, objectConfidence, objectGender, objectInstances };
+  return { objectMode, objectCount, objectConfidence, objectGender, objectAgeGroup, objectAgeConfidence, objectInstances };
 }
 
 const DETECTOR_TIMEOUT_MS = 45000;
@@ -525,6 +585,8 @@ export async function detectSubjectProfileFromImageBuffer(
   subjectCount: number | null;
   subjectConfidence: number | null;
   subjectGender: SubjectGender | null;
+  subjectAgeGroup: SubjectAgeGroup;
+  subjectAgeConfidence: number | null;
 }> {
   try {
     const model = await getAppConfig("gemini_model_subject_detector", "gemini-2.0-flash");
@@ -532,12 +594,14 @@ export async function detectSubjectProfileFromImageBuffer(
       "Count main prominent objects visible in the source image.",
       "Object can be a person, animal, mascot, or character-like entity.",
       "Return strict JSON only with keys:",
-      '{"object_mode":"single|multi|unknown","object_count":number|null,"object_confidence":0..1,"subject_gender":"male|female|unknown","object_instances":[{"bbox":{"x":0..1,"y":0..1,"width":0..1,"height":0..1},"area_ratio":0..1,"edge_touch":true|false,"confidence":0..1,"is_primary_candidate":true|false}]}',
+      '{"object_mode":"single|multi|unknown","object_count":number|null,"object_confidence":0..1,"subject_gender":"male|female|unknown","subject_age_group":"child|adult|unknown","subject_age_confidence":0..1|null,"object_instances":[{"bbox":{"x":0..1,"y":0..1,"width":0..1,"height":0..1},"area_ratio":0..1,"edge_touch":true|false,"confidence":0..1,"is_primary_candidate":true|false}]}',
       "Rules:",
       "- single = exactly 1 main object",
       "- multi = 2 or more main objects",
       "- unknown if cannot decide reliably",
       "- subject_gender: REQUIRED when object_mode is single. Use male or female for the perceived gender of the main person; use unknown only if the main object is not a person (e.g. animal) or gender cannot be determined. When object_mode is multi or unknown, set subject_gender to null. Always output the subject_gender key in JSON for single mode.",
+      "- subject_age_group: child when a person clearly appears to be a minor; adult when clearly not a minor; unknown when uncertain or non-person main object.",
+      "- subject_age_confidence: confidence for subject_age_group in range 0..1, or null when unknown.",
       "- Ignore tiny peripheral fragments touching edges if they are not primary objects",
       "- Do not count reflections, posters, statues, drawings, toy figurines as separate main objects",
       "- object_instances may be empty if uncertain",
@@ -583,7 +647,14 @@ export async function detectSubjectProfileFromImageBuffer(
 
         const rawText = extractTextFromGeminiResponse(response.data);
         if (!rawText) {
-          return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null, subjectGender: null };
+          return {
+            subjectMode: "unknown",
+            subjectCount: null,
+            subjectConfidence: null,
+            subjectGender: null,
+            subjectAgeGroup: "unknown",
+            subjectAgeConfidence: null,
+          };
         }
         const result = await hardenDetectedProfile(parseDetectorPayload(rawText));
         if (result.subjectMode === "single" && result.subjectGender === null) {
@@ -612,7 +683,14 @@ export async function detectSubjectProfileFromImageBuffer(
     throw lastError;
   } catch (err: any) {
     console.warn("[subject-profile] detector failed:", err?.response?.data?.error?.message || err?.message || err);
-    return { subjectMode: "unknown", subjectCount: null, subjectConfidence: null, subjectGender: null };
+    return {
+      subjectMode: "unknown",
+      subjectCount: null,
+      subjectConfidence: null,
+      subjectGender: null,
+      subjectAgeGroup: "unknown",
+      subjectAgeConfidence: null,
+    };
   }
 }
 
