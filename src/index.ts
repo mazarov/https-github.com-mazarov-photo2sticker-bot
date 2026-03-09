@@ -1288,6 +1288,7 @@ function deleteEarlyProgress(ctx: any, messageId?: number | null) {
 
 // Shared composition/background rules — same for single sticker and pack (unified prompt flow)
 const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
+const COMPOSITION_SUFFIX_STYLE = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n3. Style MUST follow the style description above (from selected style prompt hint) as the highest-priority artistic target. Do not keep or inherit the previous sticker art style.`;
 
 // Pack only: composition without magenta, 15%, and full-visibility rule (all in CRITICAL RULES FOR THE GRID in worker).
 const COMPOSITION_SUFFIX_PACK = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
@@ -1673,7 +1674,9 @@ async function startGeneration(
   if (options.generationType === "emotion") {
     options.promptFinal = sanitizeEmotionPrompt(options.promptFinal);
   }
-  options.promptFinal = ensureSingleSuffix(options.promptFinal, COMPOSITION_SUFFIX);
+  const compositionSuffix =
+    options.generationType === "style" ? COMPOSITION_SUFFIX_STYLE : COMPOSITION_SUFFIX;
+  options.promptFinal = ensureSingleSuffix(options.promptFinal, compositionSuffix);
 
   console.log("=== startGeneration ===");
   console.log("user.id:", user?.id);
