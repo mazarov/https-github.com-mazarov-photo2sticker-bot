@@ -3706,7 +3706,9 @@ async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
 }
 
 function getOnboardingPaywallKeyboard(lang: string, user: any, sessionRef?: string | null) {
-  type InlineBtn = { text: string; callback_data?: string; url?: string };
+  type OnboardingInlineBtn =
+    | { text: string; callback_data: string }
+    | { text: string; url: string };
   const isAdmin = config.adminIds.includes(user.telegram_id);
   const availablePacks = CREDIT_PACKS.filter((p: any) =>
     !p.hidden &&
@@ -3715,7 +3717,7 @@ function getOnboardingPaywallKeyboard(lang: string, user: any, sessionRef?: stri
     (!p.trialOnly || !user.has_purchased)
   );
   const unit = lang === "ru" ? "стикеров" : "stickers";
-  const rows: InlineBtn[][] = availablePacks.map((pack: any) => {
+  const rows: OnboardingInlineBtn[][] = availablePacks.map((pack: any) => {
     const label = lang === "ru" ? pack.label_ru : pack.label_en;
     const totalCredits = getPackTotalCredits(pack);
     return [{
