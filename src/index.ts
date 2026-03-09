@@ -10647,6 +10647,17 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
       if (newFileId) {
         await supabase.from("stickers").update({ telegram_file_id: newFileId }).eq("id", newSticker.id);
       }
+      sendNotification({
+        type: "new_sticker",
+        message: [
+          `✅ Генерация завершена (${action})`,
+          `👤 @${user.username || telegramId} (${telegramId})`,
+          `💰 Кредиты: ${user.credits}`,
+          `🎨 Стиль: ${session.selected_style_id || "-"}`,
+        ].join("\n"),
+        sourceImageBuffer: fileBuffer,
+        resultImageBuffer: stickerBuffer,
+      }).catch(console.error);
       const replyMarkup = await buildStickerButtons(lang, newSticker.id);
       await ctx.reply(lang === "ru" ? "Фон удалён! Что дальше?" : "Background removed! What's next?", { reply_markup: replyMarkup });
     } catch (err: any) {
