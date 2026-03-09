@@ -276,6 +276,12 @@ async function sendOnboardingPackOfferCard(ctx: any, lang: string, onboardingSet
   await ctx.reply(caption);
 }
 
+function getOnboardingPackProgressText(lang: string): string {
+  return lang === "ru"
+    ? "🎨 Генерирую эмоции\n✨ Подготавливаю стикеры\n📦 Собираю стикерпак"
+    : "🎨 Generating emotions\n✨ Preparing stickers\n📦 Assembling sticker pack";
+}
+
 async function startOnboardingPackPreview(
   ctx: any,
   user: any,
@@ -411,7 +417,7 @@ async function startOnboardingPackPreview(
     env: config.appEnv,
   });
 
-  const progressMsg = await ctx.reply(await getText(lang, "pack.progress_generating"));
+  const progressMsg = await ctx.reply(getOnboardingPackProgressText(lang));
   if (progressMsg?.message_id && ctx.chat?.id) {
     await supabase
       .from("sessions")
@@ -15728,8 +15734,14 @@ bot.on("successful_payment", async (ctx) => {
       return;
     }
 
-    await ctx.reply(lang === "ru" ? "Создаю твой стикерпак..." : "Creating your sticker pack...");
-    await handlePackMenuEntry(ctx, { source: "menu", autoPackEntry: false });
+    const startResult = await startOnboardingPackPreview(
+      ctx,
+      { ...user, credits: nextCredits, has_purchased: true },
+      lang
+    );
+    if (startResult !== "started") {
+      await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    }
     return;
   }
 
