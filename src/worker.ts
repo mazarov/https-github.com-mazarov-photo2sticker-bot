@@ -2228,30 +2228,54 @@ async function runJob(job: any) {
   };
 
   let geminiRes;
+  let lastModelStage = "primary";
+  const callGeminiWithStage = async (stage: string) => {
+    lastModelStage = stage;
+    return await callGeminiImage!(promptForGeneration, activeModel, stage);
+  };
   try {
-    geminiRes = await callGeminiImage(promptForGeneration, activeModel, "primary");
+    geminiRes = await callGeminiWithStage("primary");
   } catch (_err: any) {
     let err = _err;
     if (needsPublicSourceUrl && isSourceUrlFetchError(err)) {
-      try {
-        const retryTemp = await uploadTempStickerSourceAndGetPublicUrl(
-          fileBuffer,
-          session,
-          `${sourceFileId}_retry`,
-          mimeType
-        );
-        sourceFileUrl = retryTemp.publicUrl;
-        console.warn("[GeminiRetry] source URL fetch failed, retrying with refreshed temp URL:", {
-          sessionId: session.id,
-          jobId: job.id,
-          generationType,
-          oldSourceUrl: resolvedSource.sourceFileUrl,
-          newSourceUrl: sourceFileUrl,
-          newStoragePath: retryTemp.storagePath,
-        });
-        geminiRes = await callGeminiImage(promptForGeneration, activeModel, "primary_retry_source_url");
-      } catch (retryErr: any) {
-        err = retryErr;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const retryTemp = await uploadTempStickerSourceAndGetPublicUrl(
+            fileBuffer,
+            session,
+            `${sourceFileId}_retry_${attempt}`,
+            mimeType
+          );
+          sourceFileUrl = retryTemp.publicUrl;
+          console.warn("[GeminiRetry] source URL fetch failed, retrying with refreshed temp URL:", {
+            sessionId: session.id,
+            jobId: job.id,
+            generationType,
+            attempt,
+            oldSourceUrl: resolvedSource.sourceFileUrl,
+            newSourceUrl: sourceFileUrl,
+            newStoragePath: retryTemp.storagePath,
+          });
+
+          const sourceReady = await waitForPublicUrlReady(sourceFileUrl, "source_file_url_retry", {
+            maxAttempts: 6,
+            baseDelayMs: 500,
+          });
+          if (!sourceReady) {
+            throw new Error("Source public URL is not reachable for Gemini after refresh");
+          }
+
+          geminiRes = await callGeminiWithStage(`primary_retry_source_url_${attempt}`);
+          break;
+        } catch (retryErr: any) {
+          err = retryErr;
+          if (!isSourceUrlFetchError(retryErr)) {
+            break;
+          }
+          if (attempt < 3) {
+            await sleep(700 * attempt);
+          }
+        }
       }
     }
 
@@ -2270,7 +2294,7 @@ async function runJob(job: any) {
     if (isSingleFlowGeneration) {
       console.error("[single.gen.worker] model_error", {
         ...singleTrace,
-        stage: "primary",
+        stage: lastModelStage,
         model: activeModel,
         status: errorStatus || null,
         code: err.code || null,
@@ -2299,18 +2323,23 @@ async function runJob(job: any) {
 
   // Check for content moderation block
   const blockReason = geminiRes.data?.promptFeedback?.blockReason;
-  if (blockReason) {
-    console.error("Gemini blocked:", blockReason);
+  const finishReason = String(geminiRes.data?.candidates?.[0]?.finishReason || "").toUpperCase();
+  const isProhibitedByFinishReason = finishReason === "PROHIBITED_CONTENT";
+  if (blockReason || isProhibitedByFinishReason) {
+    const effectiveBlockReason = blockReason || finishReason || "PROHIBITED_CONTENT";
+    const moderationSource = blockReason ? "promptFeedback.blockReason" : "candidates[0].finishReason";
+    console.error("Gemini blocked:", effectiveBlockReason, { moderationSource });
     await sendAlert({
       type: "generation_failed",
-      message: `Gemini blocked: ${blockReason}`,
+      message: `Gemini blocked: ${effectiveBlockReason}`,
       details: { 
         user: `@${user?.username || telegramId}`,
         sessionId: session.id, 
         generationType,
         styleId: session.selected_style_id || "-",
         userInput: (session.user_input || "").slice(0, 100),
-        blockReason,
+        blockReason: effectiveBlockReason,
+        moderationSource,
       },
     });
 
