@@ -1350,9 +1350,11 @@ Preserve natural skin texture, realistic lighting, camera-like details, and phot
   const transferLine = options?.includeTransferLine
     ? "Apply STRONG style transfer to the target style.\n"
     : "";
+  const stylizeCore = options?.includeTransferLine
+    ? "Keep identity (facial features/person) but DO NOT preserve source artistic rendering.\nRe-render the image fully in the target style language (linework, shading, proportions, color treatment)."
+    : "Keep identity (facial features/person).";
   return `[RENDER MODE: STYLIZE]
-${transferLine}Keep identity (facial features/person) but DO NOT preserve source artistic rendering.
-Re-render the image fully in the target style language (linework, shading, proportions, color treatment).`;
+${transferLine}${stylizeCore}`;
 }
 
 function applyRenderModePolicy(prompt: string, mode: RenderMode, options?: { includeTransferLine?: boolean }): string {
