@@ -134,6 +134,7 @@ erDiagram
 | `mood` | text | Опционально: для автоподбора (romance, everyday, humor, …) |
 | `subject_mode` | text | Совместимость набора: `single` / `multi` / `any` |
 | `cluster` | boolean | Если true — пак показывается в Hero на кластерных страницах (пилюли). Файлы: pack/content/{id}/1..9.webp |
+| `onboarding` | boolean | Если true — набор может использоваться в onboarding-экране "ещё реакции" после первого стикера |
 | `segment_id` | text | FK → pack_segments (группа для UI, см. 19-02-pack-2) |
 
 **Сегменты (pack_segments):** таблица групп для карусели: id (reactions, sarcasm, home, events, affection_support, after_dark, boundaries), name_ru, name_en, sort_order. Карусель сортируется по sort_order сегмента, затем по sort_order набора.

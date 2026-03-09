@@ -56,6 +56,44 @@ async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+let onboardingPackSetCache: { data: any | null; timestamp: number } | null = null;
+const ONBOARDING_PACK_SET_CACHE_TTL = 5 * 60 * 1000;
+
+function getLocalizedPackName(pack: any, lang: string): string {
+  if (!pack) return "";
+  return lang === "ru"
+    ? String(pack.name_ru || pack.name_en || "")
+    : String(pack.name_en || pack.name_ru || "");
+}
+
+function getLocalizedPackDescription(pack: any, lang: string): string {
+  if (!pack) return "";
+  return lang === "ru"
+    ? String(pack.carousel_description_ru || pack.carousel_description_en || "")
+    : String(pack.carousel_description_en || pack.carousel_description_ru || "");
+}
+
+async function getOnboardingPackContentSet(): Promise<any | null> {
+  const now = Date.now();
+  if (onboardingPackSetCache && now - onboardingPackSetCache.timestamp < ONBOARDING_PACK_SET_CACHE_TTL) {
+    return onboardingPackSetCache.data;
+  }
+  const { data, error } = await supabase
+    .from(config.packContentSetsTable)
+    .select("id, name_ru, name_en, carousel_description_ru, carousel_description_en, sort_order")
+    .eq("is_active", true)
+    .eq("onboarding", true)
+    .order("sort_order", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn("[onboarding_pack] load error:", error.message);
+    return onboardingPackSetCache?.data || null;
+  }
+  onboardingPackSetCache = { data: data || null, timestamp: now };
+  return data || null;
+}
+
 function isConfigEnabled(value: string | null | undefined): boolean {
   const raw = String(value ?? "").trim();
   if (!raw) return false;
@@ -2558,13 +2596,26 @@ async function runJob(job: any) {
   }
 
   if (isOnboardingFirstSticker) {
+    const onboardingSet = await getOnboardingPackContentSet();
+    const packName = getLocalizedPackName(onboardingSet, lang);
+    const packDescription = getLocalizedPackDescription(onboardingSet, lang);
     await sendMessage(telegramId, lang === "ru" ? "Вот твой первый стикер 😄" : "Here is your first sticker 😄");
-    await sendMessage(
-      telegramId,
-      lang === "ru"
-        ? "Я могу сделать из твоего фото еще реакции:\n\n😂 смех\n😡 злость\n🥰 любовь\n🤯 шок\n😎 крутой\n😭 плач"
-        : "I can make more reactions from your photo:\n\n😂 laugh\n😡 angry\n🥰 love\n🤯 shock\n😎 cool\n😭 cry"
-    );
+    if (packName || packDescription) {
+      const intro = lang === "ru"
+        ? "Я могу сделать из твоего фото готовый набор реакций:"
+        : "I can make a ready reaction pack from your photo:";
+      const lines = [intro];
+      if (packName) lines.push(packName);
+      if (packDescription) lines.push(packDescription);
+      await sendMessage(telegramId, lines.join("\n\n"));
+    } else {
+      await sendMessage(
+        telegramId,
+        lang === "ru"
+          ? "Я могу сделать из твоего фото ещё реакции."
+          : "I can make more reactions from your photo."
+      );
+    }
     await sendMessage(
       telegramId,
       lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",

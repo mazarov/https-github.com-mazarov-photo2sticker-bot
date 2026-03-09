@@ -97,6 +97,7 @@ stateDiagram-v2
   - `pack_{credits}_{price}` (кнопки оплаты в onboarding теперь берутся из текущих payment-пакетов с фильтром `show_in_onboarding`)
   - `onb_send_other_photo`
   - `onb_add_stickerpack`
+- Текст шага "ещё реакции" после первого бесплатного стикера берётся из `pack_content_sets` (по флагу `onboarding=true`, локаль: `name_ru/name_en` + `carousel_description_ru/carousel_description_en`).
 
 ### Меню (Reply Keyboard)
 

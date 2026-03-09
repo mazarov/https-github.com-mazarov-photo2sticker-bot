@@ -227,6 +227,26 @@ function clearPackContentSetsCache(): void {
   packContentSetsCache = null;
 }
 
+function getLocalizedPackName(pack: any, lang: string): string {
+  if (!pack) return "";
+  return lang === "ru"
+    ? String(pack.name_ru || pack.name_en || "")
+    : String(pack.name_en || pack.name_ru || "");
+}
+
+function getLocalizedPackDescription(pack: any, lang: string): string {
+  if (!pack) return "";
+  return lang === "ru"
+    ? String(pack.carousel_description_ru || pack.carousel_description_en || "")
+    : String(pack.carousel_description_en || pack.carousel_description_ru || "");
+}
+
+async function getOnboardingPackContentSet(): Promise<any | null> {
+  const activeSets = await getActivePackContentSets();
+  const onboardingSet = activeSets.find((row: any) => row?.onboarding === true);
+  return onboardingSet || null;
+}
+
 /** Ensure pack id is unique in pack_content_sets_test; append _v2, _v3 if needed. */
 async function ensureUniquePackId(spec: PackSpecRow): Promise<PackSpecRow> {
   const normalized = normalizeSpecSegmentId(spec);
@@ -3829,12 +3849,25 @@ async function runFreePhotoStickerFlow(
       if (Number(user.onboarding_step || 0) < 1) {
         await supabase.from("users").update({ onboarding_step: 1 }).eq("id", user.id);
       }
+      const onboardingSet = await getOnboardingPackContentSet();
+      const packName = getLocalizedPackName(onboardingSet, lang);
+      const packDescription = getLocalizedPackDescription(onboardingSet, lang);
       await ctx.reply(lang === "ru" ? "Вот твой первый стикер 😄" : "Here is your first sticker 😄");
-      await ctx.reply(
-        lang === "ru"
-          ? "Я могу сделать из твоего фото еще реакции:\n\n😂 смех\n😡 злость\n🥰 любовь\n🤯 шок\n😎 крутой\n😭 плач"
-          : "I can make more reactions from your photo:\n\n😂 laugh\n😡 angry\n🥰 love\n🤯 shock\n😎 cool\n😭 cry"
-      );
+      if (packName || packDescription) {
+        const intro = lang === "ru"
+          ? "Я могу сделать из твоего фото готовый набор реакций:"
+          : "I can make a ready reaction pack from your photo:";
+        const lines = [intro];
+        if (packName) lines.push(packName);
+        if (packDescription) lines.push(packDescription);
+        await ctx.reply(lines.join("\n\n"));
+      } else {
+        await ctx.reply(
+          lang === "ru"
+            ? "Я могу сделать из твоего фото ещё реакции."
+            : "I can make more reactions from your photo."
+        );
+      }
       await ctx.reply(
         lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",
         {
