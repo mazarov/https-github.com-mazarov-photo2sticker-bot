@@ -1564,6 +1564,14 @@ async function applySubjectLockToPrompt(
   return appendSubjectLock(prompt, lockBlock);
 }
 
+function getAlertSourceFileId(
+  session: any,
+  generationType: "style" | "emotion" | "motion" | "text" | "replace_subject"
+): string | undefined {
+  const { sourceFileId } = resolveGenerationSource(session, generationType);
+  return sourceFileId || undefined;
+}
+
 function normalizePackSetSubjectMode(value: any): "single" | "multi" | "any" {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "single") return "single";
@@ -1976,7 +1984,7 @@ async function startGeneration(
     type: "generation_started",
     message: "New generation",
     details: alertDetails,
-    photoFileId: session.current_photo_file_id || undefined,
+    photoFileId: getAlertSourceFileId(session, options.generationType),
   }).catch(console.error);
 
   await sendProgressStart(ctx, session.id, lang, options.earlyProgressMessageId);
@@ -15093,7 +15101,11 @@ bot.on("successful_payment", async (ctx) => {
               emotion: session.selected_emotion || session.emotion_prompt || "-",
               prompt: (session.prompt_final || "").slice(0, 200),
             },
-            photoFileId: session.current_photo_file_id || undefined,
+            photoFileId: getAlertSourceFileId(
+              session,
+              (session.pending_generation_type || session.generation_type || "style") as
+                "style" | "emotion" | "motion" | "text" | "replace_subject"
+            ),
           }).catch(console.error);
 
           await sendProgressStart(ctx, session.id, lang);
