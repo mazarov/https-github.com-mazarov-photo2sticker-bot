@@ -1902,14 +1902,15 @@ async function runJob(job: any) {
             detectedAt: subjectProfile.detectedAt,
           }
         : null);
+    const subjectAgeGroup = ageProfile?.subjectAgeGroup || "unknown";
     const identityRuleVariant: "default_identity" | "child_pose_only" =
-      ageProfile?.subjectAgeGroup === "child" ? "child_pose_only" : "default_identity";
+      subjectAgeGroup !== "adult" ? "child_pose_only" : "default_identity";
     promptForGeneration = applyStyleChildIdentityRule(promptForGeneration, identityRuleVariant);
     console.log("[style.identity_policy.worker]", {
       generationType,
       sourceKind,
       sourceFileId: `${sourceFileId.slice(0, 30)}...`,
-      subjectAgeGroup: ageProfile?.subjectAgeGroup || "unknown",
+      subjectAgeGroup,
       subjectAgeConfidence: ageProfile?.subjectAgeConfidence ?? null,
       identityRuleVariant,
     });

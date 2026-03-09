@@ -2,7 +2,7 @@
 
 ## Goal
 
-When source contains a child, `generationType=style` must avoid identity replication.
+When source age is not confidently adult, `generationType=style` must avoid identity replication.
 
 - Default style prompt rule:
   - `Keep identity (facial features/person).`
@@ -64,7 +64,7 @@ For `generationType=style`:
 
 1. Resolve source via `resolveGenerationSource`.
 2. Resolve age profile for that source.
-3. If `subject_age_group === child`:
+3. If `subject_age_group !== adult` (`child` or `unknown`):
    - inject child-safe identity lines into style prompt.
 4. Else:
    - keep current identity line for style.
@@ -100,7 +100,7 @@ No personal data in logs.
 
 1. `style + child` => child-safe lines are present.
 2. `style + adult` => default identity line is present.
-3. `style + unknown` => default identity line is present.
+3. `style + unknown` => child-safe lines are present.
 4. `emotion/motion` with child source => no prompt changes from this feature.
 5. Retry flow preserves same age decision for same source.
 6. Photo source and sticker source both supported.
@@ -108,7 +108,7 @@ No personal data in logs.
 
 ## Done Criteria
 
-- Child-safe lines appear only for `style + child`.
+- Child-safe lines appear for `style + child|unknown`, default line only for `style + adult`.
 - No behavior regression in other generation types.
 - Flag-based rollout works.
 - Logs clearly show selected identity variant.

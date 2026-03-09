@@ -1813,14 +1813,15 @@ async function startGeneration(
               detectedAt: ensured.detectedAt,
             }
           : null);
-      const isChild = ageProfile?.subjectAgeGroup === "child";
-      const identityRuleVariant: "default_identity" | "child_pose_only" = isChild ? "child_pose_only" : "default_identity";
+      const subjectAgeGroup = ageProfile?.subjectAgeGroup || "unknown";
+      const useChildSafeVariant = subjectAgeGroup !== "adult";
+      const identityRuleVariant: "default_identity" | "child_pose_only" = useChildSafeVariant ? "child_pose_only" : "default_identity";
       options.promptFinal = applyStyleChildIdentityRule(options.promptFinal, identityRuleVariant);
       console.log("[style.identity_policy.api]", {
         generationType: options.generationType,
         sourceKind,
         sourceFileId: `${sourceFileId.slice(0, 30)}...`,
-        subjectAgeGroup: ageProfile?.subjectAgeGroup || "unknown",
+        subjectAgeGroup,
         subjectAgeConfidence: ageProfile?.subjectAgeConfidence ?? null,
         identityRuleVariant,
       });
