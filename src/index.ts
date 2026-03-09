@@ -5211,14 +5211,46 @@ async function handlePackMenuEntry(
       isResumablePackSessionState(existingPackSession.state) &&
       getPackContentSetsForTemplate(contentSets, getEffectivePackTemplateId(existingPackSession)).length > 0;
     if (canResumeCarousel) {
-      if (existingPackSession.state === "wait_pack_carousel") {
-        await renderPackCarouselForSession(ctx, existingPackSession, lang);
+      let resumableSession = existingPackSession;
+      const resumePhoto = existingPhoto || null;
+      const sessionPhoto = existingPackSession.current_photo_file_id || null;
+      const needsPhotoSync = Boolean(resumePhoto && sessionPhoto !== resumePhoto);
+      if (needsPhotoSync) {
+        const nextRev = (existingPackSession.session_rev || 1) + 1;
+        await supabase
+          .from("sessions")
+          .update({
+            current_photo_file_id: resumePhoto,
+            photos: [resumePhoto],
+            flow_kind: "pack",
+            is_active: true,
+            session_rev: nextRev,
+          })
+          .eq("id", existingPackSession.id);
+        resumableSession = {
+          ...existingPackSession,
+          current_photo_file_id: resumePhoto,
+          photos: [resumePhoto],
+          flow_kind: "pack",
+          is_active: true,
+          session_rev: nextRev,
+        };
+        console.log("[pack_flow] resume session photo synced from latest source", {
+          userId: user.id,
+          sessionId: existingPackSession.id,
+          previousPhoto: sessionPhoto,
+          syncedPhoto: resumePhoto,
+        });
+      }
+
+      if (resumableSession.state === "wait_pack_carousel") {
+        await renderPackCarouselForSession(ctx, resumableSession, lang);
         return;
       }
-      if (existingPackSession.state === "wait_pack_preview_payment") {
-        await sendPackStyleSelectionStep(ctx, lang, existingPackSession.selected_style_id, undefined, {
+      if (resumableSession.state === "wait_pack_preview_payment") {
+        await sendPackStyleSelectionStep(ctx, lang, resumableSession.selected_style_id, undefined, {
           useBackButton: true,
-          sessionId: existingPackSession.id,
+          sessionId: resumableSession.id,
         });
         return;
       }
