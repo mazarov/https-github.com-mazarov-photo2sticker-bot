@@ -12,6 +12,7 @@ import { getText } from "./lib/texts";
 import { sendAlert, sendNotification } from "./lib/alerts";
 import { getFilePath, downloadFile, sendSticker, getStickerSet } from "./lib/telegram";
 import { addWhiteBorder, addTextToSticker, assembleGridTo1024 } from "./lib/image-utils";
+import { buildInlineImagePart } from "./lib/gemini-image-part";
 import { getAppConfig } from "./lib/app-config";
 import { getGeminiGenerateContentUrlRuntime, getGeminiRouteInfoRuntime } from "./lib/gemini-route";
 import { sendYandexConversion, getMetrikaTargetForPack } from "./lib/yandex-metrika";
@@ -1821,7 +1822,7 @@ async function startGeneration(
             }
           : null);
       const subjectAgeGroup = ageProfile?.subjectAgeGroup || "unknown";
-      const useChildSafeVariant = subjectAgeGroup !== "adult";
+      const useChildSafeVariant = sourceKind === "sticker" || subjectAgeGroup !== "adult";
       const identityRuleVariant: "default_identity" | "child_pose_only" = useChildSafeVariant ? "child_pose_only" : "default_identity";
       options.promptFinal = applyStyleChildIdentityRule(options.promptFinal, identityRuleVariant);
       console.log("[style.identity_policy.api]", {
@@ -10576,9 +10577,28 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
     return;
   }
 
+  const sendActionGenerationStartedAlert = (goal: string, sourcePhotoFileId?: string | null) => {
+    sendAlert({
+      type: "generation_started",
+      message: "Generation action selected",
+      details: {
+        mode: "✋ manual",
+        user: `@${user.username || user.telegram_id}`,
+        goal,
+        action,
+        entrypoint: "action_menu",
+      },
+      photoFileId: sourcePhotoFileId || undefined,
+    }).catch(console.error);
+  };
+
   const nextRev = (session.session_rev || 1) + 1;
 
   if (action === "photo_sticker" || action === "remove_bg") {
+    sendActionGenerationStartedAlert(
+      lang === "ru" ? "Фото в стикер (меню действий)" : "Photo to sticker (action menu)",
+      photoFileId
+    );
     const isRu = lang === "ru";
     try {
       await ctx.reply(isRu ? "⏳ Убираю фон..." : "⏳ Removing background...");
@@ -10688,6 +10708,11 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
       await ctx.reply(await getText(lang, "photo.need_photo"));
       return;
     }
+
+    sendActionGenerationStartedAlert(
+      lang === "ru" ? "Заменить лицо (меню действий)" : "Replace face (action menu)",
+      candidatePhotoFileId
+    );
 
     const { error: deactivateErr } = await supabase
       .from("sessions")
@@ -13176,7 +13201,6 @@ async function generatePackIdeas(opts: {
   const fileBuffer = await downloadFile(filePath);
   const base64 = fileBuffer.toString("base64");
   const mimeType = filePath.endsWith(".webp") ? "image/webp" : filePath.endsWith(".png") ? "image/png" : "image/jpeg";
-  const sourceFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
 
   // Get style info
   let styleName = stylePresetId || "custom";
@@ -13350,12 +13374,7 @@ Categories: emotion, reaction, action, scene, text_meme, greeting, farewell, sar
             role: "user",
             parts: [
               { text: "Analyze this sticker and generate 8 unique ideas for a sticker pack." },
-              {
-                fileData: {
-                  mimeType,
-                  fileUri: sourceFileUrl,
-                },
-              },
+              buildInlineImagePart(fileBuffer, mimeType),
             ],
           },
         ],

@@ -90,6 +90,12 @@ error.technical
 - **`detectSubjectProfileFromImageBuffer(buffer, mimeType)`** — вызов детектора, парсинг JSON-ответа.
 - **`ensureSubjectProfileForGeneration`** (в index) / **`ensureSubjectProfileForSource`** (в worker) — при необходимости запускают детектор и сохраняют результат в сессию (`subject_gender`, `object_gender` и др.).
 - Для child identity policy используется тот же pipeline: age-профиль кэшируется по паре source (`source_file_id` + `source_kind`) в `sessions.subject_age_*`; при low confidence age принудительно становится `unknown`.
+- Image input в detector отправляется в Gemini как `inlineData` (base64), без URL-транспорта.
+
+## `gemini-image-part.ts` — helper для image input в Gemini
+
+- **`buildInlineImagePart(buffer, mimeType)`** — единый helper для формирования `inlineData` (`base64`) части запроса Gemini.
+- Используется в API/worker/subject-detector, чтобы не дублировать сериализацию буфера и исключить смешение `fileData`/`inlineData`.
 
 Конфиг: `subject_profile_enabled`, `object_profile_enabled`, `object_profile_shadow_enabled`, `child_identity_protection_enabled`, `child_identity_confidence_min` в `app_config`. Подробно: [11-subject-profile-and-gender.md](11-subject-profile-and-gender.md).
 

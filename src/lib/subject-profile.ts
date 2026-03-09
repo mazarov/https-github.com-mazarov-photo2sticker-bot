@@ -2,6 +2,7 @@ import axios from "axios";
 import { config } from "../config";
 import { getAppConfig } from "./app-config";
 import { getGeminiGenerateContentUrlRuntime } from "./gemini-route";
+import { buildInlineImagePart } from "./gemini-image-part";
 
 export type SubjectMode = "single" | "multi" | "unknown";
 export type SubjectSourceKind = "photo" | "sticker";
@@ -579,7 +580,7 @@ const DETECTOR_MAX_ATTEMPTS = 2;
 export async function detectSubjectProfileFromImageBuffer(
   imageBuffer: Buffer,
   mimeType: string,
-  sourceFileUrl?: string | null
+  _sourceFileUrl?: string | null
 ): Promise<{
   subjectMode: SubjectMode;
   subjectCount: number | null;
@@ -618,19 +619,7 @@ export async function detectSubjectProfileFromImageBuffer(
                 role: "user",
                 parts: [
                   { text: prompt },
-                  sourceFileUrl
-                    ? {
-                        fileData: {
-                          mimeType,
-                          fileUri: sourceFileUrl,
-                        },
-                      }
-                    : {
-                        inlineData: {
-                          mimeType,
-                          data: imageBuffer.toString("base64"),
-                        },
-                      },
+                  buildInlineImagePart(imageBuffer, mimeType),
                 ],
               },
             ],
