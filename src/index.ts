@@ -2193,12 +2193,10 @@ async function buildStickerButtons(
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
   const replaceFaceText = withCreditBadge(await getText(lang, "btn.replace_face"), 1);
-  const changeStyleText = withCreditBadge(await getText(lang, "btn.change_style"), 1);
   const removeBgText = lang === "ru" ? "🖼 Вырезать фон" : "🖼 Remove background";
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
-  const styleCb = appendSessionRefIfFits(`change_style:${stickerId}`, sessionRef);
   const emotionCb = appendSessionRefIfFits(`change_emotion:${stickerId}`, sessionRef);
   const motionCb = appendSessionRefIfFits(`change_motion:${stickerId}`, sessionRef);
   const replaceFaceCb = appendSessionRefIfFits(`replace_face:${stickerId}`, sessionRef);
@@ -2207,7 +2205,6 @@ async function buildStickerButtons(
   return {
     inline_keyboard: [
       [{ text: addToPackText, callback_data: `add_to_pack:${stickerId}` }],
-      [{ text: changeStyleText, callback_data: styleCb }],
       [
         { text: changeEmotionText, callback_data: emotionCb },
         { text: changeMotionText, callback_data: motionCb },

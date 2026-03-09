@@ -2483,7 +2483,6 @@ async function runJob(job: any) {
   };
 
   const addToPackText = await getText(lang, "btn.add_to_pack");
-  const changeStyleText = withCreditBadge(await getText(lang, "btn.change_style"), 1);
   const changeEmotionText = withCreditBadge(
     lang === "ru" ? "😊 Эмоция" : await getText(lang, "btn.change_emotion"),
     1
@@ -2505,7 +2504,6 @@ async function runJob(job: any) {
   const replyMarkup = {
     inline_keyboard: [
       [{ text: addToPackText, callback_data: stickerId ? `add_to_pack:${stickerId}` : "add_to_pack" }],
-      [{ text: changeStyleText, callback_data: stickerId ? `change_style:${stickerId}` : "change_style" }],
       [
         { text: changeEmotionText, callback_data: stickerId ? `change_emotion:${stickerId}` : "change_emotion" },
         { text: changeMotionText, callback_data: stickerId ? `change_motion:${stickerId}` : "change_motion" },
