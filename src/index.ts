@@ -2192,22 +2192,15 @@ async function buildStickerButtons(
   );
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
-  const replaceFaceText = withCreditBadge(await getText(lang, "btn.replace_face"), 1);
-  const changeStyleText = withCreditBadge(await getText(lang, "btn.change_style"), 1);
-  const removeBgText = lang === "ru" ? "🖼 Вырезать фон" : "🖼 Remove background";
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
-  const styleCb = appendSessionRefIfFits(`change_style:${stickerId}`, sessionRef);
   const emotionCb = appendSessionRefIfFits(`change_emotion:${stickerId}`, sessionRef);
   const motionCb = appendSessionRefIfFits(`change_motion:${stickerId}`, sessionRef);
-  const replaceFaceCb = appendSessionRefIfFits(`replace_face:${stickerId}`, sessionRef);
-  const removeBgCb = appendSessionRefIfFits(`remove_bg:${stickerId}`, sessionRef);
 
   return {
     inline_keyboard: [
       [{ text: addToPackText, callback_data: `add_to_pack:${stickerId}` }],
-      [{ text: changeStyleText, callback_data: styleCb }],
       [
         { text: changeEmotionText, callback_data: emotionCb },
         { text: changeMotionText, callback_data: motionCb },
@@ -2215,10 +2208,6 @@ async function buildStickerButtons(
       [
         { text: toggleBorderText, callback_data: `toggle_border:${stickerId}` },
         { text: addTextText, callback_data: `add_text:${stickerId}` },
-      ],
-      [
-        { text: replaceFaceText, callback_data: replaceFaceCb },
-        { text: removeBgText, callback_data: removeBgCb },
       ],
       [
         { text: packIdeasText, callback_data: `pack_ideas:${stickerId}` },
@@ -2237,28 +2226,34 @@ async function getUser(telegramId: number) {
   return data;
 }
 
-// Helper: get persistent menu keyboard (2 rows). Single-sticker entry is always visible in row1.
+function hasCompletedOnboarding(user: any): boolean {
+  if (typeof user?.onboarding_completed === "boolean") return user.onboarding_completed;
+  return Number(user?.onboarding_step || 0) >= 2;
+}
+
+function getOnboardingMenuKeyboard(lang: string) {
+  const row1 = lang === "ru" ? ["📸 Сделать стикер"] : ["📸 Make sticker"];
+  const row2 = lang === "ru" ? ["❓ Помощь"] : ["❓ Help"];
+  return Markup.keyboard([row1, row2]).resize().persistent();
+}
+
+// Helper: get persistent post-onboarding menu keyboard.
 function getMainMenuKeyboard(lang: string, telegramId?: number) {
   const isAdmin = telegramId != null && config.adminIds.includes(telegramId);
-  const showAdminGenerate = isAdmin;
-  const showAdminMakeExample = isAdmin;
-  const row1 =
-    lang === "ru"
-      ? showAdminMakeExample
-        ? ["⚡ Действия", "🔄 Сгенерировать пак", "⭐ Сделать примером"]
-        : showAdminGenerate
-          ? ["⚡ Действия", "🔄 Сгенерировать пак"]
-          : ["⚡ Действия"]
-      : showAdminMakeExample
-        ? ["⚡ Actions", "🔄 Generate pack", "⭐ Make as example"]
-        : showAdminGenerate
-          ? ["⚡ Actions", "🔄 Generate pack"]
-          : ["⚡ Actions"];
-  const row2 =
-    lang === "ru"
-      ? ["💰 Ваш баланс", "💬 Поддержка"]
-      : ["💰 Your balance", "💬 Support"];
-  return Markup.keyboard([row1, row2]).resize().persistent();
+  const row1 = lang === "ru"
+    ? ["📸 Сделать стикер", "😊 Новая эмоция"]
+    : ["📸 Make sticker", "😊 New emotion"];
+  const row2 = lang === "ru"
+    ? ["🔥 Мемный стикер", "📦 Мои стикерпаки"]
+    : ["🔥 Meme sticker", "📦 My sticker packs"];
+  const row3 = lang === "ru"
+    ? ["💳 Баланс", "❓ Помощь"]
+    : ["💳 Balance", "❓ Help"];
+  const rows: string[][] = [row1, row2, row3];
+  if (isAdmin) {
+    rows.push(lang === "ru" ? ["🔄 Сгенерировать пак", "⭐ Сделать примером"] : ["🔄 Generate pack", "⭐ Make as example"]);
+  }
+  return Markup.keyboard(rows).resize().persistent();
 }
 
 // Helper: check if language is in whitelist for free credits
@@ -3690,6 +3685,36 @@ async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
   await ctx.reply(text, Markup.inlineKeyboard(buttons));
 }
 
+function getOnboardingPaywallKeyboard(lang: string, sessionRef?: string | null) {
+  return {
+    inline_keyboard: [
+      [{ text: lang === "ru" ? "✨ Создать стикерпак — 75 ⭐" : "✨ Create sticker pack — 75 ⭐", callback_data: appendSessionRefIfFits("onb_buy_full_pack_75", sessionRef || null) }],
+      [{ text: lang === "ru" ? "🙂 Сделать одну эмоцию — 25 ⭐" : "🙂 Make one emotion — 25 ⭐", callback_data: appendSessionRefIfFits("onb_buy_single_emotion_25", sessionRef || null) }],
+    ],
+  };
+}
+
+async function sendOnboardingInvoice(telegramId: number, lang: string, payload: "buy_single_emotion" | "buy_onboarding_full_pack", amount: number): Promise<void> {
+  const title = payload === "buy_single_emotion"
+    ? (lang === "ru" ? "Одна эмоция" : "One emotion")
+    : (lang === "ru" ? "Полный стикерпак" : "Full sticker pack");
+  const description = payload === "buy_single_emotion"
+    ? (lang === "ru" ? "Сгенерирую одну эмоцию из твоего фото" : "Generate one emotion from your photo")
+    : (lang === "ru" ? "Сгенерирую полный набор реакций" : "Generate a full reaction pack");
+  const label = lang === "ru" ? "Оплата" : "Payment";
+  await axios.post(
+    `https://api.telegram.org/bot${config.telegramBotToken}/sendInvoice`,
+    {
+      chat_id: telegramId,
+      title,
+      description,
+      payload,
+      currency: "XTR",
+      prices: [{ label, amount }],
+    }
+  );
+}
+
 // Helper: parse start payload into UTM fields + yclid
 // Format: source_medium_campaign_content_yclid
 // yclid detection: last segment, fully numeric, length > 8
@@ -4104,7 +4129,61 @@ bot.start(async (ctx) => {
       }
     }
 
-    // Default entrypoint: action menu flow (wait_photo or wait_action + sendActionMenu)
+    const onboardingCompleted = hasCompletedOnboarding(user);
+
+    // New onboarding entrypoint for users with incomplete onboarding.
+    if (!onboardingCompleted) {
+      const lastPhotoFromSessions = await getLatestSessionPhotoFileId(user.id);
+      const existingPhoto = lastPhotoFromSessions || user.last_photo_file_id || null;
+      if (lastPhotoFromSessions && !user.last_photo_file_id) {
+        await supabase.from("users").update({ last_photo_file_id: lastPhotoFromSessions }).eq("id", user.id);
+        user.last_photo_file_id = lastPhotoFromSessions;
+      }
+
+      await supabase
+        .from("sessions")
+        .update({ is_active: false })
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .eq("env", config.appEnv);
+
+      const { data: onboardingSession } = await supabase
+        .from("sessions")
+        .insert({
+          user_id: user.id,
+          state: "wait_photo",
+          is_active: true,
+          flow_kind: "single",
+          session_rev: 1,
+          current_photo_file_id: existingPhoto,
+          photos: existingPhoto ? [existingPhoto] : [],
+          env: config.appEnv,
+        })
+        .select("*")
+        .single();
+
+      if (existingPhoto) {
+        const sessionRef = formatCallbackSessionRef(onboardingSession?.id || null, onboardingSession?.session_rev || 1);
+        await ctx.reply(
+          lang === "ru" ? "Продолжим делать твои стикеры?" : "Continue making your stickers?",
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: lang === "ru" ? "🔥 Сделать полный стикерпак" : "🔥 Create full sticker pack", callback_data: appendSessionRefIfFits("onb_make_pack", sessionRef) }],
+                [{ text: lang === "ru" ? "🙂 Сделать одну эмоцию" : "🙂 Make one emotion", callback_data: appendSessionRefIfFits("onb_buy_single_emotion_25", sessionRef) }],
+                [{ text: lang === "ru" ? "📸 Отправить другое фото" : "📸 Send another photo", callback_data: appendSessionRefIfFits("onb_send_other_photo", sessionRef) }],
+              ],
+            },
+          }
+        );
+      } else {
+        const greetingText = await getText(lang, "start.greeting_new");
+        await ctx.reply(greetingText, getOnboardingMenuKeyboard(lang));
+      }
+      return;
+    }
+
+    // Default entrypoint: post-onboarding action flow (wait_photo or wait_action + sendActionMenu)
     const lastPhotoFromSessions = await getLatestSessionPhotoFileId(user.id);
     const existingPhoto = lastPhotoFromSessions || user.last_photo_file_id || null;
     if (lastPhotoFromSessions && !user.last_photo_file_id) {
@@ -4893,6 +4972,48 @@ bot.on("photo", async (ctx) => {
   const photos = Array.isArray(session.photos) ? session.photos : [];
   photos.push(photo.file_id);
 
+  const onboardingActive = !hasCompletedOnboarding(user);
+  if (onboardingActive && session.state === "wait_photo" && !session.selected_style_id) {
+    const defaultPreset = await getDefaultStylePresetV2();
+    const userInput = defaultPreset?.prompt_hint || (lang === "ru" ? "Сделай стильный стикер." : "Make a stylish sticker.");
+    const sessionRev = (session.session_rev || 1) + 1;
+    await supabase
+      .from("sessions")
+      .update({
+        photos,
+        state: "wait_style",
+        is_active: true,
+        current_photo_file_id: photo.file_id,
+        style_source_kind: "photo",
+        selected_style_id: defaultPreset?.id || null,
+        session_rev: sessionRev,
+      })
+      .eq("id", session.id);
+
+    if ((user.credits || 0) < 1) {
+      await supabase
+        .from("users")
+        .update({ credits: Number(user.credits || 0) + 1 })
+        .eq("id", user.id);
+      user.credits = Number(user.credits || 0) + 1;
+    }
+
+    await ctx.reply(lang === "ru" ? "Получил фото 👍\n\nСоздаю стикер..." : "Got your photo 👍\n\nCreating sticker...");
+    const promptResult = await generatePrompt(userInput);
+    const generatedPrompt = promptResult.ok && !promptResult.retry ? promptResult.prompt || userInput : userInput;
+    const freshSession = await getSessionByIdForUser(user.id, session.id);
+    if (freshSession?.id) {
+      await startGeneration(ctx, user, freshSession, lang, {
+        generationType: "style",
+        promptFinal: generatedPrompt,
+        styleSourceKind: "photo",
+        userInput,
+        selectedStyleId: defaultPreset?.id || null,
+      });
+      return;
+    }
+  }
+
   // Valentine flow: came from val_* link with pre-selected style — go straight to generation
   if (session.state === "wait_photo" && session.selected_style_id) {
     const preset = await getStylePresetV2ById(session.selected_style_id);
@@ -4952,6 +5073,107 @@ bot.on("photo", async (ctx) => {
 // ============================================
 // Persistent menu handlers (Reply Keyboard)
 // ============================================
+
+// Menu: 📸 Сделать стикер / 📸 Make sticker — onboarding and post-onboarding entrypoint.
+bot.hears(["📸 Сделать стикер", "📸 Make sticker"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+
+  await supabase
+    .from("sessions")
+    .update({ is_active: false })
+    .eq("user_id", user.id)
+    .eq("is_active", true)
+    .eq("env", config.appEnv);
+
+  await supabase
+    .from("sessions")
+    .insert({
+      user_id: user.id,
+      state: "wait_photo",
+      is_active: true,
+      flow_kind: "single",
+      session_rev: 1,
+      env: config.appEnv,
+    });
+
+  await ctx.reply(
+    lang === "ru" ? "Пришли фото — сделаю стикер." : "Send a photo — I'll make a sticker.",
+    hasCompletedOnboarding(user) ? getMainMenuKeyboard(lang, telegramId) : getOnboardingMenuKeyboard(lang)
+  );
+});
+
+bot.hears(["❓ Помощь", "❓ Help"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  const lang = user?.lang || ((ctx.from?.language_code || "").toLowerCase().startsWith("ru") ? "ru" : "en");
+  const helpText = await getText(lang, "support.message");
+  await ctx.reply(helpText, hasCompletedOnboarding(user) ? getMainMenuKeyboard(lang, telegramId) : getOnboardingMenuKeyboard(lang));
+});
+
+bot.hears(["💳 Баланс", "💳 Balance"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  await sendBuyCreditsMenu(ctx, user, await getText(lang, "payment.balance", { credits: user.credits }));
+});
+
+bot.hears(["📦 Мои стикерпаки", "📦 My sticker packs"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  if (!hasCompletedOnboarding(user)) {
+    await ctx.reply(lang === "ru" ? "Заверши онбординг, чтобы открыть список паков." : "Finish onboarding to unlock your packs.");
+    return;
+  }
+  const { data: packs } = await supabase
+    .from("stickers")
+    .select("sticker_set_name")
+    .eq("user_id", user.id)
+    .eq("env", config.appEnv)
+    .not("sticker_set_name", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(30);
+  const unique = Array.from(new Set((packs || []).map((p: any) => String(p.sticker_set_name || "").trim()).filter(Boolean)));
+  if (!unique.length) {
+    await ctx.reply(lang === "ru" ? "У тебя пока нет стикерпаков." : "You don't have sticker packs yet.");
+    return;
+  }
+  const title = lang === "ru" ? "Твои стикерпаки:\n\n" : "Your sticker packs:\n\n";
+  const list = unique.slice(0, 10).map((name) => `• ${name}`).join("\n");
+  await ctx.reply(`${title}${list}`);
+});
+
+bot.hears(["😊 Новая эмоция", "😊 New emotion"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  const session = await getActiveSession(user.id);
+  if (!session?.last_sticker_file_id) {
+    await ctx.reply(lang === "ru" ? "Сначала создай стикер по фото." : "Create a sticker from photo first.");
+    return;
+  }
+  await sendEmotionPresetsKeyboard(ctx, lang, { backCallbackData: "noop" });
+});
+
+bot.hears(["🔥 Мемный стикер", "🔥 Meme sticker"], async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  await ctx.reply(lang === "ru" ? "Пришли фото и я сделаю мемный стикер." : "Send a photo and I'll make a meme sticker.");
+});
 
 // Menu: ⚡ Действия / ⚡ Actions — open action menu for latest photo
 bot.hears(["⚡ Действия", "⚡ Actions"], async (ctx) => {
@@ -7796,6 +8018,12 @@ bot.on("text", async (ctx) => {
 
   // Skip menu button texts — they are handled by bot.hears() above
   const menuButtons = [
+    "📸 Сделать стикер", "📸 Make sticker",
+    "😊 Новая эмоция", "😊 New emotion",
+    "🔥 Мемный стикер", "🔥 Meme sticker",
+    "📦 Мои стикерпаки", "📦 My sticker packs",
+    "💳 Баланс", "💳 Balance",
+    "❓ Помощь", "❓ Help",
     "✨ Создать стикер", "✨ Create sticker",
     "🎨 Изменить стикер", "🎨 Edit sticker",
     "🎨 Стили", "🎨 Styles", // legacy, button hidden
@@ -9806,6 +10034,12 @@ bot.action(/^add_to_pack:(.+)$/, async (ctx) => {
     await ctx.reply(await getText(lang, "sticker.added_to_pack", {
       link: `https://t.me/addstickers/${stickerSetName}`,
     }));
+    if (!hasCompletedOnboarding(user)) {
+      await supabase
+        .from("users")
+        .update({ onboarding_completed: true, onboarding_step: 2 })
+        .eq("id", user.id);
+    }
   } catch (err: any) {
     console.error("add_to_pack: error:", err.response?.data || err.message);
     await sendAlert({
@@ -9935,6 +10169,12 @@ bot.action("add_to_pack", async (ctx) => {
     await ctx.reply(await getText(lang, "sticker.added_to_pack", {
       link: `https://t.me/addstickers/${stickerSetName}`,
     }));
+    if (!hasCompletedOnboarding(user)) {
+      await supabase
+        .from("users")
+        .update({ onboarding_completed: true, onboarding_step: 2 })
+        .eq("id", user.id);
+    }
   } catch (err: any) {
     console.error("add_to_pack(old): error:", err.response?.data || err.message);
     await sendAlert({
@@ -10658,6 +10898,17 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
       if (newFileId) {
         await supabase.from("stickers").update({ telegram_file_id: newFileId }).eq("id", newSticker.id);
       }
+      sendNotification({
+        type: "new_sticker",
+        message: [
+          `✅ Генерация завершена (${action})`,
+          `👤 @${user.username || telegramId} (${telegramId})`,
+          `💰 Кредиты: ${user.credits}`,
+          `🎨 Стиль: ${session.selected_style_id || "-"}`,
+        ].join("\n"),
+        sourceImageBuffer: fileBuffer,
+        resultImageBuffer: stickerBuffer,
+      }).catch(console.error);
       const replyMarkup = await buildStickerButtons(lang, newSticker.id);
       await ctx.reply(lang === "ru" ? "Фон удалён! Что дальше?" : "Background removed! What's next?", { reply_markup: replyMarkup });
     } catch (err: any) {
@@ -12384,6 +12635,93 @@ bot.action("buy_credits", async (ctx) => {
   if (!user) return;
 
   await sendBuyCreditsMenu(ctx, user);
+});
+
+bot.action(/^onb_make_pack(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  const sessionRefRaw = ctx.match?.[1] || null;
+  await ctx.reply(
+    lang === "ru"
+      ? "Я сделаю полноценный Telegram-стикерпак из твоего фото.\n\nВсего 16 стикеров. Их можно сразу добавить в Telegram и отправлять друзьям."
+      : "I'll make a full Telegram sticker pack from your photo.\n\n16 stickers total. You can add them to Telegram right away.",
+    { reply_markup: getOnboardingPaywallKeyboard(lang, sessionRefRaw) }
+  );
+});
+
+bot.action(/^onb_send_other_photo(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  const { sessionId } = parseCallbackSessionRef(ctx.match?.[1] || null);
+  const session = sessionId ? await getSessionByIdForUser(user.id, sessionId) : await getActiveSession(user.id);
+  if (!session?.id) return;
+  await supabase
+    .from("sessions")
+    .update({
+      state: "wait_photo",
+      is_active: true,
+      pending_photo_file_id: null,
+      current_photo_file_id: null,
+      photos: [],
+      session_rev: (session.session_rev || 1) + 1,
+    })
+    .eq("id", session.id);
+  await ctx.reply(lang === "ru" ? "Пришли фото — сделаю стикер." : "Send a photo — I'll make a sticker.");
+});
+
+bot.action(/^onb_buy_single_emotion_25(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  try {
+    await sendOnboardingInvoice(telegramId, lang, "buy_single_emotion", 25);
+  } catch (err: any) {
+    console.error("[onboarding] single emotion invoice error:", err.response?.data || err.message);
+    await ctx.reply(await getText(lang, "payment.error_invoice"));
+  }
+});
+
+bot.action(/^onb_buy_full_pack_75(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  try {
+    await sendOnboardingInvoice(telegramId, lang, "buy_onboarding_full_pack", 75);
+  } catch (err: any) {
+    console.error("[onboarding] full pack invoice error:", err.response?.data || err.message);
+    await ctx.reply(await getText(lang, "payment.error_invoice"));
+  }
+});
+
+bot.action(/^onb_add_stickerpack(?::(.+))?$/, async (ctx) => {
+  safeAnswerCbQuery(ctx);
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+  const user = await getUser(telegramId);
+  if (!user?.id) return;
+  const lang = user.lang || "en";
+  await supabase
+    .from("users")
+    .update({ onboarding_completed: true, onboarding_step: 2 })
+    .eq("id", user.id);
+  await ctx.reply(
+    lang === "ru" ? "Онбординг завершен ✅" : "Onboarding completed ✅",
+    getMainMenuKeyboard(lang, telegramId)
+  );
 });
 
 // Callback: rate:<rating_id>:<score>
@@ -14997,6 +15335,70 @@ bot.on("successful_payment", async (ctx) => {
   console.log("amount:", payment.total_amount);
   console.log("currency:", payment.currency);
   console.log("payload:", invoicePayload);
+
+  if (invoicePayload === "buy_single_emotion" || invoicePayload === "buy_onboarding_full_pack") {
+    const telegramId = ctx.from?.id;
+    if (!telegramId) return;
+    const user = await getUser(telegramId);
+    if (!user?.id) return;
+    const lang = user.lang || "en";
+    const purchasedCredits = invoicePayload === "buy_single_emotion" ? 1 : 16;
+    const nextCredits = Number(user.credits || 0) + purchasedCredits;
+    await supabase
+      .from("users")
+      .update({
+        credits: nextCredits,
+        has_purchased: true,
+      })
+      .eq("id", user.id);
+
+    if (invoicePayload === "buy_single_emotion") {
+      await ctx.reply(lang === "ru" ? "Создаю эмоцию..." : "Creating your emotion...");
+      let session = await getActiveSession(user.id);
+      if (!session?.id) {
+        const { data: created } = await supabase
+          .from("sessions")
+          .insert({
+            user_id: user.id,
+            state: "wait_emotion",
+            is_active: true,
+            flow_kind: "single",
+            session_rev: 1,
+            env: config.appEnv,
+          })
+          .select("*")
+          .single();
+        session = created;
+      }
+      if (session?.id) {
+        const sessionRev = (session.session_rev || 1) + 1;
+        await supabase
+          .from("sessions")
+          .update({
+            state: "wait_emotion",
+            is_active: true,
+            selected_emotion: "smile",
+            emotion_prompt: lang === "ru" ? "радостная улыбка" : "joyful smile",
+            session_rev: sessionRev,
+          })
+          .eq("id", session.id);
+        const freshSession = await getSessionByIdForUser(user.id, session.id);
+        if (freshSession?.id) {
+          await startGeneration(ctx, { ...user, credits: nextCredits }, freshSession, lang, {
+            generationType: "emotion",
+            promptFinal: lang === "ru" ? "Сделай выражение лица: яркая радостная улыбка." : "Create facial expression: bright joyful smile.",
+            emotionPrompt: lang === "ru" ? "радостная улыбка" : "joyful smile",
+            selectedEmotion: "smile",
+          });
+        }
+      }
+      return;
+    }
+
+    await ctx.reply(lang === "ru" ? "Создаю твой стикерпак..." : "Creating your sticker pack...");
+    await handlePackMenuEntry(ctx, { source: "menu", autoPackEntry: false });
+    return;
+  }
 
   // Extract transaction ID
   const transactionId = invoicePayload.replace(/[\[\]]/g, "");

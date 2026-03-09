@@ -36,6 +36,7 @@ erDiagram
 | `has_purchased` | boolean | false | Покупал ли кредиты |
 | `total_generations` | integer | 0 | Всего генераций |
 | `onboarding_step` | int | 0 | Шаг онбординга (0→1→2→99) |
+| `onboarding_completed` | boolean | false | Новый флаг завершения onboarding-воронки (source of truth для меню и `/start`) |
 | `sticker_set_name` | text | — | Имя стикерпака |
 | `language_code` | text | — | Язык Telegram-клиента |
 | `last_photo_file_id` | text | — | Последнее загруженное фото |
@@ -47,6 +48,11 @@ erDiagram
 | `env` | text | 'prod' | Окружение |
 | `created_at` | timestamptz | now() | — |
 | `updated_at` | timestamptz | now() | — |
+
+### Onboarding completion contract
+
+- Событие завершения: `user_clicked_add_sticker_pack`.
+- Эффект: `users.onboarding_completed = true` (и синхронно `onboarding_step = 2` для обратной совместимости старых flow/фильтров).
 
 ### `sessions` — Сессии
 

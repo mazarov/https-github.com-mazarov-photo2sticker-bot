@@ -8,11 +8,11 @@ const TEXTS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 // Fallback texts (used if DB is unavailable)
 const fallbackTexts: Record<string, Record<string, string>> = {
   ru: {
-    "start.greeting_new": "Привет! 🎨\n\nЯ умею:\n• делать стикеры из фото\n• менять стиль, эмоцию и движение\n• удалять фон и заменять лицо\n\nПришли фото, чтобы начать.",
+    "start.greeting_new": "Я превращу твоё фото в Telegram-стикеры 😎\n\nМожно сделать:\n😂 реакции\n🔥 мемные ответы\n😎 стильные эмоции\n\nПришли любое фото — сделаю первый стикер бесплатно 👇",
     "start.greeting_return": "С возвращением! 🎨\n\nТвой баланс: {credits} кредитов.\n\nПришли фото, из которого сделать стикер.",
     "start.need_start": "Нажми /start чтобы начать.",
     "photo.ask_style": "Отлично! Теперь выбери стиль стикера из вариантов ниже или напиши свой текстом.",
-    "photo.need_photo": "Сначала пришли фото.",
+    "photo.need_photo": "Пришли фото — сделаю стикер.",
     "photo.processing": "🔄 Обрабатываю запрос...",
     "photo.invalid_style": "❌ Не удалось распознать стиль.\n\nОпиши визуальный стиль стикера, например:\n• аниме\n• мультяшный\n• симпсоны\n• 3D\n• пиксель арт\n• chibi, грустный",
     "photo.not_enough_credits": "❌ Недостаточно кредитов!\n\nНужно: {needed} кредит(ов)\nУ тебя: {balance} кредит(ов)\n\nПополни баланс, чтобы продолжить.",
@@ -122,11 +122,11 @@ const fallbackTexts: Record<string, Record<string, string>> = {
     "btn.topup_credits": "💰 Пополнить баланс",
   },
   en: {
-    "start.greeting_new": "Hello! 🎨\n\nI can:\n• turn photos into stickers\n• change style, emotion, and pose\n• remove background and swap faces\n\nSend a photo to start.",
+    "start.greeting_new": "I turn your photo into Telegram stickers 😎\n\nYou can create:\n😂 reactions\n🔥 meme replies\n😎 stylish emotions\n\nSend any photo — I'll make your first sticker for free 👇",
     "start.greeting_return": "Welcome back! 🎨\n\nYour balance: {credits} credits.\n\nSend a photo to make a sticker.",
     "start.need_start": "Press /start to begin.",
     "photo.ask_style": "Great! Now choose a sticker style from the options below or describe your own.",
-    "photo.need_photo": "Send a photo first.",
+    "photo.need_photo": "Send a photo — I'll make a sticker.",
     "photo.processing": "🔄 Processing request...",
     "photo.invalid_style": "❌ Could not recognize the style.\n\nDescribe a visual style, for example:\n• anime\n• cartoon\n• simpsons\n• 3D\n• pixel art\n• chibi, sad",
     "photo.not_enough_credits": "❌ Not enough credits!\n\nNeeded: {needed} credit(s)\nYou have: {balance} credit(s)\n\nTop up your balance to continue.",
