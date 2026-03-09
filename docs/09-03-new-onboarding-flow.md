@@ -86,7 +86,7 @@ Source of truth по текущему entrypoint и состояниям:
 
 - `🔥 Сделать набор` (`onb_make_pack`)
 - Для этого шага набор реакций берется из `pack_content_sets`/`pack_content_sets_test` c `onboarding=true` (name+description по локали).
-- Формат выдачи: сначала CTA-кнопка `🔥 Сделать набор`, затем карточка onboarding-пака (пример-картинка `sticker_pack_example/{id}/example.webp` + локализованные `name/description`).
+- Формат выдачи: одним сообщением — текст `Хочешь полный набор реакций?` + локализованные `name/description` onboarding-пака; кнопка `🔥 Сделать набор` находится под этим же сообщением. Если есть `example.webp`, отправляется фото с этой подписью и той же кнопкой.
 
 ## Paywall
 

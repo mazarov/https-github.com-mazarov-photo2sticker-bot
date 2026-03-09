@@ -98,7 +98,7 @@ stateDiagram-v2
   - `onb_send_other_photo`
   - `onb_add_stickerpack`
 - Текст шага "ещё реакции" после первого бесплатного стикера берётся из `pack_content_sets` (по флагу `onboarding=true`, локаль: `name_ru/name_en` + `carousel_description_ru/carousel_description_en`).
-- UX этого шага: отдельная CTA-кнопка `onb_make_pack`, затем карточка onboarding-пака с примером (`sticker_pack_example/{id}/example.webp`) и локализованными `name/description`.
+- UX этого шага: одно сообщение с текстом `Want the full reactions pack?` + локализованными `name/description`, и кнопкой `onb_make_pack` под этим же сообщением (если есть пример, сообщение отправляется как фото с caption).
 - `onb_make_pack` в onboarding не открывает карусель паков: при `credits >= 1` сразу стартует `generating_pack_preview` для onboarding-набора; при `credits < 1` показывает onboarding paywall.
 - Для pack-callback ответов используется keyboard-routing по `users.onboarding_completed`: до завершения onboarding остаётся сокращённое меню, после — полное.
 

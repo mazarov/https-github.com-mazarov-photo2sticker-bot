@@ -101,22 +101,21 @@ function getPackContentSetExamplePublicUrl(contentSetId: string): string {
 }
 
 async function sendOnboardingPackOfferCard(telegramId: number, lang: string, onboardingSet: any | null): Promise<void> {
-  await sendMessage(
-    telegramId,
-    lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",
-    {
-      inline_keyboard: [[
-        { text: lang === "ru" ? "🔥 Сделать набор" : "🔥 Make pack", callback_data: "onb_make_pack" },
-      ]],
-    }
-  );
-
-  if (!onboardingSet?.id) return;
-
+  const intro = lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?";
+  const ctaReplyMarkup = {
+    inline_keyboard: [[
+      { text: lang === "ru" ? "🔥 Сделать набор" : "🔥 Make pack", callback_data: "onb_make_pack" },
+    ]],
+  };
   const packName = getLocalizedPackName(onboardingSet, lang);
   const packDescription = getLocalizedPackDescription(onboardingSet, lang);
-  const caption = [packName, packDescription].filter(Boolean).join("\n");
-  if (!caption) return;
+  const details = [packName, packDescription].filter(Boolean).join("\n");
+  const caption = details ? `${intro}\n\n${details}` : intro;
+
+  if (!onboardingSet?.id) {
+    await sendMessage(telegramId, caption, ctaReplyMarkup);
+    return;
+  }
 
   const exampleUrl = getPackContentSetExamplePublicUrl(onboardingSet.id);
   try {
@@ -124,6 +123,7 @@ async function sendOnboardingPackOfferCard(telegramId: number, lang: string, onb
       chat_id: telegramId,
       photo: exampleUrl,
       caption,
+      reply_markup: ctaReplyMarkup,
     });
     if (!res.data?.ok) {
       throw new Error(`sendPhoto by url failed: ${JSON.stringify(res.data)}`);
@@ -133,7 +133,7 @@ async function sendOnboardingPackOfferCard(telegramId: number, lang: string, onb
     console.warn("[onboarding_pack] sendPhoto by url failed:", e?.message || e);
   }
 
-  await sendMessage(telegramId, caption);
+  await sendMessage(telegramId, caption, ctaReplyMarkup);
 }
 
 function isConfigEnabled(value: string | null | undefined): boolean {

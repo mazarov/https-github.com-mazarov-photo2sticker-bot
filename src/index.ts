@@ -16119,6 +16119,13 @@ bot.on("successful_payment", async (ctx) => {
         }
       }
     }
+
+    // Onboarding fallback: user paid from onboarding paywall (regular pack payload),
+    // but no paywall session is available to resume. Start onboarding pack directly.
+    if (!session && !hasCompletedOnboarding(finalUser)) {
+      const startResult = await startOnboardingPackPreview(ctx, finalUser, lang);
+      console.log("[payment] onboarding fallback start result:", startResult);
+    }
     console.log("=== PAYMENT: successful_payment COMPLETE ===");
     console.log("total time:", Date.now() - startTime, "ms");
   }
