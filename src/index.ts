@@ -1308,11 +1308,19 @@ function extractStyleDirectiveFromPrompt(prompt: string): { cleanPrompt: string;
   return { cleanPrompt, styleDirective };
 }
 
+function stripCompositionRulesBlock(prompt: string): string {
+  const source = String(prompt || "");
+  const marker = "\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:";
+  const idx = source.indexOf(marker);
+  if (idx === -1) return source;
+  return source.slice(0, idx).trimEnd();
+}
+
 function buildStyleCompositionSuffix(styleDirective: string | null): string {
   const styleRule = styleDirective
-    ? `3. STYLE TARGET FROM PROMPT LINE (strict): ${styleDirective}`
-    : "3. STYLE TARGET FROM PROMPT LINE (strict): Use selected style prompt hint as the highest-priority artistic target.";
-  return `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n${styleRule}\n4. Do NOT preserve or inherit previous sticker rendering style (linework, shading, palette, proportions) if it conflicts with rule 3.`;
+    ? `3. ${styleDirective}`
+    : "3. Use selected style prompt hint as the highest-priority artistic target.";
+  return `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n${styleRule}`;
 }
 
 function ensureSingleSuffix(prompt: string, suffix: string): string {
@@ -1696,6 +1704,7 @@ async function startGeneration(
   if (options.generationType === "emotion") {
     options.promptFinal = sanitizeEmotionPrompt(options.promptFinal);
   }
+  options.promptFinal = stripCompositionRulesBlock(options.promptFinal);
   let styleDirective: string | null = null;
   if (options.generationType === "style") {
     const extracted = extractStyleDirectiveFromPrompt(options.promptFinal);
