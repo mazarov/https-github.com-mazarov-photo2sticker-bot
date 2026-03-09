@@ -12714,14 +12714,18 @@ bot.action(/^onb_add_stickerpack(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user?.id) return;
   const lang = user.lang || "en";
+  const stickerSetName = (ctx.match?.[1] || "").trim();
+  const setLink = stickerSetName ? `https://t.me/addstickers/${stickerSetName}` : null;
   await supabase
     .from("users")
     .update({ onboarding_completed: true, onboarding_step: 2 })
     .eq("id", user.id);
-  await ctx.reply(
-    lang === "ru" ? "Онбординг завершен ✅" : "Onboarding completed ✅",
-    getMainMenuKeyboard(lang, telegramId)
-  );
+  if (setLink) {
+    await ctx.reply(
+      lang === "ru" ? `Готово 🔥\n\nДобавить их в Telegram:\n${setLink}` : `Done 🔥\n\nAdd them in Telegram:\n${setLink}`
+    );
+  }
+  await ctx.reply(lang === "ru" ? "Онбординг завершен ✅" : "Onboarding completed ✅", getMainMenuKeyboard(lang, telegramId));
 });
 
 // Callback: rate:<rating_id>:<score>
@@ -15344,6 +15348,30 @@ bot.on("successful_payment", async (ctx) => {
     const lang = user.lang || "en";
     const purchasedCredits = invoicePayload === "buy_single_emotion" ? 1 : 16;
     const nextCredits = Number(user.credits || 0) + purchasedCredits;
+
+    const { data: existingOnboardingCharge } = await supabase
+      .from("transactions")
+      .select("id, state")
+      .eq("telegram_payment_charge_id", payment.telegram_payment_charge_id)
+      .maybeSingle();
+    if (existingOnboardingCharge?.state === "done") {
+      console.log("[onboarding_payment] duplicate successful_payment, charge already processed:", payment.telegram_payment_charge_id);
+      return;
+    }
+
+    await supabase
+      .from("transactions")
+      .insert({
+        user_id: user.id,
+        amount: purchasedCredits,
+        price: payment.total_amount,
+        state: "done",
+        is_active: false,
+        telegram_payment_charge_id: payment.telegram_payment_charge_id,
+        provider_payment_charge_id: payment.provider_payment_charge_id,
+        env: config.appEnv,
+      });
+
     await supabase
       .from("users")
       .update({

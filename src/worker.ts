@@ -743,7 +743,7 @@ async function runPackPreviewJob(job: any) {
 
   const { data: user } = await supabase
     .from("users")
-    .select("telegram_id, lang, username, credits")
+    .select("telegram_id, lang, username, credits, onboarding_completed")
     .eq("id", session.user_id)
     .maybeSingle();
   if (!user?.telegram_id) throw new Error("User telegram_id not found");
@@ -1515,11 +1515,20 @@ async function runPackAssembleJob(job: any) {
     try { await deleteMessage(session.progress_chat_id, session.progress_message_id); } catch {}
   }
 
-  await sendMessage(telegramId, doneText, {
-    inline_keyboard: [
-      [{ text: lang === "ru" ? "📦 Добавить пак" : "📦 Add pack", url: link }],
-    ],
-  });
+  const onboardingCompleted = Boolean((user as any)?.onboarding_completed);
+  const doneKeyboard = onboardingCompleted
+    ? {
+        inline_keyboard: [
+          [{ text: lang === "ru" ? "📦 Добавить пак" : "📦 Add pack", url: link }],
+        ],
+      }
+    : {
+        inline_keyboard: [
+          [{ text: lang === "ru" ? "📦 Добавить стикерпак" : "📦 Add sticker pack", callback_data: `onb_add_stickerpack:${setName}` }],
+        ],
+      };
+
+  await sendMessage(telegramId, doneText, doneKeyboard);
 
   await supabase
     .from("sessions")
