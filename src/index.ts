@@ -1288,10 +1288,32 @@ function deleteEarlyProgress(ctx: any, messageId?: number | null) {
 
 // Shared composition/background rules — same for single sticker and pack (unified prompt flow)
 const COMPOSITION_SUFFIX = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
-const COMPOSITION_SUFFIX_STYLE = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n3. Style MUST follow the style description above (from selected style prompt hint) as the highest-priority artistic target. Do not keep or inherit the previous sticker art style.`;
 
 // Pack only: composition without magenta, 15%, and full-visibility rule (all in CRITICAL RULES FOR THE GRID in worker).
 const COMPOSITION_SUFFIX_PACK = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.`;
+
+function extractStyleDirectiveFromPrompt(prompt: string): { cleanPrompt: string; styleDirective: string | null } {
+  const source = String(prompt || "");
+  const styleLineRegex = /(?:^|\n)(Create a high-quality character illustration\.\s*Style:[^\n]+)(?=\n|$)/i;
+  const match = source.match(styleLineRegex);
+  if (!match?.[1]) {
+    return { cleanPrompt: source, styleDirective: null };
+  }
+
+  const styleDirective = match[1].replace(/\s+/g, " ").trim();
+  const cleanPrompt = source
+    .replace(styleLineRegex, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { cleanPrompt, styleDirective };
+}
+
+function buildStyleCompositionSuffix(styleDirective: string | null): string {
+  const styleRule = styleDirective
+    ? `3. Style target (must follow exactly): ${styleDirective}`
+    : "3. Style target (must follow exactly): Use selected style prompt hint as the highest-priority artistic target.";
+  return `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n${styleRule}`;
+}
 
 function ensureSingleSuffix(prompt: string, suffix: string): string {
   const base = String(prompt || "");
@@ -1674,8 +1696,14 @@ async function startGeneration(
   if (options.generationType === "emotion") {
     options.promptFinal = sanitizeEmotionPrompt(options.promptFinal);
   }
+  let styleDirective: string | null = null;
+  if (options.generationType === "style") {
+    const extracted = extractStyleDirectiveFromPrompt(options.promptFinal);
+    options.promptFinal = extracted.cleanPrompt;
+    styleDirective = extracted.styleDirective;
+  }
   const compositionSuffix =
-    options.generationType === "style" ? COMPOSITION_SUFFIX_STYLE : COMPOSITION_SUFFIX;
+    options.generationType === "style" ? buildStyleCompositionSuffix(styleDirective) : COMPOSITION_SUFFIX;
   options.promptFinal = ensureSingleSuffix(options.promptFinal, compositionSuffix);
 
   console.log("=== startGeneration ===");
