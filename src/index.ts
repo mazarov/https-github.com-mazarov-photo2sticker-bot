@@ -247,6 +247,168 @@ async function getOnboardingPackContentSet(): Promise<any | null> {
   return onboardingSet || null;
 }
 
+async function startOnboardingPackPreview(
+  ctx: any,
+  user: any,
+  lang: string
+): Promise<"started" | "need_paywall" | "blocked"> {
+  const onboardingSet = await getOnboardingPackContentSet();
+  if (!onboardingSet?.id) {
+    await ctx.reply(
+      lang === "ru" ? "Onboarding-набор не настроен. Отметь нужный пак onboarding=true." : "Onboarding pack is not configured.",
+      getMainMenuKeyboard(lang, ctx?.from?.id)
+    );
+    return "blocked";
+  }
+
+  const lastPhotoFromSessions = await getLatestSessionPhotoFileId(user.id);
+  const existingPhoto = lastPhotoFromSessions || user.last_photo_file_id || null;
+  if (lastPhotoFromSessions && !user.last_photo_file_id) {
+    await supabase.from("users").update({ last_photo_file_id: lastPhotoFromSessions }).eq("id", user.id);
+  }
+  if (!existingPhoto) {
+    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    return "blocked";
+  }
+
+  if ((user.credits || 0) < 1) {
+    return "need_paywall";
+  }
+
+  await ctx.reply(lang === "ru" ? "Создаю твой стикерпак..." : "Creating your sticker pack...");
+
+  await supabase.from("sessions").update({ is_active: false }).eq("user_id", user.id).eq("is_active", true).eq("env", config.appEnv);
+
+  let selectedPackStyleId: string | null = null;
+  try {
+    const defaultPackStyle = await pickStyleForIdeas(user);
+    selectedPackStyleId = defaultPackStyle?.id || null;
+  } catch (_) {}
+
+  let packPromptFinal: string | null = null;
+  let packStyleUserInput: string | null = null;
+  if (selectedPackStyleId) {
+    const preset = await getStylePresetV2ById(selectedPackStyleId);
+    if (preset?.prompt_hint) {
+      packStyleUserInput = preset.prompt_hint;
+      packPromptFinal = await applySubjectLockToPrompt(
+        {
+          user_id: user.id,
+          current_photo_file_id: existingPhoto,
+          selected_style_id: selectedPackStyleId,
+        },
+        "style",
+        ""
+      );
+      packPromptFinal = ensureSingleSuffix(packPromptFinal, COMPOSITION_SUFFIX_PACK);
+    }
+  }
+
+  const { data: deducted } = await supabase.rpc("deduct_credits", {
+    p_user_id: user.id,
+    p_amount: 1,
+  });
+  if (!deducted) return "need_paywall";
+
+  const templateId = String(onboardingSet.pack_template_id || "couple_v1");
+  const packSize = Number(onboardingSet.sticker_count || 16) || 16;
+
+  const { data: session, error: sessErr } = await supabase
+    .from("sessions")
+    .insert({
+      user_id: user.id,
+      state: "generating_pack_preview",
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: 1,
+      pack_template_id: templateId,
+      pack_holiday_id: null,
+      pack_carousel_index: 0,
+      pack_content_set_id: onboardingSet.id,
+      selected_style_id: selectedPackStyleId,
+      current_photo_file_id: existingPhoto,
+      photos: [existingPhoto],
+      prompt_final: packPromptFinal,
+      user_input: packStyleUserInput,
+      env: config.appEnv,
+    })
+    .select()
+    .single();
+  if (sessErr || !session) {
+    const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
+    await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    return "blocked";
+  }
+
+  const { data: batch, error: batchErr } = await supabase
+    .from("pack_batches")
+    .insert({
+      session_id: session.id,
+      user_id: user.id,
+      template_id: templateId,
+      size: packSize,
+      status: "preview",
+      credits_spent: 1,
+      env: config.appEnv,
+    })
+    .select()
+    .single();
+  if (batchErr || !batch) {
+    const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
+    await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
+    await supabase.from("sessions").update({ is_active: false }).eq("id", session.id);
+    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    return "blocked";
+  }
+
+  await supabase
+    .from("sessions")
+    .update({
+      pack_batch_id: batch.id,
+      state: "generating_pack_preview",
+      is_active: true,
+      flow_kind: "pack",
+      session_rev: (session.session_rev || 1) + 1,
+    })
+    .eq("id", session.id);
+
+  await supabase.from("jobs").insert({
+    session_id: session.id,
+    user_id: user.id,
+    pack_batch_id: batch.id,
+    status: "queued",
+    attempts: 0,
+    env: config.appEnv,
+  });
+
+  const progressMsg = await ctx.reply(await getText(lang, "pack.progress_generating"));
+  if (progressMsg?.message_id && ctx.chat?.id) {
+    await supabase
+      .from("sessions")
+      .update({
+        progress_message_id: progressMsg.message_id,
+        progress_chat_id: ctx.chat.id,
+        ui_message_id: progressMsg.message_id,
+        ui_chat_id: ctx.chat.id,
+      })
+      .eq("id", session.id);
+  }
+
+  sendAlert({
+    type: "pack_preview_ordered",
+    message: "Onboarding pack preview ordered",
+    details: {
+      user: `@${user.username || user.telegram_id}`,
+      template: templateId,
+      batchId: batch.id,
+      onboardingSetId: onboardingSet.id,
+    },
+  }).catch(console.error);
+
+  return "started";
+}
+
 /** Ensure pack id is unique in pack_content_sets_test; append _v2, _v3 if needed. */
 async function ensureUniquePackId(spec: PackSpecRow): Promise<PackSpecRow> {
   const normalized = normalizeSpecSegmentId(spec);
@@ -12718,17 +12880,22 @@ bot.action(/^onb_make_pack(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user?.id) return;
   const lang = user.lang || "en";
-  if (Number(user.credits || 0) >= 1) {
-    await handlePackMenuEntry(ctx, { source: "menu", autoPackEntry: false });
+  let shouldShowPaywall = Number(user.credits || 0) < 1;
+  if (!shouldShowPaywall) {
+    const result = await startOnboardingPackPreview(ctx, user, lang);
+    if (result === "started" || result === "blocked") return;
+    shouldShowPaywall = true;
+  }
+  if (shouldShowPaywall) {
+    const sessionRefRaw = ctx.match?.[1] || null;
+    await ctx.reply(
+      lang === "ru"
+        ? "Выбери подходящий пакет оплаты, и я соберу Telegram-стикерпак из твоего фото."
+        : "Choose a payment package and I'll create a Telegram sticker pack from your photo.",
+      { reply_markup: getOnboardingPaywallKeyboard(lang, user, sessionRefRaw) }
+    );
     return;
   }
-  const sessionRefRaw = ctx.match?.[1] || null;
-  await ctx.reply(
-    lang === "ru"
-      ? "Выбери подходящий пакет оплаты, и я соберу Telegram-стикерпак из твоего фото."
-      : "Choose a payment package and I'll create a Telegram sticker pack from your photo.",
-    { reply_markup: getOnboardingPaywallKeyboard(lang, user, sessionRefRaw) }
-  );
 });
 
 bot.action(/^onb_send_other_photo(?::(.+))?$/, async (ctx) => {

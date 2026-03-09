@@ -84,7 +84,8 @@ Source of truth по текущему entrypoint и состояниям:
 
 Кнопка:
 
-- `🔥 Сделать набор`
+- `🔥 Сделать набор` (`onb_make_pack`)
+- Для этого шага набор реакций берется из `pack_content_sets`/`pack_content_sets_test` c `onboarding=true` (name+description по локали).
 
 ## Paywall
 
@@ -104,7 +105,7 @@ Source of truth по текущему entrypoint и состояниям:
 
 Кнопки:
 
-- `✨ Создать стикерпак — 75 ⭐`
+- Текущие payment-пакеты (из `CREDIT_PACKS`, фильтры `hidden/trial/admin/show_in_onboarding`)
 - `🙂 Сделать одну эмоцию — 25 ⭐`
 
 ## После оплаты
@@ -122,6 +123,14 @@ Source of truth по текущему entrypoint и состояниям:
 ## Результат
 
 - Бот отправляет 16 стикеров.
+
+## Архитектурный контракт (v2)
+
+- `onb_make_pack` в onboarding работает отдельно от обычного `handlePackMenuEntry`:
+  - если `credits < 1` -> onboarding paywall;
+  - если `credits >= 1` -> сразу старт preview генерации onboarding-пака (без карусели `wait_pack_carousel`).
+- Источник onboarding-набора: строго запись `onboarding=true` в `pack_content_sets` (`pack_content_sets_test` на test).
+- Основной pack-flow (`📦 Создать пак`, карусель, выбор поз) не меняется и не используется для onboarding CTA.
 
 ## Завершение onboarding
 
