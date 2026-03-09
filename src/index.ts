@@ -1294,7 +1294,7 @@ const COMPOSITION_SUFFIX_PACK = `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\
 
 function extractStyleDirectiveFromPrompt(prompt: string): { cleanPrompt: string; styleDirective: string | null } {
   const source = String(prompt || "");
-  const styleLineRegex = /(?:^|\n)(Create a high-quality character illustration\.\s*Style:[^\n]+)(?=\n|$)/i;
+  const styleLineRegex = /(?:^|\n)(?:\d+\.\s*)?(Create a high-quality character illustration\.\s*Style:[^\n]+)(?=\n|$)/i;
   const match = source.match(styleLineRegex);
   if (!match?.[1]) {
     return { cleanPrompt: source, styleDirective: null };
@@ -1706,13 +1706,13 @@ async function startGeneration(
   if (options.generationType === "emotion") {
     options.promptFinal = sanitizeEmotionPrompt(options.promptFinal);
   }
-  options.promptFinal = stripCompositionRulesBlock(options.promptFinal);
   let styleDirective: string | null = null;
   if (options.generationType === "style") {
     const extracted = extractStyleDirectiveFromPrompt(options.promptFinal);
     options.promptFinal = extracted.cleanPrompt;
     styleDirective = extracted.styleDirective;
   }
+  options.promptFinal = stripCompositionRulesBlock(options.promptFinal);
   const compositionSuffix =
     options.generationType === "style" ? buildStyleCompositionSuffix(styleDirective) : COMPOSITION_SUFFIX;
   options.promptFinal = ensureSingleSuffix(options.promptFinal, compositionSuffix);
