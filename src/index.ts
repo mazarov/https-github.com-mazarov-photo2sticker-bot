@@ -660,6 +660,13 @@ function withCreditBadge(label: string, credits: number): string {
   return `${cleaned} (${credits}💎)`;
 }
 
+function withFreeBadge(label: string): string {
+  const cleaned = String(label)
+    .replace(/\s*[\(\-–—]?\s*(?:\d+\s*💎|free)\)?\s*$/iu, "")
+    .trim();
+  return `${cleaned} (free)`;
+}
+
 /** Action menu after photo: 4 actions (photo->sticker, replace face, change style, make pack). */
 async function sendActionMenu(
   ctx: any,
@@ -674,7 +681,7 @@ async function sendActionMenu(
   const makePackCb = appendSessionRefIfFits("action_make_pack", sessionRef);
 
   const text = await getText(lang, "action.choose");
-  const photoStickerText = withCreditBadge(await getText(lang, "action.photo_sticker"), 1);
+  const photoStickerText = withFreeBadge(await getText(lang, "action.photo_sticker"));
   const makeStickerText = withCreditBadge(await getText(lang, "action.make_sticker"), 1);
   const replaceFaceText = withCreditBadge(await getText(lang, "action.replace_face"), 1);
   const makePackText = withCreditBadge(await getText(lang, "action.make_pack"), 16);
