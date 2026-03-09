@@ -650,6 +650,13 @@ async function sendStyleKeyboardFlat(
   await ctx.reply(text, Markup.inlineKeyboard(buttons));
 }
 
+function withCreditBadge(label: string, credits: number): string {
+  const cleaned = String(label)
+    .replace(/\s*[\(\-–—]?\s*\d+\s*💎\)?\s*$/u, "")
+    .trim();
+  return `${cleaned} (${credits}💎)`;
+}
+
 /** Action menu after photo: 4 actions (photo->sticker, replace face, change style, make pack). */
 async function sendActionMenu(
   ctx: any,
@@ -664,11 +671,15 @@ async function sendActionMenu(
   const makePackCb = appendSessionRefIfFits("action_make_pack", sessionRef);
 
   const text = await getText(lang, "action.choose");
+  const photoStickerText = withCreditBadge(await getText(lang, "action.photo_sticker"), 1);
+  const makeStickerText = withCreditBadge(await getText(lang, "action.make_sticker"), 1);
+  const replaceFaceText = withCreditBadge(await getText(lang, "action.replace_face"), 1);
+  const makePackText = withCreditBadge(await getText(lang, "action.make_pack"), 16);
   const buttons = [
-    [{ text: await getText(lang, "action.photo_sticker"), callback_data: photoStickerCb }],
-    [{ text: await getText(lang, "action.make_sticker"), callback_data: makeStickerCb }],
-    [{ text: await getText(lang, "action.replace_face"), callback_data: replaceFaceCb }],
-    [{ text: await getText(lang, "action.make_pack"), callback_data: makePackCb }],
+    [{ text: photoStickerText, callback_data: photoStickerCb }],
+    [{ text: makeStickerText, callback_data: makeStickerCb }],
+    [{ text: replaceFaceText, callback_data: replaceFaceCb }],
+    [{ text: makePackText, callback_data: makePackCb }],
   ];
   await ctx.reply(text, Markup.inlineKeyboard(buttons));
 }
@@ -2060,12 +2071,18 @@ async function buildStickerButtons(
   options?: { sessionId?: string | null; sessionRev?: number | null }
 ) {
   const addToPackText = await getText(lang, "btn.add_to_pack");
-  const changeEmotionText = lang === "ru" ? "😊 Эмоция" : await getText(lang, "btn.change_emotion");
-  const changeMotionText = lang === "ru" ? "🏃 Движение" : await getText(lang, "btn.change_motion");
+  const changeEmotionText = withCreditBadge(
+    lang === "ru" ? "😊 Эмоция" : await getText(lang, "btn.change_emotion"),
+    1
+  );
+  const changeMotionText = withCreditBadge(
+    lang === "ru" ? "🏃 Движение" : await getText(lang, "btn.change_motion"),
+    1
+  );
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
-  const replaceFaceText = await getText(lang, "btn.replace_face");
-  const changeStyleText = await getText(lang, "btn.change_style");
+  const replaceFaceText = withCreditBadge(await getText(lang, "btn.replace_face"), 1);
+  const changeStyleText = withCreditBadge(await getText(lang, "btn.change_style"), 1);
   const removeBgText = lang === "ru" ? "🖼 Вырезать фон" : "🖼 Remove background";
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 

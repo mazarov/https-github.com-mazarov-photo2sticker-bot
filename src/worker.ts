@@ -2513,13 +2513,29 @@ async function runJob(job: any) {
   
   console.log("onboarding_step:", onboardingStep, "isOnboardingFirstSticker:", isOnboardingFirstSticker, "isOnboardingEmotion:", isOnboardingEmotion);
 
+  const withCreditBadge = (label: string, credits: number): string => {
+    const cleaned = String(label)
+      .replace(/\s*[\(\-–—]?\s*\d+\s*💎\)?\s*$/u, "")
+      .trim();
+    return `${cleaned} (${credits}💎)`;
+  };
+
   const addToPackText = await getText(lang, "btn.add_to_pack");
-  const changeStyleText = await getText(lang, "btn.change_style");
-  const changeEmotionText = lang === "ru" ? "😊 Эмоция" : await getText(lang, "btn.change_emotion");
-  const changeMotionText = lang === "ru" ? "🏃 Движение" : await getText(lang, "btn.change_motion");
+  const changeStyleText = withCreditBadge(await getText(lang, "btn.change_style"), 1);
+  const changeEmotionText = withCreditBadge(
+    lang === "ru" ? "😊 Эмоция" : await getText(lang, "btn.change_emotion"),
+    1
+  );
+  const changeMotionText = withCreditBadge(
+    lang === "ru" ? "🏃 Движение" : await getText(lang, "btn.change_motion"),
+    1
+  );
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
-  const replaceFaceText = lang === "ru" ? "🧑 Заменить лицо" : "🧑 Replace face";
+  const replaceFaceText = withCreditBadge(
+    lang === "ru" ? "🧑 Заменить лицо" : "🧑 Replace face",
+    1
+  );
   const removeBgText = lang === "ru" ? "🖼 Вырезать фон" : "🖼 Remove background";
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
