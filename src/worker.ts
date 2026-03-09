@@ -2583,7 +2583,7 @@ async function runJob(job: any) {
       lang === "ru" ? "Хочешь полный набор реакций из своего фото?" : "Want a full reactions pack from your photo?",
       {
         inline_keyboard: [[
-          { text: lang === "ru" ? "🔥 Сделать полный стикерпак — 75 ⭐" : "🔥 Make full sticker pack — 75 ⭐", callback_data: "onb_buy_full_pack_75" },
+          { text: lang === "ru" ? "🔥 Выбрать пакет и сделать стикерпак" : "🔥 Choose package and make sticker pack", callback_data: "onb_make_pack" },
         ]],
       }
     );

@@ -2114,34 +2114,34 @@ async function startGeneration(
   await sendProgressStart(ctx, session.id, lang, options.earlyProgressMessageId);
 }
 
-// Credit packages: { credits, bonus_credits?, price_in_stars, label_ru, label_en, price_rub, adminOnly?, trialOnly?, hidden? }
+// Credit packages: { credits, bonus_credits?, price_in_stars, label_ru, label_en, price_rub, adminOnly?, trialOnly?, hidden?, show_in_onboarding? }
 // 1 pack = 16 credits (1 preview + 15 approve). Credits aligned to pack count.
 const CREDIT_PACKS = [
-  { credits: 1, price: 1, price_rub: 1, label_ru: "🔧 Тест", label_en: "🔧 Test", adminOnly: true },
-  { credits: 9, bonus_credits: 8, price: 98, price_rub: 102, label_ru: "🎁 Попробуй", label_en: "🎁 Try", trialOnly: true },
-  { credits: 17, price: 150, price_rub: 156, label_ru: "⭐ Старт", label_en: "⭐ Start" },
-  { credits: 32, price: 350, price_rub: 364, label_ru: "💎 Поп", label_en: "💎 Pop" },
-  { credits: 112, price: 1000, price_rub: 1040, label_ru: "👑 Про", label_en: "👑 Pro" },
-  { credits: 256, price: 2250, price_rub: 2340, label_ru: "🚀 Макс", label_en: "🚀 Max" },
+  { credits: 1, price: 1, price_rub: 1, label_ru: "🔧 Тест", label_en: "🔧 Test", adminOnly: true, show_in_onboarding: true },
+  { credits: 9, bonus_credits: 8, price: 98, price_rub: 102, label_ru: "🎁 Попробуй", label_en: "🎁 Try", trialOnly: true, show_in_onboarding: true },
+  { credits: 17, price: 150, price_rub: 156, label_ru: "⭐ Старт", label_en: "⭐ Start", show_in_onboarding: true },
+  { credits: 32, price: 350, price_rub: 364, label_ru: "💎 Поп", label_en: "💎 Pop", show_in_onboarding: true },
+  { credits: 112, price: 1000, price_rub: 1040, label_ru: "👑 Про", label_en: "👑 Pro", show_in_onboarding: true },
+  { credits: 256, price: 2250, price_rub: 2340, label_ru: "🚀 Макс", label_en: "🚀 Max", show_in_onboarding: true },
   // Hidden discount packs (not shown in UI, used via direct callback for promos, abandoned carts, admin discounts)
   // -10%
-  { credits: 9, bonus_credits: 8, price: 88, price_rub: 92, label_ru: "🎁 Попробуй -10%", label_en: "🎁 Try -10%", hidden: true, trialOnly: true },
-  { credits: 17, price: 135, price_rub: 140, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true },
-  { credits: 32, price: 315, price_rub: 328, label_ru: "💎 Поп -10%", label_en: "💎 Pop -10%", hidden: true },
-  { credits: 112, price: 900, price_rub: 936, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true },
-  { credits: 256, price: 2025, price_rub: 2106, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true },
+  { credits: 9, bonus_credits: 8, price: 88, price_rub: 92, label_ru: "🎁 Попробуй -10%", label_en: "🎁 Try -10%", hidden: true, trialOnly: true, show_in_onboarding: true },
+  { credits: 17, price: 135, price_rub: 140, label_ru: "⭐ Старт -10%", label_en: "⭐ Start -10%", hidden: true, show_in_onboarding: true },
+  { credits: 32, price: 315, price_rub: 328, label_ru: "💎 Поп -10%", label_en: "💎 Pop -10%", hidden: true, show_in_onboarding: true },
+  { credits: 112, price: 900, price_rub: 936, label_ru: "👑 Про -10%", label_en: "👑 Pro -10%", hidden: true, show_in_onboarding: true },
+  { credits: 256, price: 2025, price_rub: 2106, label_ru: "🚀 Макс -10%", label_en: "🚀 Max -10%", hidden: true, show_in_onboarding: true },
   // -15%
-  { credits: 9, bonus_credits: 8, price: 83, price_rub: 87, label_ru: "🎁 Попробуй -15%", label_en: "🎁 Try -15%", hidden: true, trialOnly: true },
-  { credits: 17, price: 128, price_rub: 133, label_ru: "⭐ Старт -15%", label_en: "⭐ Start -15%", hidden: true },
-  { credits: 32, price: 298, price_rub: 309, label_ru: "💎 Поп -15%", label_en: "💎 Pop -15%", hidden: true },
-  { credits: 112, price: 850, price_rub: 884, label_ru: "👑 Про -15%", label_en: "👑 Pro -15%", hidden: true },
-  { credits: 256, price: 1913, price_rub: 1989, label_ru: "🚀 Макс -15%", label_en: "🚀 Max -15%", hidden: true },
+  { credits: 9, bonus_credits: 8, price: 83, price_rub: 87, label_ru: "🎁 Попробуй -15%", label_en: "🎁 Try -15%", hidden: true, trialOnly: true, show_in_onboarding: true },
+  { credits: 17, price: 128, price_rub: 133, label_ru: "⭐ Старт -15%", label_en: "⭐ Start -15%", hidden: true, show_in_onboarding: true },
+  { credits: 32, price: 298, price_rub: 309, label_ru: "💎 Поп -15%", label_en: "💎 Pop -15%", hidden: true, show_in_onboarding: true },
+  { credits: 112, price: 850, price_rub: 884, label_ru: "👑 Про -15%", label_en: "👑 Pro -15%", hidden: true, show_in_onboarding: true },
+  { credits: 256, price: 1913, price_rub: 1989, label_ru: "🚀 Макс -15%", label_en: "🚀 Max -15%", hidden: true, show_in_onboarding: true },
   // -25%
-  { credits: 9, bonus_credits: 8, price: 74, price_rub: 77, label_ru: "🎁 Попробуй -25%", label_en: "🎁 Try -25%", hidden: true, trialOnly: true },
-  { credits: 17, price: 113, price_rub: 117, label_ru: "⭐ Старт -25%", label_en: "⭐ Start -25%", hidden: true },
-  { credits: 32, price: 263, price_rub: 273, label_ru: "💎 Поп -25%", label_en: "💎 Pop -25%", hidden: true },
-  { credits: 112, price: 750, price_rub: 780, label_ru: "👑 Про -25%", label_en: "👑 Pro -25%", hidden: true },
-  { credits: 256, price: 1688, price_rub: 1755, label_ru: "🚀 Макс -25%", label_en: "🚀 Max -25%", hidden: true },
+  { credits: 9, bonus_credits: 8, price: 74, price_rub: 77, label_ru: "🎁 Попробуй -25%", label_en: "🎁 Try -25%", hidden: true, trialOnly: true, show_in_onboarding: true },
+  { credits: 17, price: 113, price_rub: 117, label_ru: "⭐ Старт -25%", label_en: "⭐ Start -25%", hidden: true, show_in_onboarding: true },
+  { credits: 32, price: 263, price_rub: 273, label_ru: "💎 Поп -25%", label_en: "💎 Pop -25%", hidden: true, show_in_onboarding: true },
+  { credits: 112, price: 750, price_rub: 780, label_ru: "👑 Про -25%", label_en: "👑 Pro -25%", hidden: true, show_in_onboarding: true },
+  { credits: 256, price: 1688, price_rub: 1755, label_ru: "🚀 Макс -25%", label_en: "🚀 Max -25%", hidden: true, show_in_onboarding: true },
 ];
 
 function getPackTotalCredits(pack: any): number {
@@ -3685,12 +3685,28 @@ async function sendBuyCreditsMenu(ctx: any, user: any, messageText?: string) {
   await ctx.reply(text, Markup.inlineKeyboard(buttons));
 }
 
-function getOnboardingPaywallKeyboard(lang: string, sessionRef?: string | null) {
+function getOnboardingPaywallKeyboard(lang: string, user: any, sessionRef?: string | null) {
+  const isAdmin = config.adminIds.includes(user.telegram_id);
+  const availablePacks = CREDIT_PACKS.filter((p: any) =>
+    !p.hidden &&
+    (p.show_in_onboarding !== false) &&
+    (!p.adminOnly || isAdmin) &&
+    (!p.trialOnly || !user.has_purchased)
+  );
+  const unit = lang === "ru" ? "стикеров" : "stickers";
+  const rows = availablePacks.map((pack: any) => {
+    const label = lang === "ru" ? pack.label_ru : pack.label_en;
+    const totalCredits = getPackTotalCredits(pack);
+    return [{
+      text: `${label}: ${totalCredits} ${unit} — ${pack.price}⭐ (${pack.price_rub}₽)`,
+      callback_data: appendSessionRefIfFits(`pack_${pack.credits}_${pack.price}`, sessionRef || null),
+    }];
+  });
+  if (lang === "ru") {
+    rows.push([{ text: "💵 Купить Stars за ₽", url: "https://t.me/StarsZakupBot?start=ref_r_0477825983" }]);
+  }
   return {
-    inline_keyboard: [
-      [{ text: lang === "ru" ? "✨ Создать стикерпак — 75 ⭐" : "✨ Create sticker pack — 75 ⭐", callback_data: appendSessionRefIfFits("onb_buy_full_pack_75", sessionRef || null) }],
-      [{ text: lang === "ru" ? "🙂 Сделать одну эмоцию — 25 ⭐" : "🙂 Make one emotion — 25 ⭐", callback_data: appendSessionRefIfFits("onb_buy_single_emotion_25", sessionRef || null) }],
-    ],
+    inline_keyboard: rows,
   };
 }
 
@@ -12675,9 +12691,9 @@ bot.action(/^onb_make_pack(?::(.+))?$/, async (ctx) => {
   const sessionRefRaw = ctx.match?.[1] || null;
   await ctx.reply(
     lang === "ru"
-      ? "Я сделаю полноценный Telegram-стикерпак из твоего фото.\n\nВсего 16 стикеров. Их можно сразу добавить в Telegram и отправлять друзьям."
-      : "I'll make a full Telegram sticker pack from your photo.\n\n16 stickers total. You can add them to Telegram right away.",
-    { reply_markup: getOnboardingPaywallKeyboard(lang, sessionRefRaw) }
+      ? "Выбери подходящий пакет оплаты, и я соберу Telegram-стикерпак из твоего фото."
+      : "Choose a payment package and I'll create a Telegram sticker pack from your photo.",
+    { reply_markup: getOnboardingPaywallKeyboard(lang, user, sessionRefRaw) }
   );
 });
 
@@ -15184,8 +15200,8 @@ bot.action("cancel", async (ctx) => {
   }
 });
 
-// Callback: pack_N_PRICE (e.g., pack_5_30)
-bot.action(/^pack_(\d+)_(\d+)$/, async (ctx) => {
+// Callback: pack_N_PRICE (e.g., pack_5_30), optional :sessionRef suffix for onboarding buttons.
+bot.action(/^pack_(\d+)_(\d+)(?::(.+))?$/, async (ctx) => {
   const startTime = Date.now();
   console.log("=== PAYMENT: pack_select START ===");
   console.log("timestamp:", new Date().toISOString());

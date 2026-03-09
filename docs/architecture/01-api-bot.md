@@ -94,7 +94,7 @@ stateDiagram-v2
 - Новые callback onboarding:
   - `onb_make_pack`
   - `onb_buy_single_emotion_25`
-  - `onb_buy_full_pack_75`
+  - `pack_{credits}_{price}` (кнопки оплаты в onboarding теперь берутся из текущих payment-пакетов с фильтром `show_in_onboarding`)
   - `onb_send_other_photo`
   - `onb_add_stickerpack`
 

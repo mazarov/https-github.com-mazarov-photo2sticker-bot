@@ -128,11 +128,10 @@ flowchart TD
 
 ### Onboarding Stars offers (09-03)
 
-- Отдельные onboarding-оферы:
-  - `✨ Создать стикерпак — 75 ⭐`
-  - `🙂 Сделать одну эмоцию — 25 ⭐`
+- Onboarding paywall использует те же актуальные payment-пакеты, что и обычный `💳 Баланс` (callback `pack_{credits}_{price}`).
+- Доступность в onboarding регулируется флагом пакета `show_in_onboarding` (сейчас выставлен `true` для всех текущих паков в `CREDIT_PACKS`).
+- Кнопки строятся с теми же ограничениями, что и в обычной оплате: скрытые пакеты (`hidden`) не показываются, trial-only доступен только до первой покупки, admin-only только админам.
 - Payload для single-ветки: `buy_single_emotion`.
-- Payload для full-pack ветки: `buy_onboarding_full_pack`.
 - В onboarding-UI не используются термины `кредиты`, `💎`, `баланс` (прямая цена в Stars в кнопках).
 
 ## Идемпотентность
