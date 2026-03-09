@@ -80,18 +80,18 @@ async function getOnboardingPackContentSet(): Promise<any | null> {
   }
   const { data, error } = await supabase
     .from(config.packContentSetsTable)
-    .select("id, name_ru, name_en, carousel_description_ru, carousel_description_en, sort_order")
+    .select("id, name_ru, name_en, carousel_description_ru, carousel_description_en, sort_order, onboarding")
     .eq("is_active", true)
-    .eq("onboarding", true)
     .order("sort_order", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .limit(50);
   if (error) {
     console.warn("[onboarding_pack] load error:", error.message);
     return onboardingPackSetCache?.data || null;
   }
-  onboardingPackSetCache = { data: data || null, timestamp: now };
-  return data || null;
+  const rows = Array.isArray(data) ? data : [];
+  const preferred = rows.find((row: any) => row?.onboarding === true || row?.onbording === true) || rows[0] || null;
+  onboardingPackSetCache = { data: preferred, timestamp: now };
+  return preferred;
 }
 
 function isConfigEnabled(value: string | null | undefined): boolean {

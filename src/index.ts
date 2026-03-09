@@ -243,8 +243,9 @@ function getLocalizedPackDescription(pack: any, lang: string): string {
 
 async function getOnboardingPackContentSet(): Promise<any | null> {
   const activeSets = await getActivePackContentSets();
-  const onboardingSet = activeSets.find((row: any) => row?.onboarding === true);
-  return onboardingSet || null;
+  const onboardingSet = activeSets.find((row: any) => row?.onboarding === true || row?.onbording === true);
+  // Fallback: keep onboarding text alive even if flag/data is missing.
+  return onboardingSet || activeSets[0] || null;
 }
 
 /** Ensure pack id is unique in pack_content_sets_test; append _v2, _v3 if needed. */
@@ -12724,6 +12725,10 @@ bot.action(/^onb_make_pack(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user?.id) return;
   const lang = user.lang || "en";
+  if (Number(user.credits || 0) >= 1) {
+    await handlePackMenuEntry(ctx, { source: "menu", autoPackEntry: false });
+    return;
+  }
   const sessionRefRaw = ctx.match?.[1] || null;
   await ctx.reply(
     lang === "ru"
