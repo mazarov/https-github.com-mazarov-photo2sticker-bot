@@ -3715,6 +3715,128 @@ async function sendOnboardingInvoice(telegramId: number, lang: string, payload: 
   );
 }
 
+async function runFreePhotoStickerFlow(
+  ctx: any,
+  params: {
+    user: any;
+    session: any;
+    lang: string;
+    photoFileId: string;
+    actionLabel?: "photo_sticker" | "remove_bg";
+    onboardingMode?: boolean;
+  }
+) {
+  const { user, session, lang, photoFileId, actionLabel = "photo_sticker", onboardingMode = false } = params;
+  const isRu = lang === "ru";
+  try {
+    await ctx.reply(isRu ? "⏳ Убираю фон..." : "⏳ Removing background...");
+    const filePath = await getFilePath(photoFileId);
+    const fileBuffer = await downloadFile(filePath);
+    const pngBuffer = await sharp(fileBuffer).png().toBuffer();
+    const pixianForm = new FormData();
+    pixianForm.append("image", pngBuffer, { filename: "image.png", contentType: "image/png" });
+    const pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
+      auth: { username: config.pixianUsername, password: config.pixianPassword },
+      headers: pixianForm.getHeaders(),
+      responseType: "arraybuffer",
+      timeout: 60000,
+    });
+    const noBgBuffer = Buffer.from(pixianRes.data);
+    const stickerBuffer = await sharp(noBgBuffer)
+      .trim({ threshold: 2 })
+      .resize(482, 482, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .extend({ top: 15, bottom: 15, left: 15, right: 15, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .webp({ quality: 95 })
+      .toBuffer();
+    const newFileId = await sendSticker(ctx.chat!.id, stickerBuffer);
+    const insertPayload: any = {
+      user_id: user.id,
+      session_id: session.id,
+      telegram_file_id: newFileId || null,
+      source_photo_file_id: photoFileId,
+      generation_type: "photo_sticker",
+      env: config.appEnv,
+    };
+
+    let newSticker: { id: string } | null = null;
+    let insertErr: any = null;
+    const firstInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
+    newSticker = firstInsert.data as { id: string } | null;
+    insertErr = firstInsert.error;
+    if (insertErr && (String(insertErr.message || "").toLowerCase().includes("generation_type") || String(insertErr.message || "").toLowerCase().includes("invalid input value for enum"))) {
+      insertPayload.generation_type = "remove_bg";
+      const fallbackInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
+      newSticker = fallbackInsert.data as { id: string } | null;
+      insertErr = fallbackInsert.error;
+    }
+    if (insertErr && (String(insertErr.message || "").toLowerCase().includes("generation_type") || insertErr.code === "42703")) {
+      delete insertPayload.generation_type;
+      const lastInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
+      newSticker = lastInsert.data as { id: string } | null;
+      insertErr = lastInsert.error;
+    }
+    if (insertErr || !newSticker?.id) {
+      console.error("[free_photo_sticker] failed to save sticker row:", insertErr?.message || insertErr);
+      await ctx.reply(await getText(lang, "error.technical"));
+      return;
+    }
+
+    if (newFileId) {
+      await supabase.from("stickers").update({ telegram_file_id: newFileId }).eq("id", newSticker.id);
+    }
+
+    await supabase
+      .from("sessions")
+      .update({
+        state: "confirm_sticker",
+        is_active: true,
+        flow_kind: "single",
+        current_photo_file_id: photoFileId,
+        photos: [photoFileId],
+        last_sticker_file_id: newFileId || null,
+        session_rev: (session.session_rev || 1) + 1,
+      })
+      .eq("id", session.id);
+
+    sendNotification({
+      type: "new_sticker",
+      message: [
+        `✅ Генерация завершена (${actionLabel})`,
+        `👤 @${user.username || user.telegram_id}`,
+      ].join("\n"),
+      sourceImageBuffer: fileBuffer,
+      resultImageBuffer: stickerBuffer,
+    }).catch(console.error);
+
+    if (onboardingMode) {
+      if (Number(user.onboarding_step || 0) < 1) {
+        await supabase.from("users").update({ onboarding_step: 1 }).eq("id", user.id);
+      }
+      await ctx.reply(lang === "ru" ? "Вот твой первый стикер 😄" : "Here is your first sticker 😄");
+      await ctx.reply(
+        lang === "ru"
+          ? "Я могу сделать из твоего фото еще реакции:\n\n😂 смех\n😡 злость\n🥰 любовь\n🤯 шок\n😎 крутой\n😭 плач"
+          : "I can make more reactions from your photo:\n\n😂 laugh\n😡 angry\n🥰 love\n🤯 shock\n😎 cool\n😭 cry"
+      );
+      await ctx.reply(
+        lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",
+        {
+          reply_markup: {
+            inline_keyboard: [[{ text: lang === "ru" ? "🔥 Сделать набор" : "🔥 Make pack", callback_data: "onb_make_pack" }]],
+          },
+        }
+      );
+      return;
+    }
+
+    const replyMarkup = await buildStickerButtons(lang, newSticker.id);
+    await ctx.reply(lang === "ru" ? "Фон удалён! Что дальше?" : "Background removed! What's next?", { reply_markup: replyMarkup });
+  } catch (err: any) {
+    console.error("[free_photo_sticker] failed:", err?.message || err);
+    await ctx.reply(lang === "ru" ? "❌ Не удалось убрать фон. Попробуй ещё раз." : "❌ Failed to remove background. Try again.");
+  }
+}
+
 // Helper: parse start payload into UTM fields + yclid
 // Format: source_medium_campaign_content_yclid
 // yclid detection: last segment, fully numeric, length > 8
@@ -4974,44 +5096,16 @@ bot.on("photo", async (ctx) => {
 
   const onboardingActive = !hasCompletedOnboarding(user);
   if (onboardingActive && session.state === "wait_photo" && !session.selected_style_id) {
-    const defaultPreset = await getDefaultStylePresetV2();
-    const userInput = defaultPreset?.prompt_hint || (lang === "ru" ? "Сделай стильный стикер." : "Make a stylish sticker.");
-    const sessionRev = (session.session_rev || 1) + 1;
-    await supabase
-      .from("sessions")
-      .update({
-        photos,
-        state: "wait_style",
-        is_active: true,
-        current_photo_file_id: photo.file_id,
-        style_source_kind: "photo",
-        selected_style_id: defaultPreset?.id || null,
-        session_rev: sessionRev,
-      })
-      .eq("id", session.id);
-
-    if ((user.credits || 0) < 1) {
-      await supabase
-        .from("users")
-        .update({ credits: Number(user.credits || 0) + 1 })
-        .eq("id", user.id);
-      user.credits = Number(user.credits || 0) + 1;
-    }
-
     await ctx.reply(lang === "ru" ? "Получил фото 👍\n\nСоздаю стикер..." : "Got your photo 👍\n\nCreating sticker...");
-    const promptResult = await generatePrompt(userInput);
-    const generatedPrompt = promptResult.ok && !promptResult.retry ? promptResult.prompt || userInput : userInput;
-    const freshSession = await getSessionByIdForUser(user.id, session.id);
-    if (freshSession?.id) {
-      await startGeneration(ctx, user, freshSession, lang, {
-        generationType: "style",
-        promptFinal: generatedPrompt,
-        styleSourceKind: "photo",
-        userInput,
-        selectedStyleId: defaultPreset?.id || null,
-      });
-      return;
-    }
+    await runFreePhotoStickerFlow(ctx, {
+      user,
+      session,
+      lang,
+      photoFileId: photo.file_id,
+      actionLabel: "photo_sticker",
+      onboardingMode: true,
+    });
+    return;
   }
 
   // Valentine flow: came from val_* link with pre-selected style — go straight to generation
@@ -10839,82 +10933,14 @@ async function handleActionMenuCallback(ctx: any, action: "photo_sticker" | "rem
       lang === "ru" ? "Фото в стикер (меню действий)" : "Photo to sticker (action menu)",
       photoFileId
     );
-    const isRu = lang === "ru";
-    try {
-      await ctx.reply(isRu ? "⏳ Убираю фон..." : "⏳ Removing background...");
-      const filePath = await getFilePath(photoFileId);
-      const fileBuffer = await downloadFile(filePath);
-      const pngBuffer = await sharp(fileBuffer).png().toBuffer();
-      const pixianForm = new FormData();
-      pixianForm.append("image", pngBuffer, { filename: "image.png", contentType: "image/png" });
-      const pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
-        auth: { username: config.pixianUsername, password: config.pixianPassword },
-        headers: pixianForm.getHeaders(),
-        responseType: "arraybuffer",
-        timeout: 60000,
-      });
-      const noBgBuffer = Buffer.from(pixianRes.data);
-      const stickerBuffer = await sharp(noBgBuffer)
-        .trim({ threshold: 2 })
-        .resize(482, 482, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-        .extend({ top: 15, bottom: 15, left: 15, right: 15, background: { r: 0, g: 0, b: 0, alpha: 0 } })
-        .webp({ quality: 95 })
-        .toBuffer();
-      const newFileId = await sendSticker(ctx.chat!.id, stickerBuffer);
-      const insertPayload: any = {
-        user_id: user.id,
-        session_id: session.id,
-        telegram_file_id: newFileId || null,
-        source_photo_file_id: photoFileId,
-        generation_type: "photo_sticker",
-        env: config.appEnv,
-      };
-
-      let newSticker: { id: string } | null = null;
-      let insertErr: any = null;
-      const firstInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
-      newSticker = firstInsert.data as { id: string } | null;
-      insertErr = firstInsert.error;
-
-      // Backward-compat: generation_type enum/value may differ between envs.
-      if (insertErr && (String(insertErr.message || "").toLowerCase().includes("generation_type") || String(insertErr.message || "").toLowerCase().includes("invalid input value for enum"))) {
-        insertPayload.generation_type = "remove_bg";
-        const fallbackInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
-        newSticker = fallbackInsert.data as { id: string } | null;
-        insertErr = fallbackInsert.error;
-      }
-      if (insertErr && (String(insertErr.message || "").toLowerCase().includes("generation_type") || insertErr.code === "42703")) {
-        delete insertPayload.generation_type;
-        const lastInsert = await supabase.from("stickers").insert(insertPayload).select("id").single();
-        newSticker = lastInsert.data as { id: string } | null;
-        insertErr = lastInsert.error;
-      }
-      if (insertErr || !newSticker?.id) {
-        console.error("[action_photo_sticker] failed to save sticker row:", insertErr?.message || insertErr);
-        await ctx.reply(await getText(lang, "error.technical"));
-        return;
-      }
-
-      if (newFileId) {
-        await supabase.from("stickers").update({ telegram_file_id: newFileId }).eq("id", newSticker.id);
-      }
-      sendNotification({
-        type: "new_sticker",
-        message: [
-          `✅ Генерация завершена (${action})`,
-          `👤 @${user.username || telegramId} (${telegramId})`,
-          `💰 Кредиты: ${user.credits}`,
-          `🎨 Стиль: ${session.selected_style_id || "-"}`,
-        ].join("\n"),
-        sourceImageBuffer: fileBuffer,
-        resultImageBuffer: stickerBuffer,
-      }).catch(console.error);
-      const replyMarkup = await buildStickerButtons(lang, newSticker.id);
-      await ctx.reply(lang === "ru" ? "Фон удалён! Что дальше?" : "Background removed! What's next?", { reply_markup: replyMarkup });
-    } catch (err: any) {
-      console.error("[action_remove_bg] failed:", err?.message || err);
-      await ctx.reply(lang === "ru" ? "❌ Не удалось убрать фон. Попробуй ещё раз." : "❌ Failed to remove background. Try again.");
-    }
+    await runFreePhotoStickerFlow(ctx, {
+      user,
+      session,
+      lang,
+      photoFileId,
+      actionLabel: action,
+      onboardingMode: false,
+    });
     return;
   }
 
@@ -15383,6 +15409,21 @@ bot.on("successful_payment", async (ctx) => {
     if (invoicePayload === "buy_single_emotion") {
       await ctx.reply(lang === "ru" ? "Создаю эмоцию..." : "Creating your emotion...");
       let session = await getActiveSession(user.id);
+      let sourceStickerFileId: string | null = null;
+      let sourcePhotoFileId: string | null = null;
+      if (!session?.last_sticker_file_id) {
+        const { data: latestSticker } = await supabase
+          .from("stickers")
+          .select("telegram_file_id, source_photo_file_id")
+          .eq("user_id", user.id)
+          .eq("env", config.appEnv)
+          .not("telegram_file_id", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        sourceStickerFileId = latestSticker?.telegram_file_id || null;
+        sourcePhotoFileId = latestSticker?.source_photo_file_id || null;
+      }
       if (!session?.id) {
         const { data: created } = await supabase
           .from("sessions")
@@ -15392,6 +15433,9 @@ bot.on("successful_payment", async (ctx) => {
             is_active: true,
             flow_kind: "single",
             session_rev: 1,
+            current_photo_file_id: sourcePhotoFileId || user.last_photo_file_id || null,
+            photos: sourcePhotoFileId || user.last_photo_file_id ? [sourcePhotoFileId || user.last_photo_file_id] : [],
+            last_sticker_file_id: sourceStickerFileId,
             env: config.appEnv,
           })
           .select("*")
@@ -15405,6 +15449,14 @@ bot.on("successful_payment", async (ctx) => {
           .update({
             state: "wait_emotion",
             is_active: true,
+            current_photo_file_id: session.current_photo_file_id || sourcePhotoFileId || user.last_photo_file_id || null,
+            photos:
+              Array.isArray(session.photos) && session.photos.length > 0
+                ? session.photos
+                : (session.current_photo_file_id || sourcePhotoFileId || user.last_photo_file_id)
+                  ? [session.current_photo_file_id || sourcePhotoFileId || user.last_photo_file_id]
+                  : [],
+            last_sticker_file_id: session.last_sticker_file_id || sourceStickerFileId,
             selected_emotion: "smile",
             emotion_prompt: lang === "ru" ? "радостная улыбка" : "joyful smile",
             session_rev: sessionRev,
