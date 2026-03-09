@@ -152,6 +152,39 @@ async function uploadTempStickerSourceAndGetPublicUrl(
   return { publicUrl, storagePath, bucket };
 }
 
+async function uploadGeminiRawDebugAndGetPublicUrl(
+  buffer: Buffer,
+  session: any,
+  jobId: string,
+  mimeType: string
+): Promise<{ publicUrl: string; storagePath: string; bucket: string }> {
+  const bucket = config.supabaseStorageBucketExamples || "stickers-examples";
+  const ext = mimeType.includes("png") ? "png" : mimeType.includes("jpeg") ? "jpg" : "webp";
+  const storagePath = `temp/gemini-raw/${session.user_id}/${session.id}/${Date.now()}_${jobId}.${ext}`;
+  const upload = () =>
+    supabase.storage
+      .from(bucket)
+      .upload(storagePath, buffer, { contentType: mimeType || "image/png", upsert: true });
+
+  let { error } = await upload();
+  if (error && isTransientStorageError(error)) {
+    await sleep(2000);
+    const retry = await upload();
+    error = retry.error;
+  }
+  if (error) {
+    throw new Error(`Gemini raw debug upload failed: ${error.message}`);
+  }
+  const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+  if (!data?.publicUrl) {
+    throw new Error("Gemini raw debug upload failed: public URL is empty");
+  }
+  const publicUrl = config.supabasePublicStorageUrl
+    ? data.publicUrl.replace(config.supabaseUrl, config.supabasePublicStorageUrl)
+    : data.publicUrl;
+  return { publicUrl, storagePath, bucket };
+}
+
 async function resolveStickerSourceUrl(
   session: any,
   sourceFileId: string,
@@ -2188,6 +2221,34 @@ async function runJob(job: any) {
     throw new Error("Gemini returned no image");
   }
 
+  const generatedBuffer = Buffer.from(imageBase64, "base64");
+  const generatedImageSha256 = sha256Hex(generatedBuffer);
+  const geminiDebugDumpEnabled = isConfigEnabled(
+    await getAppConfig("gemini_debug_dump_enabled", "false")
+  );
+  if (geminiDebugDumpEnabled) {
+    try {
+      const uploaded = await uploadGeminiRawDebugAndGetPublicUrl(
+        generatedBuffer,
+        session,
+        job.id,
+        "image/png"
+      );
+      console.log("[GeminiDebug] raw_image_dump", {
+        sessionId: session.id,
+        jobId: job.id,
+        generationType,
+        model: activeModel,
+        bytes: generatedBuffer.length,
+        sha256: generatedImageSha256,
+        mimeType: "image/png",
+        bucket: uploaded.bucket,
+        storagePath: uploaded.storagePath,
+        publicUrl: uploaded.publicUrl,
+      });
+    } catch (err: any) {
+      console.warn("[GeminiDebug] raw_image_dump_failed:", err?.message || err);
+    }
   }
 
   if (!imageBase64) {
@@ -2234,7 +2295,6 @@ async function runJob(job: any) {
   console.log("Image generated successfully");
 
   await updateProgress(4);
-  const generatedBuffer = Buffer.from(imageBase64, "base64");
 
   await updateProgress(5);
 
