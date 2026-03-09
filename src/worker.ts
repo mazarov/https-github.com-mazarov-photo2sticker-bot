@@ -1648,7 +1648,7 @@ async function runJob(job: any) {
 
   const { data: user } = await supabase
     .from("users")
-    .select("telegram_id, lang, sticker_set_name, username, credits, total_generations, onboarding_step")
+    .select("telegram_id, lang, sticker_set_name, username, credits, total_generations, onboarding_step, onboarding_completed")
     .eq("id", session.user_id)
     .maybeSingle();
 
@@ -2469,9 +2469,12 @@ async function runJob(job: any) {
   // Skip for avatar_demo — it's a free preview, not a real generation
   const isAvatarDemo = generationType === "avatar_demo";
   const isAssistantMode = session.selected_style_id === "assistant";
-  const onboardingStep = user.onboarding_step ?? 99;
-  const isOnboardingFirstSticker = !isAssistantMode && !isAvatarDemo && onboardingStep === 0 && generationType === "style";
-  const isOnboardingEmotion = !isAssistantMode && !isAvatarDemo && onboardingStep === 1 && generationType === "emotion";
+  const onboardingStep = Number(user.onboarding_step ?? 0);
+  const onboardingCompleted = typeof user.onboarding_completed === "boolean"
+    ? user.onboarding_completed
+    : onboardingStep >= 2;
+  const isOnboardingFirstSticker = !isAssistantMode && !isAvatarDemo && !onboardingCompleted && generationType === "style";
+  const isOnboardingEmotion = !isAssistantMode && !isAvatarDemo && !onboardingCompleted && generationType === "emotion";
   
   console.log("onboarding_step:", onboardingStep, "isOnboardingFirstSticker:", isOnboardingFirstSticker, "isOnboardingEmotion:", isOnboardingEmotion);
 
@@ -2513,9 +2516,14 @@ async function runJob(job: any) {
     ],
   };
 
-  // Send sticker with full button set (including first-time users)
+  // Send sticker with full button set for regular flow.
+  // During onboarding first sticker we intentionally keep focus and avoid editing actions.
   console.time(timerLabel("step7_sendSticker"));
-  const stickerFileId = await sendSticker(telegramId, stickerBuffer, replyMarkup);
+  const stickerFileId = await sendSticker(
+    telegramId,
+    stickerBuffer,
+    isOnboardingFirstSticker ? undefined : replyMarkup
+  );
   console.timeEnd(timerLabel("step7_sendSticker"));
 
   // Update telegram_file_id IMMEDIATELY after sending (before user can click buttons)
@@ -2530,10 +2538,9 @@ async function runJob(job: any) {
     console.log(">>> WARNING: skipped telegram_file_id update, stickerId:", stickerId, "stickerFileId:", !!stickerFileId);
   }
 
-  // Advance onboarding_step (for both assistant and manual mode)
-  // Skip for avatar_demo — don't touch onboarding state
-  if (!isAvatarDemo && onboardingStep < 2) {
-    const newStep = Math.min(onboardingStep + 1, 2);
+  // Advance onboarding step for users who are still in onboarding.
+  if (!isAvatarDemo && !onboardingCompleted && onboardingStep < 1 && generationType === "style") {
+    const newStep = 1;
     await supabase
       .from("users")
       .update({ onboarding_step: newStep })
@@ -2541,19 +2548,36 @@ async function runJob(job: any) {
     console.log("onboarding_step updated to", newStep);
   }
 
-  // Post-generation onboarding CTA is disabled.
-  // Keep onboarding completion behavior without sending extra text.
-  if (!isAvatarDemo && onboardingStep <= 1 && generationType === "style" && stickerId) {
-    console.log("post-generation CTA skipped, onboardingStep:", onboardingStep);
+  if (isOnboardingFirstSticker) {
+    await sendMessage(telegramId, lang === "ru" ? "Вот твой первый стикер 😄" : "Here is your first sticker 😄");
+    await sendMessage(
+      telegramId,
+      lang === "ru"
+        ? "Я могу сделать из твоего фото еще реакции:\n\n😂 смех\n😡 злость\n🥰 любовь\n🤯 шок\n😎 крутой\n😭 плач"
+        : "I can make more reactions from your photo:\n\n😂 laugh\n😡 angry\n🥰 love\n🤯 shock\n😎 cool\n😭 cry"
+    );
+    await sendMessage(
+      telegramId,
+      lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",
+      {
+        inline_keyboard: [[
+          { text: lang === "ru" ? "🔥 Сделать набор" : "🔥 Make pack", callback_data: "onb_make_pack" },
+        ]],
+      }
+    );
+  }
 
-    // Mark onboarding complete
-    if (onboardingStep < 2) {
-      await supabase
-        .from("users")
-        .update({ onboarding_step: 2 })
-        .eq("id", session.user_id);
-      console.log("onboarding_step updated to 2 (complete)");
-    }
+  if (isOnboardingEmotion) {
+    await sendMessage(telegramId, lang === "ru" ? "Готово 🙂\n\nВот твоя эмоция." : "Done 🙂\n\nHere is your emotion.");
+    await sendMessage(
+      telegramId,
+      lang === "ru" ? "Хочешь полный набор реакций из своего фото?" : "Want a full reactions pack from your photo?",
+      {
+        inline_keyboard: [[
+          { text: lang === "ru" ? "🔥 Сделать полный стикерпак — 75 ⭐" : "🔥 Make full sticker pack — 75 ⭐", callback_data: "onb_buy_full_pack_75" },
+        ]],
+      }
+    );
   }
 
   // Avatar demo: send action CTA + "send your own photo" prompt

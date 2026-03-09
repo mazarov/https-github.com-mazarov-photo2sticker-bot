@@ -81,6 +81,23 @@ stateDiagram-v2
 | `/balance` | Показать баланс + пакеты кредитов |
 | `/support` | Контакт поддержки |
 
+## Onboarding 09-03 (новый режим)
+
+- `/start` теперь разделяет пользователей по `users.onboarding_completed`:
+  - `false` -> onboarding-entry (`wait_photo`, минимальное меню, focus-flow);
+  - `true` -> post-onboarding меню и обычный action/pack UX.
+- Минимальное меню до завершения onboarding:
+  - `📸 Сделать стикер`
+  - `❓ Помощь`
+- Post-onboarding меню:
+  - `📸 Сделать стикер`, `😊 Новая эмоция`, `🔥 Мемный стикер`, `📦 Мои стикерпаки`, `💳 Баланс`, `❓ Помощь`
+- Новые callback onboarding:
+  - `onb_make_pack`
+  - `onb_buy_single_emotion_25`
+  - `onb_buy_full_pack_75`
+  - `onb_send_other_photo`
+  - `onb_add_stickerpack`
+
 ### Меню (Reply Keyboard)
 
 | Кнопка | Описание |
