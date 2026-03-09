@@ -286,25 +286,27 @@ function normalizeRenderMode(value: unknown): RenderMode {
   return String(value || "").trim().toLowerCase() === "photoreal" ? "photoreal" : "stylize";
 }
 
-function buildRenderModePolicy(mode: RenderMode): string {
+function buildRenderModePolicy(mode: RenderMode, options?: { includeTransferLine?: boolean }): string {
   if (mode === "photoreal") {
     return `[RENDER MODE: PHOTOREAL]
 Keep photorealistic rendering.
 Do NOT convert to illustration, cartoon, anime, manga, manhwa, chibi, 3D toon, or painterly style.
 Preserve natural skin texture, realistic lighting, camera-like details, and photo-like material appearance.`;
   }
+  const transferLine = options?.includeTransferLine
+    ? "Apply STRONG style transfer to the target style.\n"
+    : "";
   return `[RENDER MODE: STYLIZE]
-Apply STRONG style transfer to the target style.
-Keep identity (facial features/person) but DO NOT preserve source artistic rendering.
+${transferLine}Keep identity (facial features/person) but DO NOT preserve source artistic rendering.
 Re-render the image fully in the target style language (linework, shading, proportions, color treatment).`;
 }
 
-function applyRenderModePolicy(prompt: string, mode: RenderMode): string {
+function applyRenderModePolicy(prompt: string, mode: RenderMode, options?: { includeTransferLine?: boolean }): string {
   const cleanPrompt = String(prompt || "").trim();
   if (/\[RENDER MODE:\s*(PHOTOREAL|STYLIZE)\]/i.test(cleanPrompt)) {
     return cleanPrompt;
   }
-  const policy = buildRenderModePolicy(mode);
+  const policy = buildRenderModePolicy(mode, options);
   return cleanPrompt ? `${policy}\n\n${cleanPrompt}` : policy;
 }
 
@@ -1782,7 +1784,9 @@ async function runJob(job: any) {
     }
   }
   if (selectedStyleRenderMode) {
-    promptForGeneration = applyRenderModePolicy(promptForGeneration, selectedStyleRenderMode);
+    promptForGeneration = applyRenderModePolicy(promptForGeneration, selectedStyleRenderMode, {
+      includeTransferLine: generationType === "emotion" || generationType === "motion",
+    });
   }
   const isImportedSticker = Boolean(session.edit_sticker_file_id);
   if (isImportedSticker && (generationType === "emotion" || generationType === "motion")) {

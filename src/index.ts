@@ -1319,7 +1319,7 @@ function stripCompositionRulesBlock(prompt: string): string {
 function buildStyleCompositionSuffix(styleDirective: string | null): string {
   const styleRule = styleDirective
     ? `3. ${styleDirective}`
-    : "3. Use selected style prompt hint as the highest-priority artistic target.";
+    : "3. Create a high-quality character illustration. Style: <selected style prompt hint>";
   return `\n\nCRITICAL COMPOSITION AND BACKGROUND RULES:\n1. Background MUST be flat uniform BRIGHT MAGENTA (#FF00FF). This exact color is required for automated background removal. No other background colors allowed.\n2. If the pose has extended arms or wide gestures — zoom out to include them fully. Better to make the character slightly smaller than to crop any body part.\n${styleRule}`;
 }
 
@@ -1339,7 +1339,7 @@ function normalizeRenderMode(value: unknown): RenderMode {
   return String(value || "").trim().toLowerCase() === "photoreal" ? "photoreal" : "stylize";
 }
 
-function buildRenderModePolicy(mode: RenderMode): string {
+function buildRenderModePolicy(mode: RenderMode, options?: { includeTransferLine?: boolean }): string {
   if (mode === "photoreal") {
     return `[RENDER MODE: PHOTOREAL]
 Keep photorealistic rendering.
@@ -1347,18 +1347,20 @@ Do NOT convert to illustration, cartoon, anime, manga, manhwa, chibi, 3D toon, o
 Preserve natural skin texture, realistic lighting, camera-like details, and photo-like material appearance.`;
   }
 
+  const transferLine = options?.includeTransferLine
+    ? "Apply STRONG style transfer to the target style.\n"
+    : "";
   return `[RENDER MODE: STYLIZE]
-Apply STRONG style transfer to the target style.
-Keep identity (facial features/person) but DO NOT preserve source artistic rendering.
+${transferLine}Keep identity (facial features/person) but DO NOT preserve source artistic rendering.
 Re-render the image fully in the target style language (linework, shading, proportions, color treatment).`;
 }
 
-function applyRenderModePolicy(prompt: string, mode: RenderMode): string {
+function applyRenderModePolicy(prompt: string, mode: RenderMode, options?: { includeTransferLine?: boolean }): string {
   const cleanPrompt = String(prompt || "").trim();
   if (/\[RENDER MODE:\s*(PHOTOREAL|STYLIZE)\]/i.test(cleanPrompt)) {
     return cleanPrompt;
   }
-  const policy = buildRenderModePolicy(mode);
+  const policy = buildRenderModePolicy(mode, options);
   return cleanPrompt ? `${policy}\n\n${cleanPrompt}` : policy;
 }
 
