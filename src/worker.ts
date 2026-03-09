@@ -1820,7 +1820,7 @@ async function runJob(job: any) {
         : null);
     const subjectAgeGroup = ageProfile?.subjectAgeGroup || "unknown";
     const identityRuleVariant: "default_identity" | "child_pose_only" =
-      subjectAgeGroup !== "adult" ? "child_pose_only" : "default_identity";
+      sourceKind === "sticker" || subjectAgeGroup !== "adult" ? "child_pose_only" : "default_identity";
     promptForGeneration = applyStyleChildIdentityRule(promptForGeneration, identityRuleVariant);
     console.log("[style.identity_policy.worker]", {
       generationType,

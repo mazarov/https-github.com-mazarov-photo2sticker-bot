@@ -1822,7 +1822,7 @@ async function startGeneration(
             }
           : null);
       const subjectAgeGroup = ageProfile?.subjectAgeGroup || "unknown";
-      const useChildSafeVariant = subjectAgeGroup !== "adult";
+      const useChildSafeVariant = sourceKind === "sticker" || subjectAgeGroup !== "adult";
       const identityRuleVariant: "default_identity" | "child_pose_only" = useChildSafeVariant ? "child_pose_only" : "default_identity";
       options.promptFinal = applyStyleChildIdentityRule(options.promptFinal, identityRuleVariant);
       console.log("[style.identity_policy.api]", {
