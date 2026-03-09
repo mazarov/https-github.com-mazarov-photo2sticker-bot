@@ -241,6 +241,45 @@ async function retryWithBackoff<T>(
   throw new Error("Unreachable");
 }
 
+async function waitForPublicUrlReady(
+  publicUrl: string,
+  label: string,
+  options: { maxAttempts?: number; baseDelayMs?: number } = {}
+): Promise<boolean> {
+  const { maxAttempts = 3, baseDelayMs = 350 } = options;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await axios.get(publicUrl, {
+        timeout: 4000,
+        responseType: "arraybuffer",
+        headers: { Range: "bytes=0-0" },
+        validateStatus: () => true,
+      });
+      const ok = res.status >= 200 && res.status < 400;
+      if (ok) {
+        if (attempt > 1) {
+          console.log("[public-url-ready] recovered", { label, attempt, status: res.status, publicUrl });
+        }
+        return true;
+      }
+      console.warn("[public-url-ready] non-2xx/3xx", { label, attempt, status: res.status, publicUrl });
+    } catch (err: any) {
+      console.warn("[public-url-ready] request failed", {
+        label,
+        attempt,
+        message: err?.message || err,
+        publicUrl,
+      });
+    }
+
+    if (attempt < maxAttempts) {
+      const delay = baseDelayMs * attempt;
+      await sleep(delay);
+    }
+  }
+  return false;
+}
+
 function getRetryReadyState(generationType?: string | null): string {
   if (generationType === "emotion") return "wait_emotion";
   if (generationType === "motion") return "wait_motion";
@@ -1984,6 +2023,18 @@ async function runJob(job: any) {
   activeModel = primaryModel;
   console.log("Using model:", activeModel, "generationType:", generationType);
   callGeminiImage = async (promptText: string, modelName: string, stage: string) => {
+    if (needsPublicSourceUrl && /^https?:\/\//.test(sourceFileUrl)) {
+      const sourceReady = await waitForPublicUrlReady(sourceFileUrl, "source_file_url");
+      if (!sourceReady) {
+        throw new Error("Source public URL is not reachable for Gemini");
+      }
+      if (generationType === "replace_subject" && replaceReferenceUrl && /^https?:\/\//.test(replaceReferenceUrl)) {
+        const refReady = await waitForPublicUrlReady(replaceReferenceUrl, "replace_reference_url");
+        if (!refReady) {
+          throw new Error("Replace reference public URL is not reachable for Gemini");
+        }
+      }
+    }
     if (isSingleFlowGeneration) {
       console.log("[single.gen.worker] model_call", {
         ...singleTrace,
