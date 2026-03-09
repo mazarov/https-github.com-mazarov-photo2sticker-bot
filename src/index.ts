@@ -5163,7 +5163,7 @@ bot.hears(["😊 Новая эмоция", "😊 New emotion"], async (ctx) => {
     await ctx.reply(lang === "ru" ? "Сначала создай стикер по фото." : "Create a sticker from photo first.");
     return;
   }
-  await sendEmotionPresetsKeyboard(ctx, lang, { backCallbackData: "noop" });
+  await sendEmotionKeyboard(ctx, lang, { backCallbackData: "noop" });
 });
 
 bot.hears(["🔥 Мемный стикер", "🔥 Meme sticker"], async (ctx) => {
