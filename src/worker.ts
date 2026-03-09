@@ -357,12 +357,19 @@ function applyRenderModePolicy(prompt: string, mode: RenderMode, options?: { inc
 function applyStyleChildIdentityRule(prompt: string, variant: "default_identity" | "child_pose_only"): string {
   const source = String(prompt || "");
   if (variant === "child_pose_only") {
-    return source
+    const transformed = source
       .replace(/Keep identity \(facial features\/person\)\.?/gi, "Use the image only as a reference for pose and general appearance.\nDo not replicate the exact identity of the person.")
       .replace(
         /Keep identity \(facial features\/person\) but DO NOT preserve source artistic rendering\./gi,
         "Use the image only as a reference for pose and general appearance.\nDo not replicate the exact identity of the person.\nDO NOT preserve source artistic rendering."
       );
+    if (/Do not reproduce the exact identity of the person\./i.test(transformed)) {
+      return transformed;
+    }
+    if (/CRITICAL COMPOSITION AND BACKGROUND RULES:/i.test(transformed)) {
+      return `${transformed}\n4. Do not reproduce the exact identity of the person. Preserve pose, clothing and general vibe.`;
+    }
+    return transformed;
   }
   return source;
 }
