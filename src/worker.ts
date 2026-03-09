@@ -82,16 +82,16 @@ async function getOnboardingPackContentSet(): Promise<any | null> {
     .from(config.packContentSetsTable)
     .select("id, name_ru, name_en, carousel_description_ru, carousel_description_en, sort_order")
     .eq("is_active", true)
+    .eq("onboarding", true)
     .order("sort_order", { ascending: true })
-    .limit(50);
+    .limit(1)
+    .maybeSingle();
   if (error) {
     console.warn("[onboarding_pack] load error:", error.message);
     return onboardingPackSetCache?.data || null;
   }
-  const rows = Array.isArray(data) ? data : [];
-  const preferred = rows.find((row: any) => row?.onboarding === true || row?.onbording === true) || rows[0] || null;
-  onboardingPackSetCache = { data: preferred, timestamp: now };
-  return preferred;
+  onboardingPackSetCache = { data: data || null, timestamp: now };
+  return data || null;
 }
 
 function isConfigEnabled(value: string | null | undefined): boolean {
@@ -2608,13 +2608,6 @@ async function runJob(job: any) {
       if (packName) lines.push(packName);
       if (packDescription) lines.push(packDescription);
       await sendMessage(telegramId, lines.join("\n\n"));
-    } else {
-      await sendMessage(
-        telegramId,
-        lang === "ru"
-          ? "Я могу сделать из твоего фото ещё реакции."
-          : "I can make more reactions from your photo."
-      );
     }
     await sendMessage(
       telegramId,

@@ -243,9 +243,8 @@ function getLocalizedPackDescription(pack: any, lang: string): string {
 
 async function getOnboardingPackContentSet(): Promise<any | null> {
   const activeSets = await getActivePackContentSets();
-  const onboardingSet = activeSets.find((row: any) => row?.onboarding === true || row?.onbording === true);
-  // Fallback: keep onboarding text alive even if flag/data is missing.
-  return onboardingSet || activeSets[0] || null;
+  const onboardingSet = activeSets.find((row: any) => row?.onboarding === true);
+  return onboardingSet || null;
 }
 
 /** Ensure pack id is unique in pack_content_sets_test; append _v2, _v3 if needed. */
@@ -3864,12 +3863,6 @@ async function runFreePhotoStickerFlow(
         if (packName) lines.push(packName);
         if (packDescription) lines.push(packDescription);
         await ctx.reply(lines.join("\n\n"));
-      } else {
-        await ctx.reply(
-          lang === "ru"
-            ? "Я могу сделать из твоего фото ещё реакции."
-            : "I can make more reactions from your photo."
-        );
       }
       await ctx.reply(
         lang === "ru" ? "Хочешь полный набор реакций?" : "Want the full reactions pack?",
