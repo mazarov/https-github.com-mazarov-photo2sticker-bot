@@ -63,7 +63,7 @@ sequenceDiagram
   1) `stickers.result_storage_path` -> public URL из storage bucket `stickers`,
   2) если storage path отсутствует (например imported sticker) -> temp upload в public bucket (`stickers-examples/temp/sticker-sources/...`) и URL оттуда,
   3) fallback: Telegram file URL (`https://api.telegram.org/file/bot...`).
-- Если `gemini_use_proxy=false` (direct Google route), worker сначала делает temp upload source-изображений в публичный bucket `stickers-examples` и только потом отправляет `fileData.fileUri` в Gemini. Это применяется в `single` flow (source + replace reference) и в `pack preview` (photo/collage), чтобы исключить `Cannot fetch content from the provided URL`.
+- Для Gemini image-вызовов worker отправляет пользовательские изображения через `inlineData` (base64), без `fileData.fileUri`.
 
 ### 4. Генерация изображения (Gemini)
 - Модель: настраивается через `app_config` (по умолчанию: style → `gemini-3-pro-image-preview`, emotion/motion → `gemini-2.5-flash-image`)
@@ -82,7 +82,8 @@ sequenceDiagram
 - Source определяется через общий resolver:
   - `style` -> `photo` или `sticker` (по `sessions.style_source_kind`),
   - `emotion`/`motion`/`text` -> `sticker`.
-- Для sticker source в `fileData.fileUri` используется storage URL (result/temp), а при `gemini_use_proxy=false` — принудительно temp public URL из `stickers-examples`, чтобы direct Gemini всегда получал внешний доступ к input image.
+- Для `single` flow (`style`/`emotion`/`motion`/`replace_subject`) source и reference-изображения передаются в Gemini как `inlineData` (base64).
+- Для `pack preview` photo/collage также передаются как `inlineData`; если задан `template.collage_url`, worker сначала скачивает URL в buffer и определяет `mimeType` по `Content-Type` (fallback: расширение URL).
 - Лог `[GeminiRoute][Worker]` фиксирует активный маршрут (`baseUrl`, `host`, `viaProxy`) при старте worker-процесса.
 - Если включен `subject_profile_enabled` или `object_profile_enabled`/`object_profile_shadow_enabled` и profile для текущего source отсутствует, worker выполняет detector и сохраняет профиль в `sessions` (dual-write в `subject_*` + `object_*` при наличии колонок).
 - Для `generationType=style` при `child_identity_protection_enabled=true` worker использует age-профиль из того же detector-пайплайна (кэш по `source_file_id + source_kind` в `sessions.subject_age_*`).

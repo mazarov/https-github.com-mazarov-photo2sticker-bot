@@ -309,6 +309,7 @@ flowchart TD
   - `true` -> `GEMINI_PROXY_BASE_URL` (proxy route),
   - `false` -> direct Google endpoint `https://generativelanguage.googleapis.com`.
 - Лог `[GeminiRoute][API]` показывает фактический runtime-маршрут (`baseUrl`, `host`, `viaProxy`) на старте процесса.
+- Gemini fallback в `generatePackIdeas` отправляет входной стикер через `inlineData` (base64), без `fileData.fileUri`.
 
 ## Edit Sticker Flow (menu: "🎨 Изменить стикер")
 

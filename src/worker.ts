@@ -13,6 +13,7 @@ import { sendAlert, sendNotification, sendPackPreviewAlert, sendPackCompletedLan
 import { getAppConfig } from "./lib/app-config";
 import { getGeminiGenerateContentUrlRuntime, getGeminiRouteInfoRuntime } from "./lib/gemini-route";
 import { addTextToSticker, fitStickerIn512WithMargin, addWhiteBorder } from "./lib/image-utils";
+import { buildInlineImagePart } from "./lib/gemini-image-part";
 import { createFaceSwapTask, waitForFaceSwapTask } from "./lib/facemint";
 import {
   appendSubjectLock,
@@ -244,45 +245,6 @@ async function retryWithBackoff<T>(
   throw new Error("Unreachable");
 }
 
-async function waitForPublicUrlReady(
-  publicUrl: string,
-  label: string,
-  options: { maxAttempts?: number; baseDelayMs?: number } = {}
-): Promise<boolean> {
-  const { maxAttempts = 3, baseDelayMs = 350 } = options;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const res = await axios.get(publicUrl, {
-        timeout: 4000,
-        responseType: "arraybuffer",
-        headers: { Range: "bytes=0-0" },
-        validateStatus: () => true,
-      });
-      const ok = res.status >= 200 && res.status < 400;
-      if (ok) {
-        if (attempt > 1) {
-          console.log("[public-url-ready] recovered", { label, attempt, status: res.status, publicUrl });
-        }
-        return true;
-      }
-      console.warn("[public-url-ready] non-2xx/3xx", { label, attempt, status: res.status, publicUrl });
-    } catch (err: any) {
-      console.warn("[public-url-ready] request failed", {
-        label,
-        attempt,
-        message: err?.message || err,
-        publicUrl,
-      });
-    }
-
-    if (attempt < maxAttempts) {
-      const delay = baseDelayMs * attempt;
-      await sleep(delay);
-    }
-  }
-  return false;
-}
-
 function getRetryReadyState(generationType?: string | null): string {
   if (generationType === "emotion") return "wait_emotion";
   if (generationType === "motion") return "wait_motion";
@@ -320,6 +282,21 @@ function getMimeTypeByTelegramPath(filePath: string): string {
   if (filePath.endsWith(".webp")) return "image/webp";
   if (filePath.endsWith(".png")) return "image/png";
   return "image/jpeg";
+}
+
+function getMimeTypeByUrl(url: string): string {
+  const lower = url.toLowerCase();
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".png")) return "image/png";
+  return "image/jpeg";
+}
+
+function getImageMimeTypeFromHeaders(contentType: unknown, fallback: string): string {
+  const raw = String(contentType || "").toLowerCase();
+  if (raw.includes("image/webp")) return "image/webp";
+  if (raw.includes("image/png")) return "image/png";
+  if (raw.includes("image/jpeg") || raw.includes("image/jpg")) return "image/jpeg";
+  return fallback;
 }
 
 type RenderMode = "stylize" | "photoreal";
@@ -880,22 +857,7 @@ async function runPackPreviewJob(job: any) {
 
   const filePath = await getFilePath(photoFileId);
   const photoBuffer = await downloadFile(filePath);
-  let photoFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
   const photoMime = getMimeTypeByTelegramPath(filePath);
-  const packGeminiRoute = await getGeminiRouteInfoRuntime();
-  const packNeedsPublicSourceUrl = !packGeminiRoute.viaProxy;
-  if (packNeedsPublicSourceUrl) {
-    try {
-      const temp = await uploadTempStickerSourceAndGetPublicUrl(photoBuffer, session, photoFileId, photoMime);
-      photoFileUrl = temp.publicUrl;
-      console.log("[PackPreview] Using temp public photo URL for direct Gemini route:", {
-        storagePath: temp.storagePath,
-        bucket: temp.bucket,
-      });
-    } catch (err: any) {
-      console.warn("[PackPreview] Failed to upload temp photo source, fallback to Telegram URL:", err?.message || err);
-    }
-  }
 
   const lockEnabled = await isSubjectLockEnabled();
   let packSubjectProfile = getSessionSubjectProfileForSource(session, photoFileId, "photo");
@@ -906,7 +868,7 @@ async function runPackPreviewJob(job: any) {
       "photo",
       photoBuffer,
       photoMime,
-      photoFileUrl
+      null
     );
   }
   // Pack: one-character rule only in CRITICAL RULES FOR THE GRID; no SUBJECT LOCK block at start.
@@ -984,35 +946,25 @@ async function runPackPreviewJob(job: any) {
   }
 
   // Download collage/style reference image if available
-  let collageFileUrl: string | null = null;
+  let collageBuffer: Buffer | null = null;
   let collageMime = "image/png";
   if (template.collage_file_id || template.collage_url) {
     try {
       if (template.collage_file_id) {
         const collagePath = await getFilePath(template.collage_file_id);
         collageMime = getMimeTypeByTelegramPath(collagePath);
-        if (packNeedsPublicSourceUrl) {
-          const collageBuffer = await downloadFile(collagePath);
-          const temp = await uploadTempStickerSourceAndGetPublicUrl(
-            collageBuffer,
-            session,
-            template.collage_file_id,
-            collageMime
-          );
-          collageFileUrl = temp.publicUrl;
-          console.log("[PackPreview] Using temp public collage URL for direct Gemini route:", {
-            storagePath: temp.storagePath,
-            bucket: temp.bucket,
-          });
-        } else {
-          collageFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${collagePath}`;
-        }
+        collageBuffer = await downloadFile(collagePath);
       } else {
-        collageFileUrl = template.collage_url;
-        collageMime = template.collage_url?.endsWith(".png") ? "image/png" : "image/jpeg";
+        const collageUrl = String(template.collage_url || "");
+        const collageRes = await axios.get<ArrayBuffer>(collageUrl, {
+          responseType: "arraybuffer",
+          timeout: 30_000,
+        });
+        collageMime = getImageMimeTypeFromHeaders(collageRes.headers?.["content-type"], getMimeTypeByUrl(collageUrl));
+        collageBuffer = Buffer.from(collageRes.data);
       }
       console.log("[PackPreview] Collage reference ready:", {
-        hasUrl: Boolean(collageFileUrl),
+        hasBuffer: Boolean(collageBuffer),
         mime: collageMime,
       });
     } catch (collageErr: any) {
@@ -1056,7 +1008,7 @@ ${selectedStylePromptHint ? `0. STYLE (apply in every cell): ${selectedStyleProm
 9. FRAMING: All characters CHEST-UP (mid-torso to head). Head ~35–45% of cell height. Camera distance slightly closer than natural. Do NOT leave excessive "air" above the head; subject must dominate the frame while respecting padding. No full-body unless the pose requires it.
 10. EXPRESSION: Realistic and subtle. No exaggerated facial muscles, cartoon emotions, or staged poses. Emotion intensity ~60–70% of maximum. Character caught mid-action, not posing for a photo. Consistent camera distance across all cells.`;
 
-  const hasCollage = !!collageFileUrl;
+  const hasCollage = Boolean(collageBuffer);
   const prompt = hasCollage
     ? `${styleBlockWithSubject ? `${styleBlockWithSubject}\n\n` : ""}[REFERENCE IMAGE]
 The first image is a reference pack. Match its visual style (rendering, proportions, colors). Do not add outlines, strokes, or borders around the character.
@@ -1072,10 +1024,10 @@ ${packTaskBlock}`
 
   // Build image parts for Gemini
   const imageParts: any[] = [];
-  if (collageFileUrl) {
-    imageParts.push({ fileData: { mimeType: collageMime, fileUri: collageFileUrl } });
+  if (collageBuffer) {
+    imageParts.push(buildInlineImagePart(collageBuffer, collageMime));
   }
-  imageParts.push({ fileData: { mimeType: photoMime, fileUri: photoFileUrl } });
+  imageParts.push(buildInlineImagePart(photoBuffer, photoMime));
 
   // Call Gemini (model and output resolution from app_config)
   const model = await getAppConfig("gemini_model_pack", "gemini-2.5-flash-image");
@@ -1774,35 +1726,13 @@ async function runJob(job: any) {
   const filePath = await getFilePath(sourceFileId);
   const fileBuffer = await downloadFile(filePath);
   const telegramSourceFileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${filePath}`;
-  const geminiRoute = await getGeminiRouteInfoRuntime();
-  const needsPublicSourceUrl = !geminiRoute.viaProxy;
-
-  const base64 = fileBuffer.toString("base64");
   const mimeType = getMimeTypeByTelegramPath(filePath);
   const sourceSha256 = sha256Hex(fileBuffer);
-  let resolvedSource:
-    { sourceFileUrl: string; transport: "storage-result" | "storage-temp" | "telegram-fallback"; storagePath?: string | null };
-  if (needsPublicSourceUrl) {
-    try {
-      const temp = await uploadTempStickerSourceAndGetPublicUrl(fileBuffer, session, sourceFileId, mimeType);
-      resolvedSource = {
-        sourceFileUrl: temp.publicUrl,
-        transport: "storage-temp",
-        storagePath: temp.storagePath,
-      };
-    } catch (err: any) {
-      console.warn("[Worker] direct Gemini route: temp source upload failed, fallback to default source resolver:", err?.message || err);
-      resolvedSource =
-        sourceKind === "sticker"
-          ? await resolveStickerSourceUrl(session, sourceFileId, fileBuffer, mimeType, telegramSourceFileUrl)
-          : { sourceFileUrl: telegramSourceFileUrl, transport: "telegram-fallback", storagePath: null };
-    }
-  } else {
-    resolvedSource =
-      sourceKind === "sticker"
-        ? await resolveStickerSourceUrl(session, sourceFileId, fileBuffer, mimeType, telegramSourceFileUrl)
-        : { sourceFileUrl: telegramSourceFileUrl, transport: "telegram-fallback", storagePath: null };
-  }
+  const resolvedSource: { sourceFileUrl: string; transport: "telegram-fallback"; storagePath?: string | null } = {
+    sourceFileUrl: telegramSourceFileUrl,
+    transport: "telegram-fallback",
+    storagePath: null,
+  };
   let sourceFileUrl = resolvedSource.sourceFileUrl;
   console.log("[Worker] source_file_url_resolved:", {
     generationType,
@@ -1812,39 +1742,18 @@ async function runJob(job: any) {
     sourceFileId: sourceFileId.substring(0, 30) + "...",
     sourceFileUrl,
   });
-  let replaceReferenceBase64: string | null = null;
   let replaceReferenceMimeType: string | null = null;
   let replaceReferenceBuffer: Buffer | null = null;
   let replaceReferencePath: string | null = null;
-  let replaceReferenceUrl: string | null = null;
   let replaceReferenceSha256: string | null = null;
   if (generationType === "replace_subject" && session.current_photo_file_id) {
     try {
       const refPath = await getFilePath(session.current_photo_file_id);
       replaceReferencePath = refPath;
-      replaceReferenceUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${refPath}`;
       const refBuffer = await downloadFile(refPath);
-      replaceReferenceBase64 = refBuffer.toString("base64");
       replaceReferenceMimeType = getMimeTypeByTelegramPath(refPath);
       replaceReferenceBuffer = refBuffer;
       replaceReferenceSha256 = sha256Hex(refBuffer);
-      if (needsPublicSourceUrl) {
-        try {
-          const temp = await uploadTempStickerSourceAndGetPublicUrl(
-            refBuffer,
-            session,
-            session.current_photo_file_id,
-            replaceReferenceMimeType
-          );
-          replaceReferenceUrl = temp.publicUrl;
-          console.log("[ReplaceSubject] using temp public reference URL for direct Gemini route:", {
-            storagePath: temp.storagePath,
-            bucket: temp.bucket,
-          });
-        } catch (uploadErr: any) {
-          console.warn("[ReplaceSubject] failed to upload temp reference URL, fallback to Telegram URL:", uploadErr?.message || uploadErr);
-        }
-      }
       console.log("[ReplaceSubject] loaded identity photo reference:", {
         hasRef: true,
         refMime: replaceReferenceMimeType,
@@ -1963,7 +1872,7 @@ async function runJob(job: any) {
                   `Be very specific about colors (use hex if possible), positions (top/bottom/left/right), and sizes.\n` +
                   `Output a concise but complete description in 3-5 sentences.`,
               },
-              { fileData: { mimeType, fileUri: sourceFileUrl } },
+              buildInlineImagePart(fileBuffer, mimeType),
             ],
           }],
         },
@@ -2118,18 +2027,6 @@ async function runJob(job: any) {
   activeModel = primaryModel;
   console.log("Using model:", activeModel, "generationType:", generationType);
   callGeminiImage = async (promptText: string, modelName: string, stage: string) => {
-    if (needsPublicSourceUrl && /^https?:\/\//.test(sourceFileUrl)) {
-      const sourceReady = await waitForPublicUrlReady(sourceFileUrl, "source_file_url");
-      if (!sourceReady) {
-        throw new Error("Source public URL is not reachable for Gemini");
-      }
-      if (generationType === "replace_subject" && replaceReferenceUrl && /^https?:\/\//.test(replaceReferenceUrl)) {
-        const refReady = await waitForPublicUrlReady(replaceReferenceUrl, "replace_reference_url");
-        if (!refReady) {
-          throw new Error("Replace reference public URL is not reachable for Gemini");
-        }
-      }
-    }
     if (isSingleFlowGeneration) {
       console.log("[single.gen.worker] model_call", {
         ...singleTrace,
@@ -2144,19 +2041,9 @@ async function runJob(job: any) {
             role: "user",
             parts: [
               { text: promptText },
-              {
-                fileData: {
-                  mimeType,
-                  fileUri: sourceFileUrl,
-                },
-              },
-              ...(generationType === "replace_subject" && replaceReferenceUrl
-                ? [{
-                    fileData: {
-                      mimeType: replaceReferenceMimeType || "image/jpeg",
-                      fileUri: replaceReferenceUrl,
-                    },
-                  }]
+              buildInlineImagePart(fileBuffer, mimeType),
+              ...(generationType === "replace_subject" && replaceReferenceBuffer
+                ? [buildInlineImagePart(replaceReferenceBuffer, replaceReferenceMimeType || "image/jpeg")]
                 : []),
             ],
           },
@@ -2177,24 +2064,24 @@ async function runJob(job: any) {
       promptLength: promptText.length,
       promptText,
       inputImage: {
-        transport: "fileData",
+        transport: "inlineData",
         sourceUrlTransport: resolvedSource.transport,
         sourceStoragePath: resolvedSource.storagePath || null,
         fileId: sourceFileId,
         filePath,
-        sourceFileUrl,
         mimeType,
         bytes: fileBuffer.length,
+        base64BytesApprox: Math.ceil((fileBuffer.length * 4) / 3),
         sha256: sourceSha256,
       },
-      replaceReferenceImage: replaceReferenceUrl
+      replaceReferenceImage: replaceReferenceBuffer
         ? {
-            transport: "fileData",
+            transport: "inlineData",
             fileId: session.current_photo_file_id,
             filePath: replaceReferencePath,
-            sourceFileUrl: replaceReferenceUrl,
             mimeType: replaceReferenceMimeType || "image/jpeg",
             bytes: replaceReferenceBuffer?.length || 0,
+            base64BytesApprox: replaceReferenceBuffer ? Math.ceil((replaceReferenceBuffer.length * 4) / 3) : 0,
             sha256: replaceReferenceSha256,
           }
         : null,
@@ -2229,11 +2116,6 @@ async function runJob(job: any) {
     throw new Error("Gemini image caller not initialized");
   }
 
-  const isSourceUrlFetchError = (err: any): boolean => {
-    const msg = String(err?.response?.data?.error?.message || err?.message || "").toLowerCase();
-    return msg.includes("cannot fetch content from the provided url");
-  };
-
   let geminiRes;
   let lastModelStage = "primary";
   const callGeminiWithStage = async (stage: string) => {
@@ -2244,48 +2126,6 @@ async function runJob(job: any) {
     geminiRes = await callGeminiWithStage("primary");
   } catch (_err: any) {
     let err = _err;
-    if (needsPublicSourceUrl && isSourceUrlFetchError(err)) {
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          const retryTemp = await uploadTempStickerSourceAndGetPublicUrl(
-            fileBuffer,
-            session,
-            `${sourceFileId}_retry_${attempt}`,
-            mimeType
-          );
-          sourceFileUrl = retryTemp.publicUrl;
-          console.warn("[GeminiRetry] source URL fetch failed, retrying with refreshed temp URL:", {
-            sessionId: session.id,
-            jobId: job.id,
-            generationType,
-            attempt,
-            oldSourceUrl: resolvedSource.sourceFileUrl,
-            newSourceUrl: sourceFileUrl,
-            newStoragePath: retryTemp.storagePath,
-          });
-
-          const sourceReady = await waitForPublicUrlReady(sourceFileUrl, "source_file_url_retry", {
-            maxAttempts: 6,
-            baseDelayMs: 500,
-          });
-          if (!sourceReady) {
-            throw new Error("Source public URL is not reachable for Gemini after refresh");
-          }
-
-          geminiRes = await callGeminiWithStage(`primary_retry_source_url_${attempt}`);
-          break;
-        } catch (retryErr: any) {
-          err = retryErr;
-          if (!isSourceUrlFetchError(retryErr)) {
-            break;
-          }
-          if (attempt < 3) {
-            await sleep(700 * attempt);
-          }
-        }
-      }
-    }
-
     if (geminiRes) {
       // Retry succeeded, continue normal flow.
     } else {
