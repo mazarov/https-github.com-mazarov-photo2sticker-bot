@@ -6130,6 +6130,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
+  const userMenuKeyboard = getMenuKeyboardForUser(user, lang, ctx?.from?.id);
 
   const templateId = ctx.match[1];
 
@@ -6145,7 +6146,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
   if (!contentSetsForTemplate?.length) {
     await ctx.reply(
       lang === "ru" ? "Шаблон не найден." : "Template not found.",
-      getMainMenuKeyboard(lang, ctx?.from?.id)
+      userMenuKeyboard
     );
     return;
   }
@@ -6193,7 +6194,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
 
   if (sessErr || !session) {
     console.error("Failed to create pack session:", sessErr?.message);
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "error.technical"), userMenuKeyboard);
     return;
   }
 
@@ -6202,7 +6203,7 @@ bot.action(/^pack_start:(.+)$/, async (ctx) => {
     await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, undefined, { useBackButton: true, sessionId: session.id });
   } else {
     // No photo — ask user to send one
-    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "pack.send_photo"), userMenuKeyboard);
   }
 });
 
@@ -6214,13 +6215,14 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
+  const userMenuKeyboard = getMenuKeyboardForUser(user, lang, ctx?.from?.id);
   const existingPhoto = user.last_photo_file_id || null;
   const templateId = ctx.match[1];
 
   const allContentSets = await getActivePackContentSets();
   const contentSets = getPackContentSetsForTemplate(allContentSets, templateId);
   if (!contentSets?.length) {
-    await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(lang === "ru" ? "Наборы пока не готовы." : "Sets not ready yet.", userMenuKeyboard);
     return;
   }
 
@@ -6260,7 +6262,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
     .select()
     .single();
   if (sessErr || !session) {
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "error.technical"), userMenuKeyboard);
     return;
   }
 
@@ -6279,7 +6281,7 @@ bot.action(/^pack_show_carousel:(.+)$/, async (ctx) => {
   if (!visibleSets.length) {
     await ctx.reply(
       lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-      getMainMenuKeyboard(lang, ctx?.from?.id)
+      userMenuKeyboard
     );
     return;
   }
@@ -6856,6 +6858,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
+  const userMenuKeyboard = getMenuKeyboardForUser(user, lang, ctx?.from?.id);
   const session = await getPackFlowSession(user.id);
   if (!session || session.state !== "wait_pack_carousel") return;
   const effectiveTemplateId = getEffectivePackTemplateId(session);
@@ -6873,7 +6876,7 @@ async function updatePackCarouselCard(ctx: any, delta: number) {
   if (!visibleSets.length) {
     await ctx.reply(
       lang === "ru" ? "Нет совместимых наборов для текущего фото." : "No compatible sets for the current source.",
-      getMainMenuKeyboard(lang, ctx?.from?.id)
+      userMenuKeyboard
     );
     return;
   }
@@ -7026,6 +7029,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
+  const userMenuKeyboard = getMenuKeyboardForUser(user, lang, ctx?.from?.id);
   const contentSetId = ctx.match[1];
 
   const session = await getPackFlowSession(user.id);
@@ -7037,7 +7041,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
     .eq("id", contentSetId)
     .maybeSingle();
   if (!selectedContentSet) {
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "error.technical"), userMenuKeyboard);
     return;
   }
   const effectiveTemplateId = getEffectivePackTemplateId(session);
@@ -7087,7 +7091,7 @@ bot.action(/^pack_try:(.+)$/, async (ctx) => {
   if (existingPhoto) {
     await sendPackStyleSelectionStep(ctx, lang, session.selected_style_id, session.progress_message_id ?? undefined, { useBackButton: true, sessionId: session.id });
   } else {
-    await ctx.reply(await getText(lang, "pack.send_photo"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "pack.send_photo"), userMenuKeyboard);
   }
 });
 
@@ -7125,6 +7129,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
+  const userMenuKeyboard = getMenuKeyboardForUser(user, lang, ctx?.from?.id);
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
@@ -7168,7 +7173,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     .eq("id", session.id);
   if (prelockErr) {
     console.error("[pack_preview_pay] prelock session update failed:", prelockErr.message);
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "error.technical"), userMenuKeyboard);
     return;
   }
 
@@ -7268,7 +7273,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
         lang === "ru"
           ? "Выбранный набор не подходит под текущее количество персонажей. Вернись к выбору поз и выбери другой набор."
           : "Selected set is not compatible with current subject count. Go back to poses and choose another set.",
-        getMainMenuKeyboard(lang, ctx?.from?.id)
+        userMenuKeyboard
       );
       return;
     }
@@ -7277,7 +7282,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
   // Check credits
   if ((user.credits || 0) < 1) {
     await rollbackPreviewStart(false);
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), userMenuKeyboard);
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -7290,7 +7295,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
 
   if (!deducted) {
     await rollbackPreviewStart(false);
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), userMenuKeyboard);
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -7316,7 +7321,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
     await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
     await rollbackPreviewStart(true);
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "error.technical"), userMenuKeyboard);
     return;
   }
 
@@ -7339,7 +7344,7 @@ bot.action(/^pack_preview_pay(?::(.+))?$/, async (ctx) => {
     const { data: refUser } = await supabase.from("users").select("credits").eq("id", user.id).maybeSingle();
     await supabase.from("users").update({ credits: (refUser?.credits || 0) + 1 }).eq("id", user.id);
     await rollbackPreviewStart(true);
-    await ctx.reply(await getText(lang, "error.technical"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "error.technical"), userMenuKeyboard);
     return;
   }
   console.log("[pack_preview_pay] session.prompt_final saved, length:", (packPromptFinal || "").length, "preview:", (packPromptFinal || "").slice(0, 120));
@@ -7375,6 +7380,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
+  const userMenuKeyboard = getMenuKeyboardForUser(user, lang, ctx?.from?.id);
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
@@ -7426,7 +7432,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
 
   // Check credits
   if ((user.credits || 0) < remainingCredits) {
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), userMenuKeyboard);
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -7438,7 +7444,7 @@ bot.action(/^pack_approve(?::(.+))?$/, async (ctx) => {
   });
 
   if (!deducted) {
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), userMenuKeyboard);
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -7509,6 +7515,7 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
+  const userMenuKeyboard = getMenuKeyboardForUser(user, lang, ctx?.from?.id);
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
@@ -7529,7 +7536,7 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
 
   // Check credits
   if ((user.credits || 0) < 1) {
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), userMenuKeyboard);
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -7541,7 +7548,7 @@ bot.action(/^pack_regenerate(?::(.+))?$/, async (ctx) => {
   });
 
   if (!deducted) {
-    await ctx.reply(await getText(lang, "pack.not_enough_credits"), getMainMenuKeyboard(lang, ctx?.from?.id));
+    await ctx.reply(await getText(lang, "pack.not_enough_credits"), userMenuKeyboard);
     await sendBuyCreditsMenu(ctx, user);
     return;
   }
@@ -7645,6 +7652,7 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
   const user = await getUser(telegramId);
   if (!user) return;
   const lang = user.lang || "en";
+  const userMenuKeyboard = getMenuKeyboardForUser(user, lang, ctx?.from?.id);
 
   const { sessionId: explicitSessionId, rev: callbackRev } = parseCallbackSessionRef(ctx.match?.[1] || null);
   const { session, reasonCode } = await resolvePackSessionForEvent(
@@ -7682,7 +7690,7 @@ bot.action(/^pack_cancel(?::(.+))?$/, async (ctx) => {
     })
     .eq("id", session.id);
 
-  await ctx.reply(await getText(lang, "pack.cancelled"), getMainMenuKeyboard(lang, ctx?.from?.id));
+  await ctx.reply(await getText(lang, "pack.cancelled"), userMenuKeyboard);
 });
 
 // Callback: pack_new_photo — user chose to continue pack with newly sent photo

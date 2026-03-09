@@ -99,6 +99,7 @@ stateDiagram-v2
   - `onb_add_stickerpack`
 - Текст шага "ещё реакции" после первого бесплатного стикера берётся из `pack_content_sets` (по флагу `onboarding=true`, локаль: `name_ru/name_en` + `carousel_description_ru/carousel_description_en`).
 - `onb_make_pack` в onboarding не открывает карусель паков: при `credits >= 1` сразу стартует `generating_pack_preview` для onboarding-набора; при `credits < 1` показывает onboarding paywall.
+- Для pack-callback ответов используется keyboard-routing по `users.onboarding_completed`: до завершения onboarding остаётся сокращённое меню, после — полное.
 
 ### Меню (Reply Keyboard)
 
