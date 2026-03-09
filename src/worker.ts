@@ -2493,11 +2493,6 @@ async function runJob(job: any) {
   );
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
-  const replaceFaceText = withCreditBadge(
-    lang === "ru" ? "🧑 Заменить лицо" : "🧑 Replace face",
-    1
-  );
-  const removeBgText = lang === "ru" ? "🖼 Вырезать фон" : "🖼 Remove background";
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   // Use sticker ID in callback_data for message binding
@@ -2511,10 +2506,6 @@ async function runJob(job: any) {
       [
         { text: toggleBorderText, callback_data: stickerId ? `toggle_border:${stickerId}` : "toggle_border" },
         { text: addTextText, callback_data: stickerId ? `add_text:${stickerId}` : "add_text" },
-      ],
-      [
-        { text: replaceFaceText, callback_data: stickerId ? `replace_face:${stickerId}` : "replace_face" },
-        { text: removeBgText, callback_data: stickerId ? `remove_bg:${stickerId}` : "remove_bg" },
       ],
       [
         { text: packIdeasText, callback_data: stickerId ? `pack_ideas:${stickerId}` : "pack_ideas" },

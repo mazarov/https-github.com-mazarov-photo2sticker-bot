@@ -2192,15 +2192,11 @@ async function buildStickerButtons(
   );
   const addTextText = lang === "ru" ? "✏️ Текст" : await getText(lang, "btn.add_text");
   const toggleBorderText = lang === "ru" ? "🔲 Обводка" : await getText(lang, "btn.toggle_border");
-  const replaceFaceText = withCreditBadge(await getText(lang, "btn.replace_face"), 1);
-  const removeBgText = lang === "ru" ? "🖼 Вырезать фон" : "🖼 Remove background";
   const packIdeasText = lang === "ru" ? "💡 Идеи" : "💡 Pack ideas";
 
   const sessionRef = formatCallbackSessionRef(options?.sessionId, options?.sessionRev);
   const emotionCb = appendSessionRefIfFits(`change_emotion:${stickerId}`, sessionRef);
   const motionCb = appendSessionRefIfFits(`change_motion:${stickerId}`, sessionRef);
-  const replaceFaceCb = appendSessionRefIfFits(`replace_face:${stickerId}`, sessionRef);
-  const removeBgCb = appendSessionRefIfFits(`remove_bg:${stickerId}`, sessionRef);
 
   return {
     inline_keyboard: [
@@ -2212,10 +2208,6 @@ async function buildStickerButtons(
       [
         { text: toggleBorderText, callback_data: `toggle_border:${stickerId}` },
         { text: addTextText, callback_data: `add_text:${stickerId}` },
-      ],
-      [
-        { text: replaceFaceText, callback_data: replaceFaceCb },
-        { text: removeBgText, callback_data: removeBgCb },
       ],
       [
         { text: packIdeasText, callback_data: `pack_ideas:${stickerId}` },

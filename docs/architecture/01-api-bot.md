@@ -316,15 +316,11 @@ flowchart TD
 - Новый entrypoint из persistent menu: `🎨 Изменить стикер` / `🎨 Edit sticker`.
 - API создаёт новую single-session в состоянии `wait_edit_sticker`.
 - Отдельный `bot.on("sticker")` handler принимает статичный Telegram sticker, сохраняет его как импортированный record в `stickers` и переводит session в `wait_edit_action`.
-- Под импортированным стикером показываются стандартные кнопки (`change_emotion`, `change_motion`, `toggle_border`, `add_text`) + новая `replace_face`.
-- Callback `replace_face:<stickerId>` переводит в единый flow `wait_replace_face`:
-  - сохраняется `edit_replace_sticker_id` (целевой стикер);
-  - бот всегда просит фото identity;
-  - после фото generation `replace_subject` запускается сразу (без промежуточных кнопок).
+- Под стикером после генерации/редактирования показываются кнопки: `add_to_pack`, `change_emotion`, `change_motion`, `toggle_border`, `add_text`, `pack_ideas`.
+- Кнопки `replace_face` и `remove_bg` из post-sticker меню скрыты; эти сценарии запускаются через `⚡ Действия`.
 
 ## Replace Face (unified flow)
 
-- Entry A: `action_replace_face` (из меню действий по фото) → `wait_replace_face` → бот просит фото → затем просит стикер.
-- Entry B: `replace_face:<stickerId>` (из меню под стикером) → `wait_replace_face` с заполненным `edit_replace_sticker_id` → бот просит фото.
+- Entry: `action_replace_face` (из меню действий по фото) → `wait_replace_face` → бот просит фото → затем просит стикер.
 - После получения обоих входов (identity photo + sticker reference) запускается `startGeneration(..., generationType="replace_subject")`.
 - Source of truth: одно состояние `wait_replace_face`, без разветвления по `wait_edit_photo`/`wait_replace_face_sticker`.
