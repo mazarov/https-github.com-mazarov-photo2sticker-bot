@@ -3957,6 +3957,41 @@ async function sendOnboardingInvoice(telegramId: number, lang: string, payload: 
   );
 }
 
+/** Free «photo → sticker»: 512×512 WebP, transparent letterbox; no background removal (no Pixian). */
+async function buildFreePhotoStickerWebp(fileBuffer: Buffer): Promise<Buffer> {
+  const pad = 15;
+  const innerDefault = 482;
+  const maxBytes = 512 * 1024;
+
+  const encode = (inner: number, quality: number) =>
+    sharp(fileBuffer)
+      .rotate()
+      .resize(4096, 4096, { fit: "inside", withoutEnlargement: true })
+      .ensureAlpha()
+      .resize(inner, inner, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .extend({ top: pad, bottom: pad, left: pad, right: pad, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .webp({ quality })
+      .toBuffer();
+
+  for (const q of [95, 85, 75, 65, 55]) {
+    const buf = await encode(innerDefault, q);
+    if (buf.length <= maxBytes) return buf;
+    console.warn("[free_photo_sticker] webp over size budget, retry", { inner: innerDefault, q, bytes: buf.length });
+  }
+  for (const inner of [400, 340]) {
+    for (const q of [75, 65, 55]) {
+      const buf = await encode(inner, q);
+      if (buf.length <= maxBytes) return buf;
+      console.warn("[free_photo_sticker] webp over size budget, retry", { inner, q, bytes: buf.length });
+    }
+  }
+  const fallback = await encode(340, 50);
+  if (fallback.length > maxBytes) {
+    console.warn("[free_photo_sticker] webp still over typical sticker limit after retries", { bytes: fallback.length });
+  }
+  return fallback;
+}
+
 async function runFreePhotoStickerFlow(
   ctx: any,
   params: {
@@ -3971,25 +4006,10 @@ async function runFreePhotoStickerFlow(
   const { user, session, lang, photoFileId, actionLabel = "photo_sticker", onboardingMode = false } = params;
   const isRu = lang === "ru";
   try {
-    await ctx.reply(isRu ? "⏳ Убираю фон..." : "⏳ Removing background...");
+    await ctx.reply(isRu ? "⏳ Готовлю стикер..." : "⏳ Preparing your sticker...");
     const filePath = await getFilePath(photoFileId);
     const fileBuffer = await downloadFile(filePath);
-    const pngBuffer = await sharp(fileBuffer).png().toBuffer();
-    const pixianForm = new FormData();
-    pixianForm.append("image", pngBuffer, { filename: "image.png", contentType: "image/png" });
-    const pixianRes = await axios.post("https://api.pixian.ai/api/v2/remove-background", pixianForm, {
-      auth: { username: config.pixianUsername, password: config.pixianPassword },
-      headers: pixianForm.getHeaders(),
-      responseType: "arraybuffer",
-      timeout: 60000,
-    });
-    const noBgBuffer = Buffer.from(pixianRes.data);
-    const stickerBuffer = await sharp(noBgBuffer)
-      .trim({ threshold: 2 })
-      .resize(482, 482, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .extend({ top: 15, bottom: 15, left: 15, right: 15, background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .webp({ quality: 95 })
-      .toBuffer();
+    const stickerBuffer = await buildFreePhotoStickerWebp(fileBuffer);
     const newFileId = await sendSticker(ctx.chat!.id, stickerBuffer);
     const insertPayload: any = {
       user_id: user.id,
@@ -4061,10 +4081,12 @@ async function runFreePhotoStickerFlow(
     }
 
     const replyMarkup = await buildStickerButtons(lang, newSticker.id);
-    await ctx.reply(lang === "ru" ? "Фон удалён! Что дальше?" : "Background removed! What's next?", { reply_markup: replyMarkup });
+    await ctx.reply(lang === "ru" ? "Готово! Что дальше?" : "Done! What's next?", { reply_markup: replyMarkup });
   } catch (err: any) {
     console.error("[free_photo_sticker] failed:", err?.message || err);
-    await ctx.reply(lang === "ru" ? "❌ Не удалось убрать фон. Попробуй ещё раз." : "❌ Failed to remove background. Try again.");
+    await ctx.reply(
+      lang === "ru" ? "❌ Не удалось сделать стикер. Попробуй ещё раз." : "❌ Couldn't make the sticker. Try again."
+    );
   }
 }
 

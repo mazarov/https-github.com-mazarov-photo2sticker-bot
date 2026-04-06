@@ -37,7 +37,7 @@
 **Стало:**
 
 ```
-📸 Фото в стикер                 ← НОВАЯ: быстрый стикер (remove-bg, без Gemini)
+📸 Фото в стикер                 ← НОВАЯ: быстрый стикер (repack в WebP без удаления фона, без Gemini)
 🎨 Изменить стиль (1💎)          ← ПЕРЕИМЕНОВАНА: полная генерация с выбором стиля
 🧑 Заменить лицо (1💎)
 📦 Создать стикер пак
@@ -45,12 +45,12 @@
 
 | Кнопка | Callback | Действие |
 |--------|----------|----------|
-| 📸 Фото в стикер | `action_photo_sticker` | Pixian remove-bg → trim → resize 512 → webp → отправить как стикер. Кредиты НЕ списываются. Gemini НЕ вызывается. |
+| 📸 Фото в стикер | `action_photo_sticker` | `sharp`: вписать фото в 512×512 (прозрачные поля), WebP → `sendSticker`. Pixian не используется. Кредиты НЕ списываются. Gemini НЕ вызывается. |
 | 🎨 Изменить стиль (1💎) | `action_make_sticker` | Текущее поведение: `wait_style` → `sendStyleKeyboardFlat` → выбор стиля → `startGeneration`. |
 | 🧑 Заменить лицо (1💎) | `action_replace_face` | Без изменений. |
 | 📦 Создать стикер пак | `action_make_pack` | Без изменений. |
 
-**Примечание:** кнопка «🖼 Удалить фон» убирается из меню — её функцию полностью берёт на себя «📸 Фото в стикер».
+**Примечание:** кнопка «🖼 Удалить фон» убрана из меню после фото; «📸 Фото в стикер» даёт быстрый стикер **без** удаления фона. Вырезка фона по готовому стикеру — отдельная кнопка «🖼 Вырезать фон» (`remove_bg:ID`, Pixian).
 
 ### 2. Кнопки после генерации стикера: новая кнопка «Другой стиль»
 
@@ -101,9 +101,8 @@ const buttons = [
 
 ### 2. Callback `action_photo_sticker` (новый)
 
-Логика аналогична `action_remove_bg`, но:
 - Берёт `session.current_photo_file_id`
-- Pixian remove-bg → sharp trim → resize 512×512 → webp
+- `runFreePhotoStickerFlow` → `buildFreePhotoStickerWebp`: sharp (rotate, downscale если >4096, contain 482 + поля 15px, WebP; при размере файла >512 KB — снижение quality / меньший inner)
 - `sendSticker` → insert в `stickers` с `generation_type: "photo_sticker"`
 - Показать `buildStickerButtons` после отправки
 - Кредиты НЕ списываются
@@ -193,7 +192,7 @@ if (action === "photo_sticker") {
 ## Checklist
 
 - [ ] `sendActionMenu`: заменить кнопки (photo_sticker, make_sticker, replace_face, make_pack)
-- [ ] Callback `action_photo_sticker`: Pixian remove-bg → стикер (без кредитов)
+- [x] Callback `action_photo_sticker`: sharp repack → WebP стикер (без кредитов, без Pixian)
 - [ ] Убрать `action_remove_bg` из `sendActionMenu`
 - [ ] `buildStickerButtons`: добавить «🎨 Другой стиль» (restyle)
 - [ ] Callback `restyle:STICKER_ID`: source_photo → wait_style → sendStyleKeyboardFlat
