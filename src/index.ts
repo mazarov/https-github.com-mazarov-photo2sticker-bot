@@ -4344,6 +4344,9 @@ async function handleAvatarAutoGeneration(ctx: any, user: any, lang: string) {
   return true;
 }
 
+/** Test branch: /start does not branch on onboarding_completed — everyone uses the main single flow (wait_photo / wait_action + sendActionMenu). */
+const DISABLE_ONBOARDING_START_ROUTER = true;
+
 // /start command
 bot.start(async (ctx) => {
   const telegramId = ctx.from?.id;
@@ -4504,10 +4507,8 @@ bot.start(async (ctx) => {
       }
     }
 
-    const onboardingCompleted = hasCompletedOnboarding(user);
-
-    // New onboarding entrypoint for users with incomplete onboarding.
-    if (!onboardingCompleted) {
+    // New onboarding entrypoint for users with incomplete onboarding (disabled when DISABLE_ONBOARDING_START_ROUTER).
+    if (!DISABLE_ONBOARDING_START_ROUTER && !hasCompletedOnboarding(user)) {
       const lastPhotoFromSessions = await getLatestSessionPhotoFileId(user.id);
       const existingPhoto = lastPhotoFromSessions || user.last_photo_file_id || null;
       if (lastPhotoFromSessions && !user.last_photo_file_id) {
