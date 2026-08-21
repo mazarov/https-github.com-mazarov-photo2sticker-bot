@@ -1,56 +1,62 @@
 ---
-description: Before implementing any feature or change, ask which branch to use and follow the git workflow
+description: Isolate every chat on its own feature branch. Confirm the branch before writing code. Never mix work from another chat or dirty WIP.
 alwaysApply: true
 ---
 
 # Git Workflow
 
-## Before Starting Any Task
+Default: a **dedicated feature branch** for this chat. `main` is the exception.
 
-**ALWAYS ask the user before writing code:**
+## Before any code change
 
-> "Где реализуем: в `main` или создать feature-ветку?"
+1. Read `git status`, `git branch --show-current`, and whether the tree is dirty.
+2. Decide the branch name (see Naming).
+3. Tell the user one line: which branch you will use and why.
+4. **Switch or create that branch first. Only then edit files.**
 
-Do NOT commit directly to `main` without explicit confirmation.
+Do not write, graft, or copy feature code onto a branch that belongs to another chat or task.
 
-## Именование веток
+## Naming
 
-**Ветка называется так же, как документ, из которого ведётся разработка.**
+If the work has a `docs/` spec: `feature/<filename-without-.md>`.
 
-- Документ: `docs/16-02-pack-content-sets.md` → ветка: `feature/16-02-pack-content-sets`
-- Документ: `docs/15-02-pack-sheet-storage.md` → ветка: `feature/15-02-pack-sheet-storage`
-- Имя ветки = префикс `feature/` + имя файла без расширения (без `.md`).
+- `docs/16-02-pack-content-sets.md` → `feature/16-02-pack-content-sets`
 
-Если задачи нет в отдельном документе — использовать осмысленное короткое имя: `feature/<short-name>`.
+Otherwise: `feature/<short-kebab-name>`.
 
-## Feature Branch Workflow
+## Wrong-branch check (stop and switch)
 
-```
-1. git checkout -b feature/<name>   — create branch (name = doc filename without .md)
-2. ... commits ...                   — work in branch
-3. Test on test bot                  — verify
-4. Ask user: "Готово к мержу в main?"
-5. git checkout main && git merge feature/<name>
-6. git push origin main              — deploy to prod
-```
+You are on the **wrong branch** if any of these is true:
 
-## When to Use `main` Directly
+- Current name is another feature (this chat’s work does not match the branch).
+- Uncommitted files clearly belong to a different task or chat.
+- HEAD is not this chat’s feature and is not a clean `main` hotfix.
+- You would need a sibling worktree or file-copy to “get around” a dirty tree.
 
-- Hotfixes (critical prod bugs)
-- Tiny config changes (env vars, typos)
-- User explicitly says "в main"
+Then:
 
-## When to Use Feature Branch
+1. Stop editing. Do not stash, mix, or overwrite the other chat’s WIP.
+2. Say what is wrong (branch name + foreign dirty files).
+3. Create/switch: `git fetch origin main && git checkout -b feature/<name> origin/main` (or `git checkout feature/<name>` if it exists).
+4. If checkout is blocked by dirty files — **ask the user**. Do not `stash` their other work, do not implement in place, do not open a sibling worktree unless they ask.
 
-- New features
-- Refactoring
-- Any change touching >2 files
-- Database migrations
-- AI assistant changes
+## Prefer feature branch
 
-## Rules
+Use a feature branch for new features, refactors, >2 files, SQL, pack/spec work, and anything that can ship independently.
 
-- **Branch name = document name:** при разработке по доку из `docs/` ветка: `feature/<имя-файла-без-.md>`
-- Never push untested features to `main`
-- Always confirm branch choice with user before first commit
-- Test containers deploy from feature branch, prod from `main`
+Edit `main` only when the user explicitly says so **and** it is a hotfix, typo, or tiny env/config change.
+
+If the user says “implement” and does not name a branch — still create `feature/<name>` from `origin/main`, then confirm in one sentence.
+
+## Do not
+
+- Implement this chat’s feature on another chat’s branch.
+- Commit a mixed diff (this feature + unrelated WIP).
+- Copy a dirty workspace into a sibling worktree to bypass isolation.
+- Commit or push `main` unless the user explicitly asked.
+
+## After the feature is done
+
+1. Verify on the feature branch (test bot / containers as applicable).
+2. Ask: ready to merge to `main`?
+3. Only then merge and push `main` (prod deploys from `main`; test containers may deploy from the feature branch).
